@@ -1,0 +1,11 @@
+{
+    "name": "Seo",
+    "alias": "seo",
+    "description": "Siêu dữ liệu SEO đa hình qua trait HasSeoMeta (title, description, OpenGraph, Canonical).",
+    "keywords": [],
+    "priority": 80,
+    "providers": [
+        "Modules\\Seo\\Providers\\SeoServiceProvider"
+    ],
+    "files": []
+}

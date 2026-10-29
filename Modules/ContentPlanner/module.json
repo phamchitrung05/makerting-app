@@ -1,0 +1,11 @@
+{
+    "name": "ContentPlanner",
+    "alias": "contentplanner",
+    "description": "Lập lịch chiến dịch nội dung đa kênh: Campaigns, plan slots, calendar và dispatch tự động.",
+    "keywords": [],
+    "priority": 40,
+    "providers": [
+        "Modules\\ContentPlanner\\Providers\\ContentPlannerServiceProvider"
+    ],
+    "files": []
+}

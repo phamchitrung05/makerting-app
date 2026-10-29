@@ -1,0 +1,30 @@
+{
+    "name": "makerting/videostudio",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\VideoStudio\\": "app/",
+            "Modules\\VideoStudio\\Database\\Factories\\": "database/factories/",
+            "Modules\\VideoStudio\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\VideoStudio\\Tests\\": "tests/"
+        }
+    }
+}

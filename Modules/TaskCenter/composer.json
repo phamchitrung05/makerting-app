@@ -1,0 +1,30 @@
+{
+    "name": "makerting/taskcenter",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\TaskCenter\\": "app/",
+            "Modules\\TaskCenter\\Database\\Factories\\": "database/factories/",
+            "Modules\\TaskCenter\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\TaskCenter\\Tests\\": "tests/"
+        }
+    }
+}

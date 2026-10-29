@@ -1,0 +1,30 @@
+{
+    "name": "makerting/coreai",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\CoreAi\\": "app/",
+            "Modules\\CoreAi\\Database\\Factories\\": "database/factories/",
+            "Modules\\CoreAi\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\CoreAi\\Tests\\": "tests/"
+        }
+    }
+}

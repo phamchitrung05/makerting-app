@@ -1,32 +1,88 @@
-import { setupWorker } from 'msw/browser'
+/*
+ * =====================================================================
+ * CHỨC NĂNG FILE: Điểm khởi động Mock Service Worker (MSW) cho dev offline.
+ * =====================================================================
+ * CÁC HÀM/METHOD TRONG FILE: default export — cài handler và start worker.
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : import.meta.env.VITE_USE_MSW ('true' mới bật) + bộ handlers demo.
+ * - OUTPUT: không trả về; đăng ký service worker chặn request /api khi bật.
+ * SIDE EFFECT: KHI BẬT -> chặn mọi request /api bằng dữ liệu giả (KHÔNG dùng
+ *              với backend Laravel thật). Mặc định backend thật => giữ TẮT.
+ * =====================================================================
+ */
 
-// Handlers
-import { handlerAppBarSearch } from '@db/app-bar-search/index'
-import { handlerAppsAcademy } from '@db/apps/academy/index'
-import { handlerAppsCalendar } from '@db/apps/calendar/index'
-import { handlerAppsChat } from '@db/apps/chat/index'
-import { handlerAppsEcommerce } from '@db/apps/ecommerce/index'
-import { handlerAppsEmail } from '@db/apps/email/index'
-import { handlerAppsInvoice } from '@db/apps/invoice/index'
-import { handlerAppsKanban } from '@db/apps/kanban/index'
-import { handlerAppLogistics } from '@db/apps/logistics/index'
-import { handlerAppsPermission } from '@db/apps/permission/index'
-import { handlerAppsUsers } from '@db/apps/users/index'
-import { handlerAuth } from '@db/auth/index'
-import { handlerDashboard } from '@db/dashboard/index'
-import { handlerPagesDatatable } from '@db/pages/datatable/index'
-import { handlerPagesFaq } from '@db/pages/faq/index'
-import { handlerPagesHelpCenter } from '@db/pages/help-center/index'
-import { handlerPagesProfile } from '@db/pages/profile/index'
+// Chỉ bật MSW khi VITE_USE_MSW=true. Mặc định chạy backend Laravel thật => TẮT.
+const ENABLED = import.meta.env.VITE_USE_MSW === 'true'
 
-const worker = setupWorker(...handlerAppsEcommerce, ...handlerAppsAcademy, ...handlerAppsInvoice, ...handlerAppsUsers, ...handlerAppsEmail, ...handlerAppsCalendar, ...handlerAppsChat, ...handlerAppsPermission, ...handlerPagesHelpCenter, ...handlerPagesProfile, ...handlerPagesFaq, ...handlerPagesDatatable, ...handlerAppBarSearch, ...handlerAppLogistics, ...handlerAuth, ...handlerAppsKanban, ...handlerDashboard)
 export default function () {
-  const workerUrl = `${import.meta.env.BASE_URL.replace(/build\/$/g, '') ?? '/'}mockServiceWorker.js`
+  if (!ENABLED)
+    return
 
-  worker.start({
-    serviceWorker: {
-      url: workerUrl,
-    },
-    onUnhandledRequest: 'bypass',
+  // Lazy import để không tải handlers + worker khi backend thật.
+  return Promise.all([
+    import('msw/browser'),
+    import('@db/app-bar-search/index'),
+    import('@db/apps/academy/index'),
+    import('@db/apps/calendar/index'),
+    import('@db/apps/chat/index'),
+    import('@db/apps/ecommerce/index'),
+    import('@db/apps/email/index'),
+    import('@db/apps/invoice/index'),
+    import('@db/apps/kanban/index'),
+    import('@db/apps/logistics/index'),
+    import('@db/apps/permission/index'),
+    import('@db/apps/users/index'),
+    import('@db/auth/index'),
+    import('@db/dashboard/index'),
+    import('@db/pages/datatable/index'),
+    import('@db/pages/faq/index'),
+    import('@db/pages/help-center/index'),
+    import('@db/pages/profile/index'),
+  ]).then(([
+    { setupWorker },
+    { handlerAppBarSearch },
+    { handlerAppsAcademy },
+    { handlerAppsCalendar },
+    { handlerAppsChat },
+    { handlerAppsEcommerce },
+    { handlerAppsEmail },
+    { handlerAppsInvoice },
+    { handlerAppsKanban },
+    { handlerAppLogistics },
+    { handlerAppsPermission },
+    { handlerAppsUsers },
+    { handlerAuth },
+    { handlerDashboard },
+    { handlerPagesDatatable },
+    { handlerPagesFaq },
+    { handlerPagesHelpCenter },
+    { handlerPagesProfile },
+  ]) => {
+    const worker = setupWorker(
+      ...handlerAppsEcommerce,
+      ...handlerAppsAcademy,
+      ...handlerAppsInvoice,
+      ...handlerAppsUsers,
+      ...handlerAppsEmail,
+      ...handlerAppsCalendar,
+      ...handlerAppsChat,
+      ...handlerAppsPermission,
+      ...handlerPagesHelpCenter,
+      ...handlerPagesProfile,
+      ...handlerPagesFaq,
+      ...handlerPagesDatatable,
+      ...handlerAppBarSearch,
+      ...handlerAppLogistics,
+      ...handlerAuth,
+      ...handlerAppsKanban,
+      ...handlerDashboard,
+    )
+
+    const workerUrl = `${import.meta.env.BASE_URL.replace(/build\/$/g, '') ?? '/'}mockServiceWorker.js`
+
+    worker.start({
+      serviceWorker: { url: workerUrl },
+      onUnhandledRequest: 'bypass',
+    })
   })
 }

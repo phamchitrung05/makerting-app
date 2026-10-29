@@ -1,0 +1,11 @@
+{
+    "name": "Settings",
+    "alias": "settings",
+    "description": "Cấu hình hệ thống trên Spatie Settings qua SettingsRegistry, khóa phiên bản và cấu hình mặc định theo ChannelGroup.",
+    "keywords": [],
+    "priority": 100,
+    "providers": [
+        "Modules\\Settings\\Providers\\SettingsServiceProvider"
+    ],
+    "files": []
+}

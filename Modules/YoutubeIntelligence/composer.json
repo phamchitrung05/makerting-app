@@ -1,0 +1,30 @@
+{
+    "name": "makerting/youtubeintelligence",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\YoutubeIntelligence\\": "app/",
+            "Modules\\YoutubeIntelligence\\Database\\Factories\\": "database/factories/",
+            "Modules\\YoutubeIntelligence\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\YoutubeIntelligence\\Tests\\": "tests/"
+        }
+    }
+}

@@ -1,0 +1,11 @@
+{
+    "name": "CoreAi",
+    "alias": "coreai",
+    "description": "Trạm điều phối AI duy nhất (Text/Structured/Vision/Image/Audio), quản lý Providers/Models và AiRun.",
+    "keywords": [],
+    "priority": 80,
+    "providers": [
+        "Modules\\CoreAi\\Providers\\CoreAiServiceProvider"
+    ],
+    "files": []
+}

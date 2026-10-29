@@ -98,6 +98,47 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Named Queues (Phân tách 5 hàng đợi vật lý — PLAN §4.4)
+    |--------------------------------------------------------------------------
+    |
+    | Khai báo tập hợp tên hàng đợi chuẩn toàn hệ thống kèm timeout (giây)
+    | để mọi Job dispatch và lệnh `queue:work` dùng thống nhất, tránh nhồi
+    | nhét tác vụ nặng vào hàng đợi Web Admin mặc định.
+    |
+    */
+    'queues' => [
+        // Tác vụ hệ thống nhẹ: thông báo Telegram/Email, dọn file tạm.
+        'default' => [
+            'timeout' => 60,
+            'tries' => 3,
+        ],
+
+        // AI văn bản: phân tích văn phong/motif, viết bài, sinh kịch bản.
+        'ai-text' => [
+            'timeout' => 300,
+            'tries' => 2,
+        ],
+
+        // AI media: phân tích ảnh Vision, tạo ảnh từ DNA, TTS, STT.
+        'ai-media' => [
+            'timeout' => 300,
+            'tries' => 2,
+        ],
+
+        // Dựng video FFmpeg: ghép cảnh, phụ đề động, trộn âm thanh.
+        'video-render' => [
+            'timeout' => 1800,
+            'tries' => 1,
+        ],
+
+        // Đăng đa nền tảng + gia hạn OAuth token MXH.
+        'social-publish' => [
+            'timeout' => 900,
+            'tries' => 3,
+        ],
+    ],
     'batching' => [
         'database' => env('DB_CONNECTION', 'sqlite'),
         'table' => 'job_batches',

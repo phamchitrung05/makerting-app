@@ -1,0 +1,11 @@
+{
+    "name": "WritingStyle",
+    "alias": "writingstyle",
+    "description": "Phân tích bài mẫu trích xuất 16 quy tắc văn phong, kiểm chứng trích dẫn và xuất snapshot không đạo văn.",
+    "keywords": [],
+    "priority": 60,
+    "providers": [
+        "Modules\\WritingStyle\\Providers\\WritingStyleServiceProvider"
+    ],
+    "files": []
+}

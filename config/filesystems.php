@@ -47,6 +47,42 @@ return [
             'report' => false,
         ],
 
+        /*
+         * Disk chứa media công khai (ảnh bìa, thumbnail, file xuất bản).
+         * Phục vụ Modules/Media qua Spatie MediaLibrary; truy cập qua URL /media.
+         */
+        'media_public' => [
+            'driver' => 'local',
+            'root' => storage_path('app/media/public'),
+            'url' => env('APP_URL').'/media',
+            'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
+        ],
+
+        /*
+         * Disk chứa media riêng tư (file gốc, bản nháp, tài sản cần signed URL).
+         * Chỉ phát ra qua stream ký quyền, không truy cập trực tiếp qua web.
+         */
+        'media_private' => [
+            'driver' => 'local',
+            'root' => storage_path('app/media/private'),
+            'visibility' => 'private',
+            'throw' => false,
+            'report' => false,
+        ],
+
+        /*
+         * Disk tạm cho pipeline xử lý (upload chờ quét, khung FFmpeg, giải nén).
+         * Worker dọn định kỳ; không phục vụ trực tiếp ra ngoài.
+         */
+        'temp_processing' => [
+            'driver' => 'local',
+            'root' => storage_path('app/temp/processing'),
+            'visibility' => 'private',
+            'throw' => false,
+            'report' => false,
+        ],
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
@@ -75,6 +111,7 @@ return [
 
     'links' => [
         public_path('storage') => storage_path('app/public'),
+        public_path('media') => storage_path('app/media/public'),
     ],
 
 ];

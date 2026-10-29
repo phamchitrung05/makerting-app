@@ -1,0 +1,30 @@
+{
+    "name": "makerting/writingstyle",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\WritingStyle\\": "app/",
+            "Modules\\WritingStyle\\Database\\Factories\\": "database/factories/",
+            "Modules\\WritingStyle\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\WritingStyle\\Tests\\": "tests/"
+        }
+    }
+}

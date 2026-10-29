@@ -1,0 +1,11 @@
+{
+    "name": "Taxonomy",
+    "alias": "taxonomy",
+    "description": "Phân loại dùng chung: categories, tags, categorizables, taggables và trait HasTaxonomy.",
+    "keywords": [],
+    "priority": 80,
+    "providers": [
+        "Modules\\Taxonomy\\Providers\\TaxonomyServiceProvider"
+    ],
+    "files": []
+}

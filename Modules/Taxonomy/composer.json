@@ -1,0 +1,30 @@
+{
+    "name": "makerting/taxonomy",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Taxonomy\\": "app/",
+            "Modules\\Taxonomy\\Database\\Factories\\": "database/factories/",
+            "Modules\\Taxonomy\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\Taxonomy\\Tests\\": "tests/"
+        }
+    }
+}

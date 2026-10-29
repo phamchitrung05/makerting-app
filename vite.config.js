@@ -1,4 +1,6 @@
 import laravel from 'laravel-vite-plugin'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import vue from '@vitejs/plugin-vue'
@@ -13,6 +15,43 @@ import MetaLayouts from 'vite-plugin-vue-meta-layouts'
 import vuetify from 'vite-plugin-vuetify'
 import svgLoader from 'vite-svg-loader'
 
+const ROOT = fileURLToPath(new URL('.', import.meta.url))
+
+const kebab = s => s.replace(/([a-z\d])([A-Z])/g, '$1-$2').toLowerCase()
+const abs = p => path.join(ROOT, p)
+
+// Danh sách module đang bật trong modules_statuses.json
+function enabledModules() {
+  let statuses = {}
+  try {
+    statuses = JSON.parse(readFileSync(abs('modules_statuses.json'), 'utf-8'))
+  } catch (e) {
+    return []
+  }
+  const dir = abs('Modules')
+  if (!existsSync(dir)) return []
+  
+  return readdirSync(dir, { withFileTypes: true })
+    .filter(d => d.isDirectory() && statuses[d.name] === true)
+    .map(d => d.name)
+}
+
+const MODULES = enabledModules()
+
+const pick = (...segs) =>
+  MODULES.map(m => path.posix.join('Modules', m, 'resources', 'js', ...segs))
+    .filter(p => existsSync(abs(p)))
+
+// pages/ → route tự động, prefix /admin/<module-kebab>/
+const moduleRoutesFolders = pick('pages')
+  .map(src => ({ src, path: `admin/${kebab(src.split('/')[1])}/` }))
+
+// components/ + views/ → auto-import component theo tên PascalCase
+const moduleComponentDirs = pick('components', 'views')
+
+// composables/ utils/ stores/ → auto-import composable, store, helper
+const moduleAutoImportDirs = pick('composables', 'utils', 'stores').map(d => `./${d}`)
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [// Docs: https://github.com/posva/unplugin-vue-router
@@ -25,12 +64,10 @@ export default defineConfig({
           .toLowerCase()
       },
 
-      beforeWriteFiles: root => {
-        root.insert('/apps/email/:filter', '/resources/js/pages/apps/email/index.vue')
-        root.insert('/apps/email/:label', '/resources/js/pages/apps/email/index.vue')
-      },
-
-      routesFolder: 'resources/js/pages',
+      routesFolder: [
+        { src: 'resources/js/pages' },
+        ...moduleRoutesFolders,
+      ],
     }),
     vue({
       template: {
@@ -59,7 +96,7 @@ export default defineConfig({
       defaultLayout: 'default',
     }), // Docs: https://github.com/antfu/unplugin-vue-components#unplugin-vue-components
     Components({
-      dirs: ['resources/js/@core/components', 'resources/js/views/demos', 'resources/js/components'],
+      dirs: ['resources/js/@core/components', 'resources/js/views/demos', 'resources/js/components', ...moduleComponentDirs],
       dts: true,
       resolvers: [
         componentName => {
@@ -77,6 +114,7 @@ export default defineConfig({
         './resources/js/composables/',
         './resources/js/utils/',
         './resources/js/plugins/*/composables/*',
+        ...moduleAutoImportDirs,
       ],
       vueTemplate: true,
 
@@ -109,6 +147,7 @@ export default defineConfig({
       '@configured-variables': fileURLToPath(new URL('./resources/styles/variables/_template.scss', import.meta.url)),
       '@db': fileURLToPath(new URL('./resources/js/plugins/fake-api/handlers/', import.meta.url)),
       '@api-utils': fileURLToPath(new URL('./resources/js/plugins/fake-api/utils/', import.meta.url)),
+      '@modules': fileURLToPath(new URL('./Modules', import.meta.url)),
     },
   },
   build: {
@@ -118,6 +157,7 @@ export default defineConfig({
     exclude: ['vuetify'],
     entries: [
       './resources/js/**/*.vue',
+      './Modules/*/resources/js/**/*.vue',
     ],
   },
 })

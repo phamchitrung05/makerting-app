@@ -1,0 +1,30 @@
+{
+    "name": "makerting/socialpublisher",
+    "description": "",
+    "authors": [
+        {
+            "name": "Makerting",
+            "email": "dev@makerting.local"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\SocialPublisher\\": "app/",
+            "Modules\\SocialPublisher\\Database\\Factories\\": "database/factories/",
+            "Modules\\SocialPublisher\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\SocialPublisher\\Tests\\": "tests/"
+        }
+    }
+}

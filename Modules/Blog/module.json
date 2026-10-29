@@ -1,0 +1,11 @@
+{
+    "name": "Blog",
+    "alias": "blog",
+    "description": "Quản lý bài viết website, lắp đủ 6 trait chuẩn và pipeline AI viết bài 3 bước kèm quality gate.",
+    "keywords": [],
+    "priority": 40,
+    "providers": [
+        "Modules\\Blog\\Providers\\BlogServiceProvider"
+    ],
+    "files": []
+}

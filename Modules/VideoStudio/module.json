@@ -1,0 +1,11 @@
+{
+    "name": "VideoStudio",
+    "alias": "videostudio",
+    "description": "Xưởng dựng video tự động: TTS word-level, Ken Burns, audio ducking, phụ đề .ass và FFmpeg.",
+    "keywords": [],
+    "priority": 60,
+    "providers": [
+        "Modules\\VideoStudio\\Providers\\VideoStudioServiceProvider"
+    ],
+    "files": []
+}

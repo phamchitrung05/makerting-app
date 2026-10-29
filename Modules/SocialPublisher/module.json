@@ -1,0 +1,11 @@
+{
+    "name": "SocialPublisher",
+    "alias": "socialpublisher",
+    "description": "Xuất bản mạng xã hội đa tài khoản: Facebook, YouTube, TikTok với 3 máy trạng thái độc lập.",
+    "keywords": [],
+    "priority": 40,
+    "providers": [
+        "Modules\\SocialPublisher\\Providers\\SocialPublisherServiceProvider"
+    ],
+    "files": []
+}

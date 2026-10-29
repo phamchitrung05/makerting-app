@@ -1,0 +1,11 @@
+{
+    "name": "VisualStyle",
+    "alias": "visualstyle",
+    "description": "Giải mã ảnh thành DNA nhiếp ảnh 5 nhóm + góc chụp, ghép prompt 7 lớp sinh ảnh đồng bộ thương hiệu.",
+    "keywords": [],
+    "priority": 60,
+    "providers": [
+        "Modules\\VisualStyle\\Providers\\VisualStyleServiceProvider"
+    ],
+    "files": []
+}

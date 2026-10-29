@@ -1,0 +1,17 @@
+{
+    "Core": true,
+    "Identity": true,
+    "Settings": true,
+    "TaskCenter": true,
+    "Taxonomy": true,
+    "Media": true,
+    "Seo": true,
+    "CoreAi": true,
+    "WritingStyle": true,
+    "VisualStyle": true,
+    "YoutubeIntelligence": true,
+    "VideoStudio": true,
+    "Blog": true,
+    "ContentPlanner": true,
+    "SocialPublisher": true
+}

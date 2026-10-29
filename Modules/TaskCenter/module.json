@@ -1,0 +1,11 @@
+{
+    "name": "TaskCenter",
+    "alias": "taskcenter",
+    "description": "Theo dõi tiến trình ngầm toàn hệ thống, chi phí AI và cảnh báo sức khỏe tài khoản qua Telegram.",
+    "keywords": [],
+    "priority": 100,
+    "providers": [
+        "Modules\\TaskCenter\\Providers\\TaskCenterServiceProvider"
+    ],
+    "files": []
+}
