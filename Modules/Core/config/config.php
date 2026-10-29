@@ -1,15 +1,26 @@
 <?php
 
-/**
- * =====================================================================
- * CHỨC NĂNG FILE: Cấu hình riêng của module Core.
- * =====================================================================
- * Hạt nhân nền tảng: BaseResponse, hệ thống Slugs, CredentialVault, OAuthPool, chống SSRF, Idempotency và AccountRateLimiter.
- * Truy cập bằng config('core.name'). Mảng merge vào app config khi module
- * được nạp; thêm khóa cấu hình của module tại đây.
- * =====================================================================
- */
-
 return [
     'name' => 'Core',
+
+    /*
+    |--------------------------------------------------------------------------
+    | SafeRemoteFetcher — giới hạn tải URL từ xa chống SSRF
+    |--------------------------------------------------------------------------
+    */
+    'remote_fetch' => [
+        'timeout' => env('CORE_FETCH_TIMEOUT', 15),
+        'max_bytes' => env('CORE_FETCH_MAX_BYTES', 5 * 1024 * 1024),
+        'user_agent' => env('CORE_FETCH_USER_AGENT', 'MakertingApp-SafeFetcher/1.0'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Idempotency — thời gian khóa và TTL của khóa chống trùng request
+    |--------------------------------------------------------------------------
+    */
+    'idempotency' => [
+        'lock_seconds' => env('CORE_IDEMPOTENCY_LOCK', 60),
+        'ttl_seconds' => env('CORE_IDEMPOTENCY_TTL', 86400),
+    ],
 ];

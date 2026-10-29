@@ -2,63 +2,70 @@
 
 namespace Modules\Core\Providers;
 
-use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\Core\Contracts\SafeRemoteFetcherContract;
+use Modules\Core\Contracts\SlugServiceContract;
+use Modules\Core\Registries\SlugRegistry;
+use Modules\Core\Services\AccountRateLimiter;
+use Modules\Core\Services\CredentialVault;
+use Modules\Core\Services\JitterScheduler;
+use Modules\Core\Services\SafeRemoteFetcher;
+use Modules\Core\Services\SlugService;
+use Nwidart\Modules\Support\ModuleServiceProvider;
 
 /**
  * =====================================================================
  * CHỨC NĂNG FILE: Service Provider khởi động của module Core (Tầng 0).
  * =====================================================================
+ * Hạt nhân nền tảng: BaseResponse, hệ thống Slugs, CredentialVault, OAuthPool,
+ * chống SSRF, Idempotency và AccountRateLimiter.
  *
- * Hạt nhân nền tảng: BaseResponse, hệ thống Slugs, CredentialVault, OAuthPool, chống SSRF, Idempotency và AccountRateLimiter.
- *
- * Provider do nwidart/laravel-modules sinh và quản lý: gom các provider con
- * (Event, Route) và là nơi đăng ký binding, registry, event listener của module.
- *
- * CÁC HÀM/METHOD TRONG FILE:
- * - register(): đăng ký binding container của module
- * - provides(): danh sách service provider cung cấp
- * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : cấu hình module từ module.json và protected $name/$nameLower
- * - OUTPUT: đăng ký providers con và binding vào container khi boot
+ * Đăng ký binding các contract (SlugService, SafeRemoteFetcher), singleton
+ * registry (SlugRegistry) và các service dùng chung cho mọi module.
  * =====================================================================
  */
 class CoreServiceProvider extends ModuleServiceProvider
 {
-    /**
-     * The name of the module.
-     */
     protected string $name = 'Core';
 
-    /**
-     * The lowercase version of the module name.
-     */
     protected string $nameLower = 'core';
 
-    /**
-     * Command classes to register.
-     *
-     * @var string[]
-     */
-    // protected array $commands = [];
-
-    /**
-     * Provider classes to register.
-     *
-     * @var string[]
-     */
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
 
     /**
-     * Define module schedules.
-     * 
-     * @param $schedule
+     * Đăng ký binding container của module.
+     * INPUT: không có tham số.
+     * OUTPUT: void — bind contracts + singletons vào container.
+     * SIDE EFFECT: đăng ký vào Laravel service container.
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->singleton(SlugRegistry::class, fn () => new SlugRegistry());
+
+        $this->app->bind(SlugServiceContract::class, SlugService::class);
+        $this->app->bind(SafeRemoteFetcherContract::class, SafeRemoteFetcher::class);
+
+        $this->app->singleton(SlugService::class, fn ($app) => new SlugService($app->make(SlugRegistry::class)));
+        $this->app->singleton(CredentialVault::class, fn () => new CredentialVault());
+        $this->app->singleton(AccountRateLimiter::class, fn () => new AccountRateLimiter());
+        $this->app->singleton(JitterScheduler::class, fn () => new JitterScheduler());
+    }
+
+    /**
+     * Boot module — đăng ký alias middleware idempotency.
+     * INPUT: không có tham số. OUTPUT: void.
+     * SIDE EFFECT: đăng ký middleware alias + morph map slug nếu cần.
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        $router = $this->app['router'];
+        $router->aliasMiddleware('idempotency', \Modules\Core\Http\Middleware\IdempotencyMiddleware::class);
+    }
 }

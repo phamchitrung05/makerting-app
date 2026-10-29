@@ -3,7 +3,7 @@
     "alias": "youtubeintelligence",
     "description": "Trinh sát kênh YouTube, bóc tách Motif DNA kênh và sinh kịch bản phân cảnh VideoScript.",
     "keywords": [],
-    "priority": 60,
+    "priority": 30,
     "providers": [
         "Modules\\YoutubeIntelligence\\Providers\\YoutubeIntelligenceServiceProvider"
     ],

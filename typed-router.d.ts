@@ -21,6 +21,8 @@ declare module 'vue-router/auto-routes' {
     '$error': RouteRecordInfo<'$error', '/:error(.*)', { error: ParamValue<true> }, { error: ParamValue<false> }>,
     'access-control': RouteRecordInfo<'access-control', '/access-control', Record<never, never>, Record<never, never>>,
     'admin-blog-posts': RouteRecordInfo<'admin-blog-posts', '/admin/blog/posts', Record<never, never>, Record<never, never>>,
+    'admin-identity-channel-groups': RouteRecordInfo<'admin-identity-channel-groups', '/admin/identity/channel-groups', Record<never, never>, Record<never, never>>,
+    'admin-identity-roles': RouteRecordInfo<'admin-identity-roles', '/admin/identity/roles', Record<never, never>, Record<never, never>>,
     'admin-settings': RouteRecordInfo<'admin-settings', '/admin/settings', Record<never, never>, Record<never, never>>,
     'apps-academy-course-details': RouteRecordInfo<'apps-academy-course-details', '/apps/academy/course-details', Record<never, never>, Record<never, never>>,
     'apps-academy-dashboard': RouteRecordInfo<'apps-academy-dashboard', '/apps/academy/dashboard', Record<never, never>, Record<never, never>>,

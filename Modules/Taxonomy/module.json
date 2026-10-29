@@ -3,7 +3,7 @@
     "alias": "taxonomy",
     "description": "Phân loại dùng chung: categories, tags, categorizables, taggables và trait HasTaxonomy.",
     "keywords": [],
-    "priority": 80,
+    "priority": 20,
     "providers": [
         "Modules\\Taxonomy\\Providers\\TaxonomyServiceProvider"
     ],

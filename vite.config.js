@@ -38,8 +38,10 @@ function enabledModules() {
 
 const MODULES = enabledModules()
 
-const pick = (...segs) =>
-  MODULES.map(m => path.posix.join('Modules', m, 'resources', 'js', ...segs))
+// Mỗi subdir (components, views, stores...) là 1 thư mục riêng trong module,
+// KHÔNG nối lồng nhau. pick() trả về mảng đường dẫn tồn tại cho từng subdir.
+const pick = (...subdirs) =>
+  MODULES.flatMap(m => subdirs.map(s => path.posix.join('Modules', m, 'resources', 'js', s)))
     .filter(p => existsSync(abs(p)))
 
 // pages/ → route tự động, prefix /admin/<module-kebab>/

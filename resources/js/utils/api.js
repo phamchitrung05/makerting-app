@@ -14,11 +14,16 @@
  * - INPUT : mọi request HTTP ra Backend Laravel qua $api(method, url, body).
  * - OUTPUT: resolve -> `data` bên trong BaseResponse; reject -> ApiError đã
  *           chuẩn hóa (status, message, errors, data).
- * SIDE EFFECT: khi 401 xóa cookie accessToken+userData và điều hướng /login;
+ * SIDE EFFECT: khi 401 xóa cookie accessToken+userData và điều hướng /login
+ *              qua singleton router import từ @/plugins/1.router (vì useRouter()
+ *              chỉ hoạt động trong setup(), không dùng được trong async hook);
  *              không ghi log, không tự retry.
+ * Ghi chú: unwrapData() gắn lại `meta` (pagination...) lên `data` trả ra để
+ *          caller đọc cả items/itemsLength lẫn .meta.
  * =====================================================================
  */
 import { ofetch } from 'ofetch'
+import { router } from '@/plugins/1.router'
 
 const ACCESS_TOKEN_KEY = 'accessToken'
 const USER_DATA_KEY = 'userData'
@@ -43,7 +48,6 @@ function forceLogout(toPath) {
   useCookie(ACCESS_TOKEN_KEY).value = null
   useCookie(USER_DATA_KEY).value = null
 
-  const router = useRouter()
   if (router && router.currentRoute.value.name !== 'login') {
     router.push({
       name: 'login',
@@ -99,7 +103,15 @@ function unwrapData(payload) {
     && (Object.prototype.hasOwnProperty.call(payload, 'success')
       || Object.prototype.hasOwnProperty.call(payload, 'message'))
   ) {
-    return payload.data
+    const data = payload.data
+
+    // Giữ meta (pagination, ...) bằng cách gắn non-enumerable-ish trên object data
+    // để caller vừa đọc data.items/itemsLength vừa đọc .meta nếu cần.
+    if (data && typeof data === 'object' && payload.meta && typeof payload.meta === 'object') {
+      data.meta = payload.meta
+    }
+
+    return data
   }
 
   return payload
@@ -151,7 +163,7 @@ export const $api = ofetch.create({
     })
 
     if (apiError.isUnauthenticated) {
-      forceLogout(useRoute()?.fullPath ?? '/')
+      forceLogout(router?.currentRoute?.value?.fullPath ?? '/')
     } else if (apiError.status >= 500) {
       // eslint-disable-next-line no-console
       console.error(`[API] ${apiError.status} ${apiError.method} ${apiError.url}`, apiError.message)

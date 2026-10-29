@@ -3,7 +3,7 @@
     "alias": "settings",
     "description": "Cấu hình hệ thống trên Spatie Settings qua SettingsRegistry, khóa phiên bản và cấu hình mặc định theo ChannelGroup.",
     "keywords": [],
-    "priority": 100,
+    "priority": 10,
     "providers": [
         "Modules\\Settings\\Providers\\SettingsServiceProvider"
     ],

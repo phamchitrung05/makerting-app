@@ -1,8 +1,7 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use Modules\WritingStyle\Http\Controllers\WritingStyleController;
-
-Route::middleware(['auth', 'verified'])->group(function () {
-    Route::resource('writingstyles', WritingStyleController::class)->names('writingstyle');
-});
+/*
+ * Module này thuộc Admin SPA (Vuexy) — không có web route phía server.
+ * Trang giao diện được phục vụ bởi catch-all SPA routes/web.php gốc.
+ * Giữ file trống có chủ đích để nwidart RouteServiceProvider không lỗi.
+ */

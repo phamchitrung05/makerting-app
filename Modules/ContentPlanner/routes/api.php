@@ -1,8 +1,13 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\ContentPlanner\Http\Controllers\ContentPlannerController;
 
-Route::middleware(['auth:sanctum'])->prefix('v1/admin')->group(function () {
-    Route::apiResource('contentplanners', ContentPlannerController::class)->names('contentplanner');
+/*
+ * Route API module ContentPlanner — prefix /api/v1/admin/content-planner
+ * (RouteServiceProvider gắn middleware 'api' + prefix 'api' + name 'api.').
+ * Endpoint nghiệp vụ sẽ khai báo trong group auth:sanctum bên dưới.
+ */
+
+Route::middleware(['auth:sanctum'])->prefix('v1/admin/content-planner')->name('content-planner.')->group(function () {
+    // Route::get('options', [...])->name('options');
 });

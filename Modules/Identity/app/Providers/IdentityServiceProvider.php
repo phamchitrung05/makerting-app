@@ -2,63 +2,65 @@
 
 namespace Modules\Identity\Providers;
 
-use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Identity\Services\ChannelGroupContextService;
+use Nwidart\Modules\Support\ModuleServiceProvider;
 
 /**
  * =====================================================================
  * CHỨC NĂNG FILE: Service Provider khởi động của module Identity (Tầng 0).
  * =====================================================================
- *
- * Xác thực nhân sự nội bộ (Sanctum), phân quyền động và quản lý Nhóm kênh ChannelGroup.
- *
- * Provider do nwidart/laravel-modules sinh và quản lý: gom các provider con
- * (Event, Route) và là nơi đăng ký binding, registry, event listener của module.
- *
- * CÁC HÀM/METHOD TRONG FILE:
- * - register(): đăng ký binding container của module
- * - provides(): danh sách service provider cung cấp
- * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : cấu hình module từ module.json và protected $name/$nameLower
- * - OUTPUT: đăng ký providers con và binding vào container khi boot
+ * Xác thực nhân sự nội bộ (Sanctum guard admin), phân quyền động
+ * (PermissionRegistry) và quản lý Nhóm kênh ChannelGroup.
  * =====================================================================
  */
 class IdentityServiceProvider extends ModuleServiceProvider
 {
-    /**
-     * The name of the module.
-     */
     protected string $name = 'Identity';
 
-    /**
-     * The lowercase version of the module name.
-     */
     protected string $nameLower = 'identity';
 
-    /**
-     * Command classes to register.
-     *
-     * @var string[]
-     */
-    // protected array $commands = [];
-
-    /**
-     * Provider classes to register.
-     *
-     * @var string[]
-     */
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
 
     /**
-     * Define module schedules.
-     * 
-     * @param $schedule
+     * Đăng ký binding container của module.
+     * INPUT: không có tham số. OUTPUT: void.
+     * SIDE EFFECT: singleton PermissionRegistry + ChannelGroupContextService.
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->singleton(PermissionRegistry::class, fn () => new PermissionRegistry());
+        $this->app->singleton(ChannelGroupContextService::class, fn () => new ChannelGroupContextService());
+    }
+
+    /**
+     * Boot module: đăng ký nhóm quyền nền của chính Identity vào registry.
+     * INPUT: không có tham số. OUTPUT: void.
+     * SIDE EFFECT: ghi định nghĩa quyền vào PermissionRegistry.
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        /** @var PermissionRegistry $registry */
+        $registry = $this->app->make(PermissionRegistry::class);
+
+        $registry->registerModule('identity', [
+            'label' => 'Nhân sự & Phân quyền',
+            'permissions' => [
+                'users.view' => 'Xem danh sách nhân sự',
+                'users.manage' => 'Tạo/sửa/xóa nhân sự',
+                'roles.view' => 'Xem vai trò & quyền',
+                'roles.manage' => 'Quản lý vai trò & gán quyền',
+                'channel-groups.view' => 'Xem nhóm kênh',
+                'channel-groups.manage' => 'Quản lý nhóm kênh',
+            ],
+        ]);
+    }
 }

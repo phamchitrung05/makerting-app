@@ -3,7 +3,7 @@
     "alias": "videostudio",
     "description": "Xưởng dựng video tự động: TTS word-level, Ken Burns, audio ducking, phụ đề .ass và FFmpeg.",
     "keywords": [],
-    "priority": 60,
+    "priority": 30,
     "providers": [
         "Modules\\VideoStudio\\Providers\\VideoStudioServiceProvider"
     ],

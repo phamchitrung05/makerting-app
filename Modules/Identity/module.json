@@ -3,7 +3,7 @@
     "alias": "identity",
     "description": "Xác thực nhân sự nội bộ (Sanctum), phân quyền động và quản lý Nhóm kênh ChannelGroup.",
     "keywords": [],
-    "priority": 100,
+    "priority": 10,
     "providers": [
         "Modules\\Identity\\Providers\\IdentityServiceProvider"
     ],

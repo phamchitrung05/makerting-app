@@ -3,7 +3,7 @@
     "alias": "media",
     "description": "Quản lý media 2 lớp (Spatie MediaAsset + usages), MediaSlotRegistry và bộ trait media dùng chung.",
     "keywords": [],
-    "priority": 80,
+    "priority": 20,
     "providers": [
         "Modules\\Media\\Providers\\MediaServiceProvider"
     ],

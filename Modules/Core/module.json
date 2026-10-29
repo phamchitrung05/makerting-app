@@ -3,7 +3,7 @@
     "alias": "core",
     "description": "Hạt nhân nền tảng: BaseResponse, hệ thống Slugs, CredentialVault, OAuthPool, chống SSRF, Idempotency và AccountRateLimiter.",
     "keywords": [],
-    "priority": 100,
+    "priority": 10,
     "providers": [
         "Modules\\Core\\Providers\\CoreServiceProvider"
     ],

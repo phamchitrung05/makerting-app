@@ -3,7 +3,7 @@
     "alias": "seo",
     "description": "Siêu dữ liệu SEO đa hình qua trait HasSeoMeta (title, description, OpenGraph, Canonical).",
     "keywords": [],
-    "priority": 80,
+    "priority": 20,
     "providers": [
         "Modules\\Seo\\Providers\\SeoServiceProvider"
     ],
