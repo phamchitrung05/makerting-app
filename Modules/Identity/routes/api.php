@@ -21,12 +21,23 @@ Route::prefix('v1/admin/identity')->name('identity.')->group(function () {
         Route::get('auth/me', [AuthController::class, 'me'])->name('auth.me');
         Route::put('auth/password', [AuthController::class, 'updatePassword'])->name('auth.password');
 
-        // Ma trận quyền + CRUD vai trò.
-        Route::get('permissions/matrix', [RolePermissionController::class, 'matrix'])->name('permissions.matrix');
-        Route::apiResource('roles', RolePermissionController::class)->only(['index', 'store', 'update', 'destroy']);
+        // Ma trận quyền + CRUD vai trò — chỉ user có quyền roles.* mới gọi được.
+        Route::middleware('permission:roles.view')->group(function () {
+            Route::get('permissions/matrix', [RolePermissionController::class, 'matrix'])->name('permissions.matrix');
+            Route::apiResource('roles', RolePermissionController::class)->only(['index']);
+        });
+        Route::middleware('permission:roles.manage')->group(function () {
+            Route::apiResource('roles', RolePermissionController::class)->only(['store', 'update', 'destroy']);
+        });
 
         // Nhóm kênh (ChannelGroup).
-        Route::get('channel-groups/options', [ChannelGroupController::class, 'options'])->name('channel-groups.options');
-        Route::apiResource('channel-groups', ChannelGroupController::class);
+        Route::get('channel-groups/options', [ChannelGroupController::class, 'options'])
+            ->name('channel-groups.options');
+        Route::apiResource('channel-groups', ChannelGroupController::class)
+            ->middlewareFor('index', 'permission:channel-groups.view')
+            ->middlewareFor('show', 'permission:channel-groups.view')
+            ->middlewareFor('store', 'permission:channel-groups.manage')
+            ->middlewareFor('update', 'permission:channel-groups.manage')
+            ->middlewareFor('destroy', 'permission:channel-groups.manage');
     });
 });

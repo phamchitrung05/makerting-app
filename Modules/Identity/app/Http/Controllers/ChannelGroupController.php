@@ -39,9 +39,14 @@ class ChannelGroupController extends Controller
         $perPage = (int) $request->integer('itemsPerPage', $request->integer('per_page', 15));
         $search = (string) $request->query('search', '');
 
+        // Chỉ trả các ChannelGroup user được phép — idsForUser trả null
+        // khi user là super-admin/quản lý toàn bộ (không áp whereIn).
+        $allowedIds = $this->context->idsForUser($request->user());
+
         $query = ChannelGroup::query()
             ->withCount('members')
             ->with('members')
+            ->when($allowedIds !== null, fn ($q) => $q->whereIn('id', $allowedIds))
             ->when($search !== '', fn ($q) => $q->where(function ($w) use ($search) {
                 $w->where('name', 'like', "%{$search}%")
                   ->orWhere('code', 'like', "%{$search}%");
@@ -91,9 +96,14 @@ class ChannelGroupController extends Controller
     /**
      * GET /api/v1/admin/identity/channel-groups/{channel_group}
      * INPUT: ChannelGroup. OUTPUT: BaseResponse::success.
+     * SIDE EFFECT: kiểm tra user có quyền vào nhóm này không (403 nếu không).
      */
-    public function show(ChannelGroup $channelGroup)
+    public function show(Request $request, ChannelGroup $channelGroup)
     {
+        if (! $this->context->canAccess($request->user(), $channelGroup->id)) {
+            return BaseResponse::error('Không có quyền xem nhóm kênh này', Response::HTTP_FORBIDDEN);
+        }
+
         $channelGroup->load('members');
 
         return BaseResponse::success(new ChannelGroupResource($channelGroup));

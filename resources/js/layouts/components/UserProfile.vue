@@ -1,5 +1,6 @@
 <script setup>
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
+import { $api } from '@/utils/api'
 
 const router = useRouter()
 const ability = useAbility()
@@ -8,6 +9,13 @@ const ability = useAbility()
 const userData = useCookie('userData')
 
 const logout = async () => {
+  // Gọi API logout để thu hồi Sanctum token trên server — tránh token còn
+  // hiệu lực khi lộ cookie. Thất bại (401/network) vẫn xóa cookie local.
+  try {
+    await $api('/v1/admin/identity/auth/logout', { method: 'POST' })
+  } catch (e) {
+    // Bỏ qua — logout vẫn tiếp tục ở client.
+  }
 
   // Remove "accessToken" from cookie
   useCookie('accessToken').value = null

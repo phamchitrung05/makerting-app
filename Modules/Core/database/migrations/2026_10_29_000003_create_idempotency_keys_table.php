@@ -38,8 +38,8 @@ return new class extends Migration
             $table->char('request_hash', 64);
             $table->unsignedSmallInteger('response_status')->nullable();
             $table->json('response_body_json')->nullable();
-            $table->timestamp('locked_until');
-            $table->timestamp('expires_at')->index();
+            $table->timestamp('locked_until')->nullable();
+            $table->timestamp('expires_at')->nullable()->index();
             $table->timestamps();
         });
     }

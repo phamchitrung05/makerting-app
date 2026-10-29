@@ -40,25 +40,49 @@ trait HasAuditTrail
     {
         $userId = static fn (): ?int => auth()->id();
 
-        static::creating(function (Model $model) use ($userId): void {
+        /**
+         * =====================================================================
+         * CHỨC NĂNG: kiểm tra bảng của model có cột chỉ định không (đã cache)
+         * =====================================================================
+         *
+         * INPUT : Model $model, string $column — tên cột cần kiểm tra.
+         * OUTPUT: bool — true nếu bảng của model có cột đó trong schema.
+         *
+         * SIDE EFFECT:
+         * - Lưu kết quả vào static cache $columnCache để tránh query
+         *   Schema Builder lặp lại trong cùng request.
+         * =====================================================================
+         */
+        $hasColumn = static function (Model $model, string $column): bool {
+            static $columnCache = [];
+            $key = $model->getConnectionName() . '.' . $model->getTable() . '.' . $column;
+
+            return $columnCache[$key] ??= $model->getConnection()
+                ->getSchemaBuilder()
+                ->hasColumn($model->getTable(), $column);
+        };
+
+        static::creating(function (Model $model) use ($userId, $hasColumn): void {
             $id = $userId();
             if ($id === null) {
                 return;
             }
-            if ($model->isFillable('created_by') || array_key_exists('created_by', $model->getAttributes()) === false) {
-                $model->setAttribute('created_by', $model->getAttribute('created_by') ?? $id);
+            if ($hasColumn($model, 'created_by') && $model->getAttribute('created_by') === null) {
+                $model->setAttribute('created_by', $id);
             }
-            if (array_key_exists('updated_by', $model->getAttributes()) === false || $model->isFillable('updated_by')) {
-                $model->setAttribute('updated_by', $model->getAttribute('updated_by') ?? $id);
+            if ($hasColumn($model, 'updated_by') && $model->getAttribute('updated_by') === null) {
+                $model->setAttribute('updated_by', $id);
             }
         });
 
-        static::updating(function (Model $model) use ($userId): void {
+        static::updating(function (Model $model) use ($userId, $hasColumn): void {
             $id = $userId();
             if ($id === null) {
                 return;
             }
-            $model->setAttribute('updated_by', $id);
+            if ($hasColumn($model, 'updated_by')) {
+                $model->setAttribute('updated_by', $id);
+            }
         });
     }
 }

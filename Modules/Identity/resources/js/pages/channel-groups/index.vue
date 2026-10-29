@@ -31,8 +31,9 @@ const blank = () => ({
   code: '',
   color: 'primary',
   description: '',
-  is_active: true,
+  'is_active': true, // eslint-disable-line camelcase
 })
+
 const form = ref(blank())
 
 const headers = [
@@ -53,6 +54,7 @@ async function load() {
       page: options.value.page,
       itemsPerPage: options.value.itemsPerPage,
     })
+
     items.value = res.items ?? []
     itemsLength.value = res.itemsLength ?? 0
   } catch (e) {
@@ -80,7 +82,7 @@ function openEdit(item) {
     code: item.code,
     color: item.color,
     description: item.description,
-    is_active: item.is_active,
+    'is_active': item.is_active, // eslint-disable-line camelcase
   }
   errors.value = {}
   dialog.value = true

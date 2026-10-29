@@ -28,18 +28,20 @@ export const setupGuards = router => {
       else
         return undefined
     }
-    if (!canNavigate(to) && to.matched.length) {
-      /* eslint-disable indent */
-            return isLoggedIn
-                ? { name: 'not-authorized' }
-                : {
-                    name: 'login',
-                    query: {
-                        ...to.query,
-                        to: to.fullPath !== '/' ? to.path : undefined,
-                    },
-                }
-            /* eslint-enable indent */
+
+    if (!isLoggedIn) {
+      return {
+        name: 'login',
+        query: {
+          ...to.query,
+          to: to.fullPath !== '/' ? to.path : undefined,
+        },
+      }
     }
+
+    const hasRoutePermissionRule = to.matched.some(route => route.meta?.action && route.meta?.subject)
+
+    if (hasRoutePermissionRule && !canNavigate(to) && to.matched.length)
+      return { name: 'not-authorized' }
   })
 }

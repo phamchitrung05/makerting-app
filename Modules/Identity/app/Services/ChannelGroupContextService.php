@@ -25,8 +25,10 @@ class ChannelGroupContextService
      */
     public function canSeeAll(User $user): bool
     {
+        // hasPermissionTo() ném PermissionDoesNotExist nếu quyền chưa được
+        // seed vào bảng permissions → dùng checkPermissionTo trả false an toàn.
         return $user->hasRole('super-admin')
-            || $user->hasPermissionTo('channel-groups.manage')
+            || $user->checkPermissionTo('channel-groups.manage', 'admin')
             || $user->getAllPermissions()->contains('name', '*');
     }
 

@@ -28,7 +28,10 @@ class IdentityTest extends TestCase
     {
         parent::setUp();
         app(PermissionRegistrar::class)->forgetCachedPermissions();
-        Permission::findOrCreate('channel-groups.manage', 'admin');
+        // Seed đủ các quyền mà test sẽ cấp cho user.
+        foreach (['channel-groups.view', 'channel-groups.manage', 'roles.view', 'roles.manage'] as $perm) {
+            Permission::findOrCreate($perm, 'admin');
+        }
     }
 
     private function admin(): User
@@ -38,7 +41,13 @@ class IdentityTest extends TestCase
             'email' => 'admin@test.local',
             'password' => Hash::make('secret123'),
         ]);
-        $user->givePermissionTo('channel-groups.manage');
+        // Cấp đủ quyền để test vượt qua middleware permission.
+        $user->givePermissionTo([
+            'channel-groups.view',
+            'channel-groups.manage',
+            'roles.view',
+            'roles.manage',
+        ]);
 
         return $user;
     }

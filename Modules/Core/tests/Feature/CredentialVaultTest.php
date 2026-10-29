@@ -62,4 +62,53 @@ class CredentialVaultTest extends TestCase
         $this->assertNotNull($picked);
         $this->assertSame('App B', $picked->name);
     }
+
+    /**
+     * CHỨC NĂNG: app hết quota hôm qua nhưng đã qua quota_reset_at -> tự mở lại.
+     * INPUT : app daily_quota_used=100, quota_reset_at=hôm qua.
+     * OUTPUT: hasQuotaRemaining() = true và daily_quota_used reset về 0.
+     */
+    public function test_app_qua_quota_reset_at_tu_mo_lai(): void
+    {
+        $app = OAuthClientApp::create([
+            'platform' => 'youtube',
+            'name' => 'App Cũ',
+            'client_id' => 'id-cu',
+            'client_secret_encrypted' => $this->vault()->encrypt('sec'),
+            'redirect_uri' => 'https://app/cb',
+            'scopes_json' => [],
+            'daily_quota_limit' => 100,
+            'daily_quota_used' => 100,
+            'quota_reset_at' => now()->subHour(), // đã qua mốc reset
+            'is_active' => true,
+        ]);
+
+        $this->assertTrue($app->hasQuotaRemaining());
+        $app->refresh();
+        $this->assertSame(0, $app->daily_quota_used);
+        $this->assertTrue($app->quota_reset_at->isFuture());
+    }
+
+    /**
+     * CHỨC NĂNG: app hết quota nhưng chưa tới giờ reset -> vẫn hết.
+     * INPUT : app daily_quota_used=100, quota_reset_at=tương lai.
+     * OUTPUT: hasQuotaRemaining() = false.
+     */
+    public function test_app_chua_qua_reset_van_het_quota(): void
+    {
+        $app = OAuthClientApp::create([
+            'platform' => 'youtube',
+            'name' => 'App Mới',
+            'client_id' => 'id-moi',
+            'client_secret_encrypted' => $this->vault()->encrypt('sec'),
+            'redirect_uri' => 'https://app/cb',
+            'scopes_json' => [],
+            'daily_quota_limit' => 100,
+            'daily_quota_used' => 100,
+            'quota_reset_at' => now()->addHour(), // chưa tới reset
+            'is_active' => true,
+        ]);
+
+        $this->assertFalse($app->hasQuotaRemaining());
+    }
 }

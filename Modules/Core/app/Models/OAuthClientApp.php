@@ -76,10 +76,20 @@ class OAuthClientApp extends Model
     /**
      * CHỨC NĂNG: kiểm tra app còn quota ngày để dùng không.
      * INPUT: không có tham số. OUTPUT: bool.
-     * SIDE EFFECT: không có.
+     * SIDE EFFECT: nếu đã qua quota_reset_at -> tự reset daily_quota_used
+     *              và quota_reset_at rồi ghi DB (lazy reset).
      */
     public function hasQuotaRemaining(): bool
     {
+        // Qua mốc reset quota -> xóa bộ đếm để app được dùng lại.
+        // Cần thiết vì daily_quota_used không tự về 0 sau nửa đêm.
+        if ($this->quota_reset_at !== null && $this->quota_reset_at->isPast()) {
+            $this->update([
+                'daily_quota_used' => 0,
+                'quota_reset_at' => now()->addDay()->startOfDay(),
+            ]);
+        }
+
         if ($this->daily_quota_limit === null) {
             return true;
         }

@@ -52,6 +52,7 @@ async function loadRoles() {
       page: options.value.page,
       itemsPerPage: options.value.itemsPerPage,
     })
+
     roles.value = res.items ?? []
     rolesLength.value = res.itemsLength ?? 0
   } catch (e) {
@@ -64,6 +65,7 @@ async function loadRoles() {
 async function loadMatrix() {
   try {
     const res = await identityApi.permissionMatrix()
+
     matrix.value = res.modules ?? {}
   } catch (e) {
     notify(firstErrorMessage(e), 'error')

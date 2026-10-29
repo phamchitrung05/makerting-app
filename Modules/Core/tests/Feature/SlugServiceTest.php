@@ -121,6 +121,46 @@ class SlugServiceTest extends TestCase
         $this->assertSame(FakePost::class, $registry->resolve('post'));
         $this->assertSame('post', $registry->aliasFor(FakePost::class));
     }
+
+    /**
+     * CHỨC NĂNG: khi đổi tiêu đề quay lại giá trị cũ, kích hoạt lại slug cũ
+     *             thay vì tạo slug mới -1.
+     * INPUT : update title A -> B -> A. OUTPUT: primary slug lần lượt là
+     *         bai-a -> bai-b -> bai-a (không phải bai-a-1).
+     */
+    public function test_doi_tieu_de_quay_lai_giu_slug_cu(): void
+    {
+        $post = FakePost::create(['title' => 'Bài A']);
+        $this->assertSame('bai-a', $post->slug()->first()->slug);
+
+        // Đổi sang B -> bai-b là primary, bai-a thành lịch sử.
+        $post->update(['title' => 'Bài B']);
+        $post->refresh();
+        $this->assertSame('bai-b', $post->slug()->first()->slug);
+        $this->assertSame(['bai-a'], $post->slugs()->where('is_primary', false)->pluck('slug')->all());
+
+        // Đổi lại A -> kích hoạt lại bai-a, không phải bai-a-1.
+        $post->update(['title' => 'Bài A']);
+        $post->refresh();
+        $this->assertSame('bai-a', $post->slug()->first()->slug);
+        $this->assertSame(['bai-b'], $post->slugs()->where('is_primary', false)->pluck('slug')->all());
+
+        // Bảng slugs của post chỉ có 2 dòng: bai-a, bai-b.
+        $this->assertSame(2, $post->slugs()->count());
+    }
+
+    /**
+     * CHỨC NĂNG: khi slug bị model khác chiếm, vẫn cộng hậu tố -1.
+     * INPUT : Post1 tạo bai-a, Post2 cố tạo bai-a. OUTPUT: Post2 slug = bai-a-1.
+     */
+    public function test_slug_bi_model_khac_chiem_van_cong_hau_to(): void
+    {
+        $post1 = FakePost::create(['title' => 'Bài A']);
+        $this->assertSame('bai-a', $post1->slug()->first()->slug);
+
+        $post2 = FakePost::create(['title' => 'Bài A']);
+        $this->assertSame('bai-a-1', $post2->slug()->first()->slug);
+    }
 }
 
 class FakePost extends Model

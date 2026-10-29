@@ -2,7 +2,8 @@
 
 namespace Modules\Identity\Providers;
 
-use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Gate;
+use Modules\Identity\Models\User;
 use Modules\Identity\Registries\PermissionRegistry;
 use Modules\Identity\Services\ChannelGroupContextService;
 use Nwidart\Modules\Support\ModuleServiceProvider;
@@ -62,5 +63,15 @@ class IdentityServiceProvider extends ModuleServiceProvider
                 'channel-groups.manage' => 'Quản lý nhóm kênh',
             ],
         ]);
+
+        /**
+         * Super-admin vượt qua mọi kiểm tra Gate/can()/permission:
+         * - Role 'super-admin' (Spatie)
+         * - Permission '*' (wildcard qua getAllPermissions)
+         * Chạy trước mọi Gate::define/policy để không bị chặn bởi middleware.
+         */
+        Gate::before(function (User $user, string $ability) {
+            return $user->hasRole('super-admin') || $user->isSuperAdmin() ? true : null;
+        });
     }
 }

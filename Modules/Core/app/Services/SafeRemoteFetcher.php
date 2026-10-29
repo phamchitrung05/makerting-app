@@ -24,14 +24,34 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         '224.0.0.0/4', '240.0.0.0/4', '255.255.255.255/32',
     ];
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tải nội dung URL từ xa có chống SSRF + DNS pinning.
+     * =====================================================================
+     *
+     * INPUT :
+     *   - string $url        — URL cần tải (chỉ http/https)
+     *   - array  $options    — ['timeout' => int giây, 'maxBytes' => int,
+     *                          'headers' => array<string,string>, 'userAgent' => string]
+     *                          Mặc định đọc từ config('core.remote_fetch.*')
+     *
+     * OUTPUT: RemoteFetchResultDto — status, body, finalUrl, contentType.
+     *         Ném RemoteFetchException khi URL bị chặn / lỗi mạng / quá lớn.
+     *
+     * SIDE EFFECT:
+     *   - DNS query (dns_get_record) để kiểm IP trước khi fetch.
+     *   - Mở kết nối TCP qua cURL, ghim IP vào CURLOPT_RESOLVE.
+     * =====================================================================
+     */
     public function fetch(string $url, array $options = []): RemoteFetchResultDto
     {
-        $timeout = (int) ($options['timeout'] ?? 15);
-        $maxBytes = (int) ($options['maxBytes'] ?? 5 * 1024 * 1024);
+        $timeout = (int) ($options['timeout'] ?? config('core.remote_fetch.timeout', 15));
+        $maxBytes = (int) ($options['maxBytes'] ?? config('core.remote_fetch.max_bytes', 5 * 1024 * 1024));
         $headers = $options['headers'] ?? [];
-        $userAgent = $options['userAgent'] ?? 'MakertingApp-SafeFetcher/1.0';
+        $userAgent = $options['userAgent'] ?? config('core.remote_fetch.user_agent', 'MakertingApp-SafeFetcher/1.0');
 
         $parts = $this->assertUrlAllowed($url);
+        // Host đã bóc [ ] từ assertUrlAllowed — dùng luôn, không đọc lại $parts.
         $host = $parts['host'];
         $scheme = $parts['scheme'];
         $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
@@ -41,8 +61,13 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
             throw RemoteFetchException::network($url, 'khong phan giai duoc host');
         }
 
+        // CURLOPT_RESOLVE: IPv6 bắt buộc bọc [ ] quanh IP, IPv4 để nguyên.
         $resolve = array_map(
-            static fn (string $ip): string => $host . ':' . $port . ':' . $ip,
+            static function (string $ip) use ($host, $port): string {
+                $ipPart = str_contains($ip, ':') ? "[{$ip}]" : $ip;
+
+                return $host . ':' . $port . ':' . $ipPart;
+            },
             [$ips[0]]
         );
 
@@ -104,11 +129,24 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         );
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm tra URL có được phép tải không (chống SSRF cơ bản).
+     * =====================================================================
+     *
+     * INPUT : string $url — URL đầy đủ người dùng cung cấp.
+     * OUTPUT: array — kết quả parse_url() ['scheme','host','port',...] nếu hợp lệ.
+     *         Ném RemoteFetchException khi scheme/host/IP bị chặn.
+     *
+     * SIDE EFFECT: chỉ chuẩn hóa chuỗi (lowercase, trim, bóc [] IPv6).
+     * =====================================================================
+     */
     protected function assertUrlAllowed(string $url): array
     {
         $parts = parse_url($url);
         $scheme = strtolower($parts['scheme'] ?? '');
-        $host = strtolower($parts['host'] ?? '');
+        // parse_url trả host IPv6 kèm dấu [ ] — bóc ra để so sánh IP.
+        $host = strtolower(trim((string) ($parts['host'] ?? ''), '[]'));
 
         if (! in_array($scheme, ['http', 'https'], true)) {
             throw RemoteFetchException::blocked($url, 'scheme khong duoc phep');
@@ -130,9 +168,25 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
             }
         }
 
+        // Ghi đè host trong $parts bằng bản đã bóc [] để resolvePublicIps
+        // và CURLOPT_RESOLVE nhận được hostname/IP sạch.
+        $parts['host'] = $host;
+
         return $parts;
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Resolve hostname -> danh sách IP công cộng được phép dùng.
+     * =====================================================================
+     *
+     * INPUT : string $host — hostname đã bóc dấu [] nếu là IPv6 literal.
+     * OUTPUT: string[] — các IP public hợp lệ (IPv4/IPv6). Rỗng = không phân
+     *         giải được; ném RemoteFetchException nếu mọi IP đều nội bộ.
+     *
+     * SIDE EFFECT: gọi dns_get_record() (network I/O).
+     * =====================================================================
+     */
     protected function resolvePublicIps(string $host): array
     {
         if (filter_var($host, FILTER_VALIDATE_IP)) {
@@ -157,21 +211,78 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         return $public;
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Quyết định 1 IP có phải public không (chặn SSRF IPv4+IPv6).
+     * =====================================================================
+     *
+     * INPUT : string $ip — địa chỉ IP (IPv4 hoặc IPv6, không dấu []).
+     * OUTPUT: bool — true = được phép (public); false = nội bộ/loopback/
+     *         link-local/reserved → chặn.
+     *
+     * SIDE EFFECT: không có (chỉ tính toán trên chuỗi).
+     *
+     * CÁC TRƯỜNG HỢP CHẶN BỔ SUNG:
+     *   - IPv4-mapped IPv6 (::ffff:a.b.c.d) → decode rồi check theo IPv4 CIDR.
+     *   - ::1 (loopback), :: (unspecified), fe80::/10 (link-local),
+     *     fc00::/7 (unique local), 2001:db8::/32 (documentation).
+     * =====================================================================
+     */
     protected function isPublicIp(string $ip): bool
     {
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
             $packed = @inet_pton($ip);
-            if ($packed === false || $ip === '::1') {
+            if ($packed === false) {
                 return false;
             }
+
+            // IPv4-mapped IPv6: ::ffff:a.b.c.d — 12 byte đầu là 0x00*10 + 0xFF*2,
+            // 4 byte cuối là IPv4 thường. Decode rồi check theo BLOCKED_CIDRS.
+            $prefix = substr($packed, 0, 12);
+            if ($prefix === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
+                $ipv4 = inet_ntop(substr($packed, 12));
+                if ($ipv4 !== false) {
+                    return $this->isPublicIp($ipv4);
+                }
+                return false;
+            }
+
+            // IPv4-compatible IPv6 (deprecated): ::a.b.c.d — 12 byte đầu 0x00,
+            // 4 byte cuối IPv4 (trừ :: và ::1 đã check riêng).
+            if ($prefix === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") {
+                $ipv4 = inet_ntop(substr($packed, 12));
+                if ($ipv4 !== false && $ipv4 !== '0.0.0.0' && $ipv4 !== '0.0.0.1') {
+                    return $this->isPublicIp($ipv4);
+                }
+                return false;
+            }
+
+            // :: (all-zeros, unspecified) và ::1 (loopback).
+            if ($ip === '::' || $ip === '::1' || $packed === str_repeat("\x00", 15) . "\x01") {
+                return false;
+            }
+
             $first = ord($packed[0]);
             $second = ord($packed[1]);
+
+            // fe80::/10 — link-local.
             if ($first === 0xfe && ($second & 0xc0) === 0x80) {
                 return false;
             }
+            // fc00::/7 — unique local (ULA, private).
             if (($first & 0xfe) === 0xfc) {
                 return false;
             }
+            // 2001:db8::/32 — documentation prefix.
+            if ($first === 0x20 && $second === 0x01
+                && ord($packed[2]) === 0x0d && ord($packed[3]) === 0xb8) {
+                return false;
+            }
+            // ff00::/8 — multicast.
+            if ($first === 0xff) {
+                return false;
+            }
+
             return true;
         }
 

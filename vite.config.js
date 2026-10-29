@@ -87,6 +87,9 @@ export default defineConfig({
       input: ['resources/js/main.js'],
       refresh: true,
     }),
+
+    // Bắt vite dev server lắng nghe trên IPv4 127.0.0.1 thay vì [::1]
+    // (trình duyệt Windows có thể không resolve được IPv6 loopback -> 404).
     vueJsx(), // Docs: https://github.com/vuetifyjs/vuetify-loader/tree/master/packages/vite-plugin
     vuetify({
       styles: {
@@ -136,6 +139,10 @@ export default defineConfig({
     }),
     svgLoader(),
   ],
+
+  // Buộc vite dev server lắng nghe trên IPv4 — tránh trình duyệt không resolve
+  // được hot file http://[::1]:5173 (IPv6) trên Windows.
+  server: { host: '127.0.0.1' },
   define: { 'process.env': {} },
   resolve: {
     alias: {
