@@ -395,6 +395,7 @@ declare module 'vue' {
     StorageTab: typeof import('./Modules/Settings/resources/js/components/tabs/StorageTab.vue')['default']
     SystemTaskQueuePopup: typeof import('./Modules/TaskCenter/resources/js/components/SystemTaskQueuePopup.vue')['default']
     TablePagination: typeof import('./resources/js/@core/components/TablePagination.vue')['default']
+    TaxonomyField: typeof import('./Modules/Taxonomy/resources/js/components/TaxonomyField.vue')['default']
     TheCustomizer: typeof import('./resources/js/@core/components/TheCustomizer.vue')['default']
     ThemeSwitcher: typeof import('./resources/js/@core/components/ThemeSwitcher.vue')['default']
     TimelineBasic: typeof import('./resources/js/views/demos/components/timeline/TimelineBasic.vue')['default']

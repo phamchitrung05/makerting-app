@@ -143,4 +143,46 @@ class SettingsTest extends TestCase
         $res = $this->getJson('/api/v1/admin/settings/khong-ton-tai', $this->token($user));
         $res->assertStatus(404);
     }
+
+    public function test_mail_password_duoc_ma_hoa_trong_db(): void
+    {
+        $user = $this->admin(['settings.mail.view', 'settings.mail.manage']);
+        $svc = app(ModularSettingsService::class);
+        $svc->update('mail', ['mail_password' => 'my-smtp-secret'], 1);
+
+        $payload = \DB::table('settings')
+            ->where('group', 'mail')->where('name', 'mail_password')
+            ->value('payload');
+
+        // Phải là chuỗi mã hóa (Laravel Crypto base64 json) chứ không plaintext.
+        $this->assertNotSame('"my-smtp-secret"', $payload);
+        $this->assertStringNotContainsString('my-smtp-secret', (string) $payload);
+        // Giải mã lại phải trả đúng giá trị (Spatie serialize khi encrypt).
+        $this->assertSame('my-smtp-secret', unserialize(\Crypt::decryptString(json_decode($payload, true))));
+    }
+
+    public function test_update_tu_choi_key_la_khong_khai_bao(): void
+    {
+        $user = $this->admin(['settings.site.view', 'settings.site.manage']);
+        $h = $this->token($user);
+
+        // Gửi key lạ trùng tên property nội bộ của Settings + key rác.
+        $res = $this->putJson('/api/v1/admin/settings/site', [
+            'expected_version' => 1,
+            'values' => [
+                'site_name' => 'Hợp lệ',
+                'config' => ['x' => 1],
+                'mapper' => 'hack',
+                'loaded' => true,
+                'mail_password_configured' => true,
+                'khong_khai_bao' => 'abc',
+            ],
+        ], $h);
+
+        $res->assertOk();
+        // Key lạ bị lọc — chỉ site_name ghi.
+        $this->assertSame('Hợp lệ', $res->json('data.values.site_name'));
+        $this->assertArrayNotHasKey('config', $res->json('data.values'));
+        $this->assertArrayNotHasKey('mapper', $res->json('data.values'));
+    }
 }

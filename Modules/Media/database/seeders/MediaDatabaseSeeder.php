@@ -3,41 +3,27 @@
 namespace Modules\Media\Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use Spatie\Permission\Models\Permission;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Seeder gốc của module Media.
+ * CHỨC NĂNG FILE: Seeder gốc của module Media — permission nền.
  * =====================================================================
- *
- * Điểm vào gọi seeder con khi chạy module:seed hoặc db:seed; đăng ký seeder
- * nghiệp vụ trong run() khi module có dữ liệu mẫu.
- *
- * CÁC HÀM/METHOD TRONG FILE:
- * - run(): điều phối gọi các seeder con
- * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : không có tham số
- * - OUTPUT: void — các seeder con gọi tuần tự
+ * Đồng bộ 2 quyền `media.view`/`media.manage` vào bảng permissions
+ * (guard 'admin') — chạy qua module:seed hoặc db:seed khi cần.
  * =====================================================================
  */
 class MediaDatabaseSeeder extends Seeder
 {
     /**
-     * =====================================================================
-     * CHỨC NĂNG: Điều phối các seeder con của module Media
-     * =====================================================================
-     *
-     * INPUT:
-     * - không có tham số
-     *
-     * OUTPUT:
-     * - void — gọi seeder con qua $this->call()
-     *
-     * SIDE EFFECT:
-     * - ghi dữ liệu mẫu vào database khi seed
-     * =====================================================================
+     * Đồng bộ permission media.
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: INSERT permissions media.view/manage nếu thiếu.
      */
     public function run(): void
     {
-        // $this->call([]);
+        foreach (['media.view', 'media.manage'] as $perm) {
+            Permission::findOrCreate($perm, 'admin');
+        }
     }
 }

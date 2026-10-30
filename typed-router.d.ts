@@ -31,6 +31,8 @@ declare module 'vue-router/auto-routes' {
     'admin-settings-security': RouteRecordInfo<'admin-settings-security', '/admin/settings/security', Record<never, never>, Record<never, never>>,
     'admin-task-center-alerts': RouteRecordInfo<'admin-task-center-alerts', '/admin/task-center/alerts', Record<never, never>, Record<never, never>>,
     'admin-task-center-tasks': RouteRecordInfo<'admin-task-center-tasks', '/admin/task-center/tasks', Record<never, never>, Record<never, never>>,
+    'admin-taxonomy-categories': RouteRecordInfo<'admin-taxonomy-categories', '/admin/taxonomy/categories', Record<never, never>, Record<never, never>>,
+    'admin-taxonomy-tags': RouteRecordInfo<'admin-taxonomy-tags', '/admin/taxonomy/tags', Record<never, never>, Record<never, never>>,
     'apps-academy-course-details': RouteRecordInfo<'apps-academy-course-details', '/apps/academy/course-details', Record<never, never>, Record<never, never>>,
     'apps-academy-dashboard': RouteRecordInfo<'apps-academy-dashboard', '/apps/academy/dashboard', Record<never, never>, Record<never, never>>,
     'apps-academy-my-course': RouteRecordInfo<'apps-academy-my-course', '/apps/academy/my-course', Record<never, never>, Record<never, never>>,

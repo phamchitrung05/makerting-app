@@ -21,10 +21,15 @@ class RoleStoreRequest extends FormRequest
     {
         $id = $this->route('role')?->id ?? $this->route('role');
 
+        $registered = app(\Modules\Identity\Registries\PermissionRegistry::class)
+            ->allPermissionNames();
+
         return [
             'name' => ['required', 'string', 'max:120', 'alpha_dash', Rule::unique('roles', 'name')->ignore($id)],
             'permissions' => ['nullable', 'array'],
-            'permissions.*' => ['string', 'distinct'],
+            // Chỉ cho phép các quyền đã đăng ký trong PermissionRegistry —
+            // chặn gửi '*' hay chuỗi rác làm bẩn bảng permissions.
+            'permissions.*' => ['string', 'distinct', Rule::in($registered)],
         ];
     }
 }

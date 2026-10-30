@@ -42,7 +42,7 @@ class MailSettings extends Settings implements ModularSettingsContract
     /** @var string|null Username đăng nhập SMTP. */
     public ?string $mail_username;
 
-    /** @var string|null Mật khẩu SMTP — BÍ MẬT, che khi trả API. */
+    /** @var string|null Mật khẩu SMTP — BÍ MẬT, che khi trả API + mã hóa DB. */
     public ?string $mail_password;
 
     /** @var string Địa chỉ From mặc định. */
@@ -91,6 +91,16 @@ class MailSettings extends Settings implements ModularSettingsContract
     }
 
     public static function secretProperties(): array
+    {
+        return ['mail_password'];
+    }
+
+    /**
+     * CHỨC NĂNG: Khai báo property được Spatie mã hóa khi lưu DB
+     * (bảo vệ mật khẩu SMTP trong cột payload — tránh lưu plaintext).
+     * INPUT: không. OUTPUT: array<int,string>. SIDE EFFECT: không.
+     */
+    public static function encrypted(): array
     {
         return ['mail_password'];
     }

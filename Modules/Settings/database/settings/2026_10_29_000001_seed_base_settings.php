@@ -51,4 +51,29 @@ return new class extends SettingsMigration
         $this->migrator->add('mail.mail_from_name', 'Makerting');
         $this->migrator->add('mail.mail_queue', true);
     }
+
+    /**
+     * CHỨC NĂNG: Gỡ các row seed khi rollback (đúng DoD 7.4 PLAN.md).
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: DELETE row settings đã seed (rollback migrations).
+     */
+    public function down(): void
+    {
+        $groups = ['site', 'security', 'mail'];
+        $names = [
+            'version', 'site_name', 'site_description', 'timezone', 'locale',
+            'contact_email', 'tagline', 'website_url', 'contact_phone', 'contact_address',
+            'password_min_length', 'password_require_symbols', 'password_require_mixed',
+            'login_max_attempts', 'login_lockout_minutes', 'session_lifetime_minutes',
+            'allowed_ips', 'two_factor_required',
+            'mail_driver', 'mail_host', 'mail_port', 'mail_encryption', 'mail_username',
+            'mail_password', 'mail_from_address', 'mail_from_name', 'mail_queue',
+        ];
+
+        foreach ($names as $name) {
+            foreach ($groups as $group) {
+                $this->migrator->delete("{$group}.{$name}");
+            }
+        }
+    }
 };

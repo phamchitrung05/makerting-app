@@ -55,27 +55,13 @@ const saveSettings = () => {
 }
 
 const resetDefaults = () => { console.log('Khôi phục mặc định') }
+
+// Expose cho trang cha (page header) gọi trực tiếp qua ref.
+defineExpose({ saveSettings, resetDefaults })
 </script>
 
 <template>
   <div class="d-flex flex-column gap-6">
-    <div class="d-flex justify-end gap-3">
-      <VBtn
-        variant="tonal"
-        color="secondary"
-        prepend-icon="tabler-refresh"
-        @click="resetDefaults"
-      >
-        Khôi phục mặc định
-      </VBtn>
-      <VBtn
-        prepend-icon="tabler-device-floppy"
-        @click="saveSettings"
-      >
-        Lưu thay đổi
-      </VBtn>
-    </div>
-
     <VCard
       title="Thông tin ứng dụng"
       subtitle="Cập nhật các thông tin cơ bản về ứng dụng của bạn."

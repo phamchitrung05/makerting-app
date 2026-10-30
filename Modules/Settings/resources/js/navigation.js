@@ -9,9 +9,14 @@
  * SIDE EFFECT: được navigation/vertical|horizontal/index.js gom lúc build.
  * =====================================================================
  */
-export const order = 95
+export const order = 65
+
+// Ghim lên đầu sidebar (cùng nhóm top với Blog) để nằm ngay dưới heading BLOG.
+export const position = 'top'
 
 export default [
+  // Header nhóm các mục cấu hình/vận hành.
+  { heading: 'SYSTEM' },
   {
     title: 'Cài đặt',
     icon: { icon: 'tabler-settings' },
@@ -19,18 +24,6 @@ export default [
       {
         title: 'Chung',
         to: 'admin-settings-general',
-      },
-      {
-        title: 'Bảo mật',
-        to: 'admin-settings-security',
-      },
-      {
-        title: 'Email',
-        to: 'admin-settings-mail',
-      },
-      {
-        title: 'AI Providers',
-        to: 'admin-settings-ai-providers',
       },
     ],
   },

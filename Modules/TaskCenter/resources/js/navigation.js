@@ -6,7 +6,10 @@
  * INPUT/OUTPUT: mảng nav item cho VerticalNav/HorizontalNav.
  * =====================================================================
  */
-export const order = 20
+export const order = 65
+
+// Ghim lên đầu sidebar (cùng nhóm top với Blog).
+export const position = 'top'
 
 export default [
   {

@@ -73,12 +73,31 @@ class UpdateSettingsRequest extends FormRequest
     }
 
     /**
-     * CHỨC NĂNG: Lấy mảng values đã validated (key con đã qua rules).
-     * INPUT: validated body. OUTPUT: array. SIDE EFFECT: không.
+     * =====================================================================
+     * CHỨC NĂNG: Lấy mảng values đã validated (chỉ giữ key khai báo trong
+     * validationRules() của class Settings — chặn key lạ)
+     * =====================================================================
+     * - Chặn key trùng tên property nội bộ của Spatie Settings (config,
+     *   mapper, loaded, originalValues, version...) làm fill() ném Error.
+     * - Chặn key rác client gửi kèm (mail_password_configured, hack_key...)
+     *   chỉ giữ các property Settings khai báo trong validationRules().
+     * INPUT: validated body. OUTPUT: array — chỉ key hợp lệ.
+     * SIDE EFFECT: không.
+     * =====================================================================
      */
     public function valuesPayload(): array
     {
-        return (array) $this->input('values', []);
+        $values = (array) $this->input('values', []);
+        $class = $this->groupClass();
+
+        if ($class === null) {
+            return $values; // Controller sẽ 404 group chưa đăng ký.
+        }
+
+        // Chỉ giữ các key Settings class khai báo trong validationRules().
+        $allowed = array_keys($class::validationRules());
+
+        return array_intersect_key($values, array_flip($allowed));
     }
 
     /**

@@ -86,9 +86,18 @@ class RolePermissionController extends Controller
      * PUT /api/v1/admin/identity/roles/{role}
      * INPUT: RoleStoreRequest, Role. OUTPUT: BaseResponse::success.
      * SIDE EFFECT: UPDATE role name + syncPermissions.
+     * EXCEPTION: 409 khi role là super-admin (chặn đổi tên / rút quyền để
+     * tránh tự khóa mình / đổi tên làm Gate::before mất hiệu lực).
      */
     public function update(RoleStoreRequest $request, Role $role)
     {
+        if ($role->name === 'super-admin') {
+            return BaseResponse::error(
+                'Không thể sửa vai trò super-admin (đổi tên hoặc rút quyền sẽ phá vỡ truy cập hệ thống)',
+                Response::HTTP_CONFLICT,
+            );
+        }
+
         $data = $request->validated();
 
         $role->name = $data['name'];
@@ -116,11 +125,16 @@ class RolePermissionController extends Controller
     }
 
     /**
-     * Lọc danh sách permission name hợp lệ (đã đăng ký trong registry) và đảm
-     * bảo tồn tại trong bảng permissions với guard admin.
+     * =====================================================================
+     * CHỨC NĂNG: Lọc danh sách permission name HỢP LỆ theo PermissionRegistry
+     * =====================================================================
+     * Chỉ giữ các name đã khai báo trong registry (PermissionRegistry::has)
+     * rồi đảm bảo tồn tại trong DB guard admin — chặn gửi chuỗi rác làm bẩn
+     * bảng permissions và ngăn tự cấp quyền '*' leo thang.
      * INPUT: string[] names.
-     * OUTPUT: string[] names hợp lệ.
-     * SIDE EFFECT: có thể INSERT permission còn thiếu (đồng bộ registry->DB).
+     * OUTPUT: string[] names hợp lệ (đã lọc + đã tồn tại).
+     * SIDE EFFECT: có thể INSERT permission registry còn thiếu vào DB.
+     * =====================================================================
      */
     protected function validPermissionNames(array $names): array
     {
@@ -129,8 +143,13 @@ class RolePermissionController extends Controller
             if (! is_string($name)) {
                 continue;
             }
-            // Đảm bảo permission tồn tại; cho phép cả quyền chưa khai báo registry
-            // (tương thích linh hoạt) nhưng chuẩn hóa guard admin.
+
+            // Bỏ qua quyền chưa đăng ký trong PermissionRegistry —
+            // chặn cả quyền '*' (super-admin wildcard) lẫn chuỗi rác.
+            if (! $this->registry->has($name)) {
+                continue;
+            }
+
             Permission::findOrCreate($name, 'admin');
             $valid[] = $name;
         }

@@ -88,7 +88,11 @@ class ChannelGroupController extends Controller
      */
     public function store(ChannelGroupStoreRequest $request, SaveChannelGroupAction $action)
     {
-        $group = $action->handle($request->validated(), null, $request->user()?->id);
+        try {
+            $group = $action->handle($request->validated(), null, $request->user()?->id);
+        } catch (\InvalidArgumentException $e) {
+            return BaseResponse::error($e->getMessage(), Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         return BaseResponse::created(new ChannelGroupResource($group), 'Tạo nhóm kênh thành công');
     }
@@ -116,7 +120,11 @@ class ChannelGroupController extends Controller
      */
     public function update(ChannelGroupUpdateRequest $request, ChannelGroup $channelGroup, SaveChannelGroupAction $action)
     {
-        $group = $action->handle($request->validated(), $channelGroup, $request->user()?->id);
+        try {
+            $group = $action->handle($request->validated(), $channelGroup, $request->user()?->id);
+        } catch (\InvalidArgumentException $e) {
+            return BaseResponse::error($e->getMessage(), Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         return BaseResponse::success(new ChannelGroupResource($group), 'Cập nhật nhóm kênh thành công');
     }

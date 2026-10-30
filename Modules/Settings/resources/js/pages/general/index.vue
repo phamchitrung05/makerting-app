@@ -48,9 +48,20 @@ const tabMap = {
 }
 
 const tabComponent = computed(() => tabMap[activeTab.value] ?? GeneralTab)
+const tabRef = ref(null)
 
 function onSelect(id) {
   activeTab.value = id
+}
+
+// Hai action của tab "Thông tin chung" đưa lên page header (chỉ hiển thị
+// khi đang ở tab general); gọi vào defineExpose của GeneralTab.
+function onSave() {
+  tabRef.value?.saveSettings?.()
+}
+
+function onReset() {
+  tabRef.value?.resetDefaults?.()
 }
 </script>
 
@@ -65,6 +76,26 @@ function onSelect(id) {
         <div class="text-body-1">
           Quản lý các thiết lập, tùy chỉnh và cấu hình cho toàn bộ hệ thống
         </div>
+      </div>
+      <!-- Nút hành động của tab "Thông tin chung" trên page header. -->
+      <div
+        v-if="activeTab === 'general'"
+        class="d-flex gap-3 align-center"
+      >
+        <VBtn
+          variant="tonal"
+          color="secondary"
+          prepend-icon="tabler-refresh"
+          @click="onReset"
+        >
+          Khôi phục mặc định
+        </VBtn>
+        <VBtn
+          prepend-icon="tabler-device-floppy"
+          @click="onSave"
+        >
+          Lưu thay đổi
+        </VBtn>
       </div>
     </div>
 
@@ -87,7 +118,10 @@ function onSelect(id) {
         md="8"
         lg="9"
       >
-        <component :is="tabComponent" />
+        <component
+          :is="tabComponent"
+          ref="tabRef"
+        />
       </VCol>
     </VRow>
   </div>

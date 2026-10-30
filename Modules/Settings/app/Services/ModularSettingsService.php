@@ -112,8 +112,13 @@ class ModularSettingsService
 
             $settings->version = $current + 1;
 
-            if (! empty($writePayload)) {
-                $settings->fill($writePayload);
+            // Chỉ ghi các property class Settings khai báo — chặn key lạ làm
+            // fill() ném Error/TypeError (config, mapper, loaded, version...).
+            $allowedProps = array_keys($this->contractOf($group)::validationRules());
+            $safePayload = array_intersect_key($writePayload, array_flip($allowedProps));
+
+            if (! empty($safePayload)) {
+                $settings->fill($safePayload);
             }
 
             $settings->save();
@@ -136,10 +141,16 @@ class ModularSettingsService
      * ===================================================================== */
 
     /**
-     * CHỨC NĂNG: Nạp (hoặc lấy cache) instance Settings của group.
-     * INPUT: $group string; $fresh bool (bỏ cache request).
+     * =====================================================================
+     * CHỨC NĂNG: Nạp (hoặc lấy cache) instance Settings của group
+     * =====================================================================
+     * - $fresh=false: trả requestCache (1 lần resolve DB/request).
+     * - $fresh=true : tạo instance mới và force loadValues lại — chặn cả
+     *   stale-cache lẫn scoped-instance khi update() cần đọc version thật.
+     * INPUT: $group string; $fresh bool.
      * OUTPUT: Settings instance đã load từ DB.
      * SIDE EFFECT: đăng ký class vào config settings + ghi requestCache.
+     * =====================================================================
      */
     private function load(string $group, bool $fresh = false): Settings
     {
@@ -148,6 +159,16 @@ class ModularSettingsService
         }
 
         $class = $this->ensureRegistered($group);
+
+        if ($fresh) {
+            // Tạo instance mới (không qua scoped container) để tránh dùng
+            // lại instance đã loaded (giá trị cũ) của request khác.
+            $settings = new $class();
+            // Buộc loadValues() gọi lại DB — bỏ qua flag loaded của scoped.
+            $settings->refresh();
+
+            return $this->requestCache[$group] = $settings;
+        }
 
         /** @var Settings $settings */
         $settings = app($class);
@@ -234,7 +255,15 @@ class ModularSettingsService
      */
     private function buildWritePayload(array $payload, array $secrets): array
     {
-        unset($payload['version']);
+        // Property nội bộ của Spatie Settings — client KHÔNG được ghi vào,
+        // gửi vào sẽ làm fill() ném Error/TypeError (ghi đè config/mapper).
+        $internal = [
+            'version', 'config', 'mapper', 'configInitialized', 'loaded',
+            'originalValues', 'settingsConfig', 'fresh', 'requestCache',
+        ];
+        foreach ($internal as $k) {
+            unset($payload[$k]);
+        }
 
         $secretsTouched = [];
 
