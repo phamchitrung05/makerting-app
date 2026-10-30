@@ -25,6 +25,10 @@ export default [
         to: 'admin-settings-security',
       },
       {
+        title: 'Email',
+        to: 'admin-settings-mail',
+      },
+      {
         title: 'AI Providers',
         to: 'admin-settings-ai-providers',
       },

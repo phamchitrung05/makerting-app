@@ -48,6 +48,9 @@ watch([
         <Component :is="Component" />
       </Suspense>
     </RouterView>
+
+    <!-- Khay theo dõi tiến trình ngầm toàn hệ thống (P1-04 TaskCenter) -->
+    <SystemTaskQueuePopup />
   </Component>
 </template>
 

@@ -2,63 +2,78 @@
 
 namespace Modules\TaskCenter\Providers;
 
+use Modules\Identity\Registries\PermissionRegistry;
+use Modules\TaskCenter\Contracts\TaskTrackerContract;
+use Modules\TaskCenter\Registries\TaskRunAdapterRegistry;
+use Modules\TaskCenter\Services\TaskTrackerService;
 use Nwidart\Modules\Support\ModuleServiceProvider;
-use Illuminate\Console\Scheduling\Schedule;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Service Provider khởi động của module TaskCenter (Tầng 0).
+ * CHỨC NĂNG FILE: Service Provider khởi động của module TaskCenter.
  * =====================================================================
  *
- * Theo dõi tiến trình ngầm toàn hệ thống, chi phí AI và cảnh báo sức khỏe tài khoản qua Telegram.
- *
- * Provider do nwidart/laravel-modules sinh và quản lý: gom các provider con
- * (Event, Route) và là nơi đăng ký binding, registry, event listener của module.
+ * - register(): singleton TaskRunAdapterRegistry + bind TaskTrackerContract.
+ * - boot(): đăng ký nhóm quyền 'task-center' vào PermissionRegistry.
  *
  * CÁC HÀM/METHOD TRONG FILE:
- * - register(): đăng ký binding container của module
- * - provides(): danh sách service provider cung cấp
- * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : cấu hình module từ module.json và protected $name/$nameLower
- * - OUTPUT: đăng ký providers con và binding vào container khi boot
+ * - register(): binding container.
+ * - boot()    : đăng ký permission.
+ * INPUT/OUTPUT: binding + permission registry.
  * =====================================================================
  */
 class TaskCenterServiceProvider extends ModuleServiceProvider
 {
-    /**
-     * The name of the module.
-     */
+    /** The name of the module. */
     protected string $name = 'TaskCenter';
 
-    /**
-     * The lowercase version of the module name.
-     */
+    /** The lowercase version of the module name. */
     protected string $nameLower = 'taskcenter';
 
-    /**
-     * Command classes to register.
-     *
-     * @var string[]
-     */
-    // protected array $commands = [];
-
-    /**
-     * Provider classes to register.
-     *
-     * @var string[]
-     */
+    /** Provider classes to register. */
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
 
     /**
-     * Define module schedules.
-     * 
-     * @param $schedule
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký binding container của module
+     * =====================================================================
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: singleton TaskRunAdapterRegistry + bind
+     * TaskTrackerContract -> TaskTrackerService.
+     * =====================================================================
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->singleton(TaskRunAdapterRegistry::class, fn () => new TaskRunAdapterRegistry());
+        $this->app->bind(TaskTrackerContract::class, TaskTrackerService::class);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Boot module — đăng ký nhóm quyền 'task-center'
+     * =====================================================================
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: PermissionRegistry thêm quyền task-center.*.
+     * =====================================================================
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        /** @var PermissionRegistry $permissions */
+        $permissions = $this->app->make(PermissionRegistry::class);
+
+        $permissions->registerModule('task-center', [
+            'label' => 'Trung tâm tác vụ',
+            'permissions' => [
+                'task-center.view' => 'Xem tiến trình & cảnh báo',
+                'task-center.manage' => 'Quản lý tiến trình & cảnh báo',
+            ],
+        ]);
+    }
 }

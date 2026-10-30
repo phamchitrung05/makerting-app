@@ -13,9 +13,15 @@ definePage({ meta: { layout: 'default' } })
 
 <template>
   <VCard>
-    <VCardItem title="AI Providers" subtitle="Quản lý OpenAI, Gemini, Anthropic, ElevenLabs — P2-01" />
+    <VCardItem
+      title="AI Providers"
+      subtitle="Quản lý OpenAI, Gemini, Anthropic, ElevenLabs — P2-01"
+    />
     <VCardText>
-      <VAlert color="info" variant="tonal">
+      <VAlert
+        color="info"
+        variant="tonal"
+      >
         P1-03 Settings + P2-01 CoreAi chưa implement. Đây sẽ là trang quản lý
         ai_providers (api_key, base_url, models, quota) qua SettingsRegistry.
       </VAlert>

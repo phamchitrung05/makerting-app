@@ -3,72 +3,108 @@
 namespace Modules\Settings\Http\Controllers;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
+use InvalidArgumentException;
+use Modules\Core\Http\Responses\BaseResponse;
+use Modules\Settings\Http\Requests\UpdateSettingsRequest;
+use Modules\Settings\Services\ModularSettingsService;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Controller điều phối HTTP của module Settings (khung ban đầu).
+ * CHỨC NĂNG FILE: Controller điều phối HTTP của module Settings.
  * =====================================================================
  *
- * Cấu hình hệ thống trên Spatie Settings qua SettingsRegistry, khóa phiên bản và cấu hình mặc định theo ChannelGroup.
+ * Chuẩn luồng: Route → permission middleware → FormRequest → Controller
+ * → ModularSettingsService → BaseResponse. Controller không chứa business
+ * rule, chỉ gọi service và bọc kết quả vào envelope chuẩn.
  *
- * Controller chỉ điều phối HTTP: Route → Middleware → FormRequest → Controller
- * → Action/Service → JsonResource/BaseResponse; không chứa business rule dài.
- * Các method resource là khung mặc định, sẽ thay bằng endpoint thực ở Phase sau.
+ * Endpoint:
+ * - GET    /api/v1/admin/settings          -> index()  liệt kê group + meta.
+ * - GET    /api/v1/admin/settings/{group}  -> show()   payload (che secret).
+ * - PUT    /api/v1/admin/settings/{group}  -> update() khóa version.
  *
  * CÁC HÀM/METHOD TRONG FILE:
- * - index/create/store/show/edit/update/destroy: khung resource mặc định
+ * - index()  : trả describe() các group đã đăng ký.
+ * - show()   : trả get() một group (values đã mask secret + version).
+ * - update() : trả update() một group; 409 khi version lệch; 404 khi group lạ.
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : Illuminate\Http\Request và route params
- * - OUTPUT: view/response placeholder (đổi sang BaseResponse)
+ * - INPUT : Request/UpdateSettingsRequest + route param {group}.
+ * - OUTPUT: JsonResponse BaseResponse {success,message,data,errors,meta}.
  * =====================================================================
  */
 class SettingsController extends Controller
 {
+    public function __construct(private readonly ModularSettingsService $service) {}
+
     /**
-     * Display a listing of the resource.
+     * =====================================================================
+     * CHỨC NĂNG: GET /api/v1/admin/settings — danh sách group + metadata
+     * =====================================================================
+     * INPUT: không.
+     * OUTPUT: BaseResponse::success {groups:[{group,permission,secrets,defaults}]}.
+     * SIDE EFFECT: không.
+     * =====================================================================
      */
-    public function index()
+    public function index(): JsonResponse
     {
-        return view('settings::index');
+        return BaseResponse::success(
+            ['groups' => $this->service->describe()],
+            'Lấy danh sách nhóm cài đặt thành công',
+        );
     }
 
     /**
-     * Show the form for creating a new resource.
+     * =====================================================================
+     * CHỨC NĂNG: GET /api/v1/admin/settings/{group} — payload một group
+     * =====================================================================
+     * INPUT: route param {group}.
+     * OUTPUT: BaseResponse::success {group,version,values,secrets};
+     *         404 khi group chưa đăng ký.
+     * SIDE EFFECT: không.
+     * =====================================================================
      */
-    public function create()
+    public function show(string $group): JsonResponse
     {
-        return view('settings::create');
+        try {
+            return BaseResponse::success(
+                $this->service->get($group),
+                'Lấy cấu hình thành công',
+            );
+        } catch (InvalidArgumentException $e) {
+            return BaseResponse::error($e->getMessage(), 404);
+        }
     }
 
     /**
-     * Store a newly created resource in storage.
+     * =====================================================================
+     * CHỨC NĂNG: PUT /api/v1/admin/settings/{group} — cập nhật có khóa version
+     * =====================================================================
+     * INPUT: UpdateSettingsRequest (expected_version + values).
+     * OUTPUT:
+     * - 200 {group,version,values,secrets} khi ghi thành công;
+     * - 409 JsonResponse trả thẳng từ service khi version lệch;
+     * - 404 khi group chưa đăng ký.
+     * SIDE EFFECT: ghi DB (xem service); trả response 409 trực tiếp khi
+     * service trả JsonResponse thay vì array.
+     * =====================================================================
      */
-    public function store(Request $request) {}
-
-    /**
-     * Show the specified resource.
-     */
-    public function show($id)
+    public function update(UpdateSettingsRequest $request, string $group): JsonResponse
     {
-        return view('settings::show');
+        try {
+            $result = $this->service->update(
+                $group,
+                $request->valuesPayload(),
+                $request->expectedVersion(),
+            );
+
+            // Service trả thẳng JsonResponse 409 khi version lệch.
+            if ($result instanceof JsonResponse) {
+                return $result;
+            }
+
+            return BaseResponse::success($result, 'Cập nhật cấu hình thành công');
+        } catch (InvalidArgumentException $e) {
+            return BaseResponse::error($e->getMessage(), 404);
+        }
     }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit($id)
-    {
-        return view('settings::edit');
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, $id) {}
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy($id) {}
 }

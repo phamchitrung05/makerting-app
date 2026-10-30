@@ -147,6 +147,58 @@ Không tự ý thêm `rounded="xl"`, `elevation="0"`, `border` hoặc đổi mà
    - Tránh dùng `VBtnToggle` với `variant="outlined"` vì dễ mất màu nền active trong theme Vuexy.
    - Sử dụng cụm nút bọc trong khung viền mảnh với `:variant="isActive ? 'flat' : 'text'"` và `:color="isActive ? 'primary' : 'secondary'"` để hiển thị trạng thái đang chọn rõ ràng nhất.
 
+### 3.5. Checklist Chuẩn hóa Trang Admin nhanh (Áp dụng từ `product/add`)
+
+Phần này là **bản tóm tắt thực chiến** đã áp dụng khi chuẩn hóa trang `Modules/Settings` — dùng lại cho mọi trang Admin mới hoặc refactor trang cũ.
+
+#### a) Cấu trúc khung trang
+```vue
+<template>
+  <div>                                          <!-- KHÔNG bọc VContainer/pa-* -->
+    <div class="d-flex flex-wrap justify-start justify-sm-space-between gap-y-4 gap-x-6 mb-6">
+      <div class="d-flex flex-column justify-center">
+        <h4 class="text-h4 font-weight-medium">Tiêu đề trang</h4>
+        <div class="text-body-1">Mô tả ngắn chức năng</div>
+      </div>
+      <div class="d-flex gap-4 align-center flex-wrap">
+        <VBtn variant="tonal" color="secondary">Phụ</VBtn>
+        <VBtn>Chính</VBtn>                         <!-- default flat primary, KHÔNG size="small" -->
+      </div>
+    </div>
+    <VRow> ... </VRow>
+  </div>
+</template>
+```
+
+#### b) Quy tắc VCard (bắt buộc)
+| Thuộc tính | Giá trị chuẩn | Ghi chú |
+| :--- | :--- | :--- |
+| `elevation` | **mặc định (6)** | ❌ `elevation="0"` — đổ bóng tự nhiên |
+| `border` | **không** | ❌ `border` — card tự có shadow |
+| `rounded` | **mặc định (6px)** | ❌ `rounded="xl"`/`"lg"` trên card |
+| `padding` | **`VCardText` = 20px** | ❌ `pa-5`/`pa-3` trên card |
+| `title`/`subtitle` | prop của VCard | ❌ `<div>` + class thủ công |
+| spacing giữa card | `class="mb-6"` | 24px đồng nhất |
+
+#### c) Form & Field
+- `label="..."` prop của `App*` → tự render `VLabel` `text-body-2`; ❌ `<label class="text-caption font-weight-bold">` thủ công.
+- Bỏ `density="compact"`, `hide-details`, `variant="outlined"` trên `App*` → size **normal**.
+- `VIcon` dùng `icon="tabler-x"` prop, ❌ text node `<VIcon>tabler-x</VIcon>`.
+
+#### d) Icon, màu, spacing
+- Icon: **chỉ `tabler-*`**, ❌ `mdi-*`.
+- Màu: `color="primary"|"secondary"` hoặc `rgba(var(--v-theme-primary), .x)`; ❌ hex cứng `#7367F0`/`#e8e5ff`.
+- Spacing: dùng logical `me-*`/`ms-*`/`pe-*`/`ps-*`; ❌ physical `mr-*`/`ml-*`/`pr-*`/`pl-*` (ESLint `vue/no-restricted-class`).
+- Nút: `variant="flat"|"tonal"|"outlined"` + `color="primary"|"secondary"`; ❌ `class="text-none rounded-lg px-4 bg-white"` + màu hex.
+
+#### e) Typography
+- Page header: `text-h4 font-weight-medium`; subtitle: `text-body-1`.
+- Card/section title: `text-subtitle-1 font-weight-medium` hoặc prop `title`.
+- Label/field: `text-body-2`; meta/helper: `text-caption`.
+- ❌ `style="font-size: Xpx !important"` và `font-weight-bold` trên label/title.
+
+> ✅ **Kiểm nhanh trước khi commit:** `eslint` sạch (0 lỗi) + `npm run build` xanh + không còn `mdi-`, `font-size:`, `elevation="0"`, `density="compact"`, `mr-`/`pr-`, hex `#7367F0`/`#f4f2fe`.
+
 ---
 
 ## 4. Chuẩn Kiến trúc Dialog 3 Vùng (`AppDialogLayout`)

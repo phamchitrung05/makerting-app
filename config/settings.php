@@ -7,7 +7,9 @@ return [
      * put them (manually) here.
      */
     'settings' => [
-
+        Modules\Settings\Settings\GeneralSettings::class,
+        Modules\Settings\Settings\SecuritySettings::class,
+        Modules\Settings\Settings\MailSettings::class,
     ],
 
     /*
@@ -22,6 +24,8 @@ return [
      */
     'migrations_paths' => [
         database_path('settings'),
+        // Settings migration của từng module (Modules/*/database/settings).
+        ...glob(base_path('Modules/*/database/settings'), GLOB_ONLYDIR) ?: [],
     ],
 
     /*

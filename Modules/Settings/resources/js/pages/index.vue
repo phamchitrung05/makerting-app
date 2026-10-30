@@ -1,19 +1,25 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Trang cài đặt tổng quan (placeholder, kiểm chứng routing module).
+  CHỨC NĂNG FILE: Trang trung tâm Cài đặt — tự động chuyển hướng sang tab
+  cài đặt đầu tiên (Chung).
   =====================================================================
-  CÁC HÀM/METHOD TRONG FILE: không.
-  INPUT/OUTPUT CỦA CLASS (tổng thể): route /admin/settings -> render khối tiêu đề.
-  SIDE EFFECT: không.
+  CÁC HÀM/METHOD TRONG FILE: không (chỉ redirect).
+  INPUT/OUTPUT: route /admin/settings -> redirect /admin/settings/general.
+  SIDE EFFECT: router.replace.
   =====================================================================
 -->
 <script setup>
+import { onMounted } from 'vue'
+
 definePage({ meta: { layout: 'default' } })
+
+const router = useRouter()
+
+onMounted(() => {
+  router.replace({ name: 'admin-settings-general' })
+})
 </script>
 
 <template>
-  <VCard>
-    <VCardItem title="Cài đặt hệ thống" />
-    <VCardText>Trang Settings module — route /admin/settings đã được gom tự động.</VCardText>
-  </VCard>
+  <div />
 </template>

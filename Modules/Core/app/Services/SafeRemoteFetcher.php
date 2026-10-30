@@ -49,6 +49,8 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         $maxBytes = (int) ($options['maxBytes'] ?? config('core.remote_fetch.max_bytes', 5 * 1024 * 1024));
         $headers = $options['headers'] ?? [];
         $userAgent = $options['userAgent'] ?? config('core.remote_fetch.user_agent', 'MakertingApp-SafeFetcher/1.0');
+        $method = strtoupper((string) ($options['method'] ?? 'GET'));
+        $requestBody = $options['body'] ?? null;
 
         $parts = $this->assertUrlAllowed($url);
         // Host đã bóc [ ] từ assertUrlAllowed — dùng luôn, không đọc lại $parts.
@@ -103,6 +105,14 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         }
         if ($headerArr !== []) {
             curl_setopt($ch, CURLOPT_HTTPHEADER, $headerArr);
+        }
+
+        // Hỗ trợ POST/PUT/...: gắn method + body khi có.
+        if ($method !== 'GET') {
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+            if ($requestBody !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $requestBody);
+            }
         }
 
         curl_exec($ch);

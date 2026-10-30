@@ -364,6 +364,8 @@
     "fieldErrors": true,
     "firstErrorMessage": true,
     "isConflictError": true,
-    "isValidationError": true
+    "isValidationError": true,
+    "useSettingsGroup": true,
+    "useTaskCenterStore": true
   }
 }
