@@ -9,7 +9,7 @@ use Modules\Seo\Http\Controllers\SeoController;
  * (RouteServiceProvider gắn middleware 'api' + prefix 'api' + name 'api.').
  * =====================================================================
  * - GET /meta          : đọc bản ghi seo_metadata + meta đã fallback (preview).
- * - PUT /meta          : upsert ghi đè các trường seo_*/og_* của model.
+ * - PUT /meta          : upsert ghi đè các trường seo_* và og_* của model.
  *
  * 'seo.view' cho đọc, 'seo.manage' cho ghi — siêu admin qua Gate::before.
  */
