@@ -51,13 +51,15 @@ const activeProviders = [
   { name: 'Replicate', active: false, statusText: 'Chưa cấu hình', modelCount: '1 mô hình', pricing: '-', icon: 'tabler-code', bg: '#f4f4f5', color: '#18181b' },
 ]
 
-const popularModels = [
-  { name: 'GPT-4o', provider: 'OpenAI', calls: 420, percent: 33.4, icon: 'tabler-sparkles', bg: '#27272a', color: 'white' },
-  { name: 'Claude 3.5 Sonnet', provider: 'Anthropic', calls: 318, percent: 25.3, shortText: 'A\\', bg: '#f3e5d8', color: '#18181b' },
-  { name: 'Gemini 1.5 Flash', provider: 'Google', calls: 215, percent: 17.1, icon: 'tabler-star-four-points', bg: '#eef2ff', color: '#4285F4' },
-  { name: 'DALL-E 3', provider: 'OpenAI', calls: 140, percent: 11.1, icon: 'tabler-photo', bg: '#18181b', color: 'white' },
-  { name: 'Stable Diffusion XL', provider: 'Stability AI', calls: 98, percent: 7.8, shortText: 'S', bg: '#f4f2fe', color: '#5b4ce0' },
-]
+// ---- Panel Kết nối nhà cung cấp (Test ping + Sync models, demo tĩnh) ----
+const providerConnections = ref([
+  { name: 'OpenAI', modelsCount: 3, latencyText: '—', statusText: 'Chưa kiểm tra', statusColor: 'secondary', pinging: false, syncing: false, icon: 'tabler-sparkles', bg: '#10a37f', color: 'white' },
+  { name: 'Anthropic (Claude)', modelsCount: 2, latencyText: '—', statusText: 'Chưa kiểm tra', statusColor: 'secondary', pinging: false, syncing: false, icon: 'tabler-brain', bg: '#f3e5d8', color: '#18181b' },
+  { name: 'Google AI (Gemini)', modelsCount: 4, latencyText: '—', statusText: 'Chưa kiểm tra', statusColor: 'secondary', pinging: false, syncing: false, icon: 'tabler-star-four-points', bg: '#eef2ff', color: '#4285F4' },
+  { name: 'RunwayML Video', modelsCount: 3, latencyText: '—', statusText: 'Chưa kiểm tra', statusColor: 'secondary', pinging: false, syncing: false, icon: 'tabler-video', bg: '#18181b', color: 'white' },
+])
+
+const syncingAll = ref(false)
 
 const quickTools = [
   { title: 'Kiểm tra kết nối API', desc: 'Kiểm tra trạng thái các nhà cung cấp', icon: 'tabler-plug-connected', color: 'success', targetTab: 'providers' },
@@ -127,8 +129,49 @@ const advancedAi = reactive({
   semanticCache: true,
 })
 
-const popularTimeframe = ref('7 ngày qua')
 const modelTypeFilter = ref('Tất cả loại')
+
+// ---- Hành động Test ping / Sync models (demo tĩnh, chưa nối backend) ----
+function testPing(p) {
+  p.pinging = true
+  p.statusText = 'Đang ping...'
+  p.statusColor = 'info'
+
+  // Giả lập độ trễ mạng 0.8–1.6s rồi trả kết quả ngẫu nhiên.
+  setTimeout(() => {
+    p.pinging = false
+    const ok = Math.random() > 0.2
+    if (ok) {
+      p.latencyText = `${120 + Math.floor(Math.random() * 500)}ms`
+      p.statusText = 'Kết nối tốt'
+      p.statusColor = 'success'
+    } else {
+      p.latencyText = 'timeout'
+      p.statusText = 'Mất kết nối'
+      p.statusColor = 'error'
+    }
+  }, 800 + Math.random() * 800)
+}
+
+function syncProviderModels(p) {
+  p.syncing = true
+  setTimeout(() => {
+    p.syncing = false
+    p.modelsCount = Math.max(1, p.modelsCount + Math.floor(Math.random() * 3))
+    p.statusText = `Đã đồng bộ ${p.modelsCount} mô hình`
+    p.statusColor = 'success'
+  }, 1000 + Math.random() * 800)
+}
+
+function syncAllProviders() {
+  syncingAll.value = true
+  providerConnections.value.forEach((p, i) => {
+    setTimeout(() => syncProviderModels(p), i * 200)
+  })
+  setTimeout(() => {
+    syncingAll.value = false
+  }, 1000 + providerConnections.value.length * 200)
+}
 
 // ---- Dialog Thêm nhà cung cấp (chuẩn 3 vùng AppDialogLayout, §4 docs) ----
 const providerDialog = ref(false)
@@ -408,81 +451,99 @@ function goToTab(tab) {
               lg="5"
             >
               <VCard
-                title="Mô hình AI phổ biến"
-                subtitle="Các mô hình được sử dụng nhiều nhất trong hệ thống."
+                title="Kết nối nhà cung cấp"
+                subtitle="Test ping và đồng bộ danh sách mô hình của từng nhà cung cấp."
                 border
               >
                 <template #append>
-                  <AppSelect
-                    v-model="popularTimeframe"
-                    :items="['7 ngày qua', '30 ngày qua', 'Tháng này']"
-                    hide-details
-                    style="min-width: 110px;"
-                  />
+                  <VBtn
+                    size="small"
+                    variant="tonal"
+                    prepend-icon="tabler-refresh"
+                    :loading="syncingAll"
+                    @click="syncAllProviders"
+                  >
+                    Đồng bộ tất cả
+                  </VBtn>
                 </template>
                 <VCardText class="pa-0">
                   <div class="d-flex flex-column">
                     <div
-                      v-for="(m, idx) in popularModels"
-                      :key="m.name"
-                      class="d-flex align-center justify-space-between pa-4"
-                      :class="{ 'border-b': idx < popularModels.length - 1 }"
+                      v-for="(p, idx) in providerConnections"
+                      :key="p.name"
+                      class="pa-4"
+                      :class="{ 'border-b': idx < providerConnections.length - 1 }"
                     >
-                      <div class="d-flex align-center flex-grow-1 me-3">
-                        <span
-                          class="text-caption font-weight-medium text-disabled me-3"
-                          style="width: 12px;"
-                        >
-                          {{ idx + 1 }}
-                        </span>
-                        <VAvatar
-                          :color="m.bg"
-                          size="34"
-                          rounded="lg"
-                          class="me-3 flex-shrink-0 font-weight-bold"
-                        >
-                          <VIcon
-                            v-if="m.icon"
-                            :color="m.color"
-                            size="18"
-                            :icon="m.icon"
-                          />
-                          <span
-                            v-else
-                            :style="{ color: m.color, fontSize: '13px' }"
-                          >{{ m.shortText }}</span>
-                        </VAvatar>
-                        <div class="flex-grow-1 me-3">
-                          <div class="text-body-1 font-weight-medium">
-                            {{ m.name }}
-                          </div>
-                          <div class="text-caption text-disabled">
-                            {{ m.provider }}
+                      <div class="d-flex align-center justify-space-between">
+                        <div class="d-flex align-center">
+                          <VAvatar
+                            :color="p.bg"
+                            size="36"
+                            rounded="lg"
+                            class="me-3 font-weight-bold"
+                          >
+                            <VIcon
+                              v-if="p.icon"
+                              :color="p.color"
+                              size="20"
+                              :icon="p.icon"
+                            />
+                            <span
+                              v-else
+                              :style="{ color: p.color, fontSize: '13px' }"
+                            >{{ p.shortText }}</span>
+                          </VAvatar>
+                          <div>
+                            <div class="text-body-1 font-weight-medium">
+                              {{ p.name }}
+                            </div>
+                            <div class="d-flex align-center gap-1">
+                              <span
+                                class="status-dot"
+                                :style="{ backgroundColor: `rgb(var(--v-theme-${p.statusColor}))` }"
+                              />
+                              <span
+                                class="text-caption"
+                                :class="`text-${p.statusColor}`"
+                              >
+                                {{ p.statusText }}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        <div
-                          class="flex-grow-1 d-none d-sm-block"
-                          style="max-width: 110px;"
-                        >
-                          <VProgressLinear
-                            :model-value="m.percent * 2.2"
-                            color="primary"
-                            bg-color="grey-lighten-3"
-                            height="5"
-                            rounded
-                          />
+                        <div class="text-end">
+                          <div class="text-caption text-disabled">
+                            {{ p.modelsCount }} mô hình
+                          </div>
+                          <div class="text-caption text-disabled font-mono">
+                            {{ p.latencyText }}
+                          </div>
                         </div>
                       </div>
-                      <div
-                        class="text-end flex-shrink-0"
-                        style="min-width: 42px;"
-                      >
-                        <div class="text-body-1 font-weight-medium">
-                          {{ m.calls }}
-                        </div>
-                        <div class="text-caption text-disabled">
-                          {{ m.percent }}%
-                        </div>
+
+                      <div class="d-flex gap-2 mt-3">
+                        <VBtn
+                          size="small"
+                          variant="tonal"
+                          color="primary"
+                          prepend-icon="tabler-plug-connected"
+                          :loading="p.pinging"
+                          class="flex-grow-1"
+                          @click="testPing(p)"
+                        >
+                          Test ping
+                        </VBtn>
+                        <VBtn
+                          size="small"
+                          variant="tonal"
+                          color="info"
+                          prepend-icon="tabler-refresh"
+                          :loading="p.syncing"
+                          class="flex-grow-1"
+                          @click="syncProviderModels(p)"
+                        >
+                          Sync models
+                        </VBtn>
                       </div>
                     </div>
                   </div>
