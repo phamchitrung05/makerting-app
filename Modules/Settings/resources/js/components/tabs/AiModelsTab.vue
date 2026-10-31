@@ -42,13 +42,16 @@ const overviewKpis = [
   { title: 'Chi phí ước tính', value: '$12.34', trend: '+8.2%', trendColor: 'text-error', subtext: 'Tháng này', icon: 'tabler-credit-card', color: 'error' },
 ]
 
+// Mỗi model là object { name, type, pinging, latencyText, ok } để có nút Test Ping riêng.
+const M = (name, type) => ({ name, type, pinging: false, latencyText: '—', ok: null })
+
 const activeProviders = ref([
-  { name: 'OpenAI', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$2.45 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: ['GPT-4o', 'GPT-4o Mini', 'DALL-E 3 HD'], icon: 'tabler-sparkles', bg: '#10a37f', color: 'white' },
-  { name: 'Anthropic', active: true, statusText: 'Đang hoạt động', modelCount: '2 mô hình', pricing: '$2.90 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: ['Claude 3.5 Sonnet', 'Claude 3 Opus'], shortText: 'A\\', bg: '#f3e5d8', color: '#1f1f1f' },
-  { name: 'Google AI (Gemini)', active: true, statusText: 'Đang hoạt động', modelCount: '4 mô hình', pricing: '$0.70 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro', 'Gemini Flash Image', 'Imagen 3'], icon: 'tabler-star-four-points', bg: '#eef2ff', color: '#4285F4' },
-  { name: 'Stability AI', active: false, statusText: 'Chưa cấu hình', modelCount: '2 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: ['Stable Diffusion XL', 'Stable Video'], icon: 'tabler-photo', bg: '#5b4ce0', color: 'white' },
-  { name: 'Runway', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$0.50 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: ['Runway Gen-3 Alpha', 'Runway Gen-2', 'Act-One'], shortText: 'R', bg: '#18181b', color: 'white' },
-  { name: 'Replicate', active: false, statusText: 'Chưa cấu hình', modelCount: '1 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: ['Llama 3.1 (hosted)'], icon: 'tabler-code', bg: '#f4f4f5', color: '#18181b' },
+  { name: 'OpenAI', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$2.45 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('GPT-4o', 'Văn bản'), M('GPT-4o Mini', 'Văn bản'), M('DALL-E 3 HD', 'Hình ảnh')], icon: 'tabler-sparkles', bg: '#10a37f', color: 'white' },
+  { name: 'Anthropic', active: true, statusText: 'Đang hoạt động', modelCount: '2 mô hình', pricing: '$2.90 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Claude 3.5 Sonnet', 'Văn bản'), M('Claude 3 Opus', 'Văn bản')], shortText: 'A\\', bg: '#f3e5d8', color: '#1f1f1f' },
+  { name: 'Google AI (Gemini)', active: true, statusText: 'Đang hoạt động', modelCount: '4 mô hình', pricing: '$0.70 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Gemini 1.5 Flash', 'Văn bản'), M('Gemini 1.5 Pro', 'Văn bản'), M('Gemini Flash Image', 'Hình ảnh'), M('Imagen 3', 'Hình ảnh')], icon: 'tabler-star-four-points', bg: '#eef2ff', color: '#4285F4' },
+  { name: 'Stability AI', active: false, statusText: 'Chưa cấu hình', modelCount: '2 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: [M('Stable Diffusion XL', 'Hình ảnh'), M('Stable Video', 'Video')], icon: 'tabler-photo', bg: '#5b4ce0', color: 'white' },
+  { name: 'Runway', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$0.50 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Runway Gen-3 Alpha', 'Video'), M('Runway Gen-2', 'Video'), M('Act-One', 'Video')], shortText: 'R', bg: '#18181b', color: 'white' },
+  { name: 'Replicate', active: false, statusText: 'Chưa cấu hình', modelCount: '1 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: [M('Llama 3.1 (hosted)', 'Văn bản')], icon: 'tabler-code', bg: '#f4f4f5', color: '#18181b' },
 ])
 
 // ---- Provider đang chọn ở panel trái -> panel phải hiển thị model của nó ----
@@ -162,10 +165,22 @@ function syncProviderModels(prov) {
 
     // Demo: đôi khi "tìm thấy" thêm 1 model mới.
     if (Math.random() > 0.5)
-      prov.models = [...prov.models, `${prov.name.split(' ')[0]} Model ${prov.models.length + 1}`]
+      prov.models = [...prov.models, M(`${prov.name.split(' ')[0]} Model ${prov.models.length + 1}`, 'Văn bản')]
     prov.modelCount = `${prov.models.length} mô hình`
     prov.statusText = `Đã đồng bộ ${prov.models.length} mô hình`
   }, 1000 + Math.random() * 800)
+}
+
+// Test ping riêng cho một model (demo tĩnh).
+function testModelPing(model) {
+  model.pinging = true
+  model.ok = null
+  setTimeout(() => {
+    model.pinging = false
+    const ok = Math.random() > 0.2
+    model.ok = ok
+    model.latencyText = ok ? `${80 + Math.floor(Math.random() * 600)}ms` : 'timeout'
+  }, 600 + Math.random() * 700)
 }
 
 function syncAllProviders() {
@@ -575,16 +590,54 @@ function goToTab(tab) {
                     <div class="text-caption text-disabled mb-2">
                       {{ selectedProvider.models.length }} mô hình của {{ selectedProvider.name }}
                     </div>
-                    <div class="d-flex flex-wrap gap-1">
-                      <VChip
-                        v-for="m in selectedProvider.models"
-                        :key="m"
-                        size="small"
-                        variant="tonal"
-                        color="primary"
+                    <div class="d-flex flex-column">
+                      <div
+                        v-for="(m, i) in selectedProvider.models"
+                        :key="m.name"
+                        class="d-flex align-center justify-space-between py-2"
+                        :class="{ 'border-b': i < selectedProvider.models.length - 1 }"
                       >
-                        {{ m }}
-                      </VChip>
+                        <div class="d-flex align-center">
+                          <VAvatar
+                            size="28"
+                            rounded="lg"
+                            color="primary"
+                            variant="tonal"
+                            class="me-3"
+                          >
+                            <VIcon
+                              size="15"
+                              color="primary"
+                              icon="tabler-cpu"
+                            />
+                          </VAvatar>
+                          <div>
+                            <div class="text-body-2 font-weight-medium">
+                              {{ m.name }}
+                            </div>
+                            <div class="d-flex align-center gap-2">
+                              <span class="text-caption text-disabled">{{ m.type }}</span>
+                              <span
+                                v-if="m.latencyText !== '—'"
+                                class="text-caption font-mono"
+                                :class="m.ok === false ? 'text-error' : 'text-success'"
+                              >
+                                {{ m.latencyText }}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <VBtn
+                          size="x-small"
+                          variant="tonal"
+                          color="primary"
+                          prepend-icon="tabler-plug-connected"
+                          :loading="m.pinging"
+                          @click="testModelPing(m)"
+                        >
+                          Test ping
+                        </VBtn>
+                      </div>
                     </div>
                   </div>
                 </VCardText>
