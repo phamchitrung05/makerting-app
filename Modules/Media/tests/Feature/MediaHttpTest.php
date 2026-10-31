@@ -75,8 +75,7 @@ class MediaHttpTest extends TestCase
         return new UploadedFile($tmp, 'test.png', 'image/png', null, true);
     }
 
-    /** @test GET /assets -> dataTable */
-    public function index_returns_datatable(): void
+    public function test_index_returns_datatable(): void
     {
         MediaAsset::create(['kind'=>'image','title'=>'A','visibility'=>'public','folder'=>'x','checksum_sha256'=>str_repeat('a',64)]);
 
@@ -128,8 +127,7 @@ class MediaHttpTest extends TestCase
         $this->assertEquals(1, MediaAsset::count());
     }
 
-    /** @test POST /usages attach + GET /usages + DELETE /usages */
-    public function usages_attach_list_detach(): void
+    public function test_usages_attach_list_detach(): void
     {
         $asset = MediaAsset::create(['kind'=>'image','title'=>'A','visibility'=>'public','folder'=>'x','checksum_sha256'=>str_repeat('a',64)]);
         TestPostModel::create(['title' => 'P']);
