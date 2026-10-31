@@ -5,6 +5,7 @@ namespace Modules\Seo\Providers;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
 use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Seo\Services\SeoMetadataService;
 use Modules\Seo\Settings\SeoSettings;
 use Modules\Settings\Registries\SettingsRegistry;
 
@@ -54,6 +55,23 @@ class SeoServiceProvider extends ModuleServiceProvider
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Bind SeoMetadataService với cấu hình nhóm 'seo'.
+     * =====================================================================
+     * Service nhận mảng config (không phụ thuộc SeoSettings trực tiếp) nên
+     * inject SeoSettings::toArray() tại đây — đọc DB settings một lần khi
+     * resolve, tránh vòng phụ thuộc và cho phép test truyền array thường.
+     */
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->bind(SeoMetadataService::class, function ($app) {
+            return new SeoMetadataService($app->make(SeoSettings::class)->toArray());
+        });
+    }
 
     /**
      * =====================================================================

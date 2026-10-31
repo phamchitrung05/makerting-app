@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Schema;
 use Modules\Seo\Actions\SyncSeoMetadataAction;
 use Modules\Seo\Models\SeoMetadata;
 use Modules\Seo\Services\SeoMetadataService;
-use Modules\Seo\Settings\SeoSettings;
 use Modules\Seo\Traits\HasSeoMeta;
 use Tests\TestCase;
 
@@ -33,26 +32,14 @@ class SeoTest extends TestCase
             $t->timestamps();
         });
 
-        // SeoSettings in-memory (không cần bảng settings).
-        $this->service = new SeoMetadataService($this->fakeSettings());
+        // SeoMetadataService nhận mảng cấu hình 'seo' (không cần bảng settings).
+        $this->service = new SeoMetadataService([]);
     }
 
-    /** SeoSettings giả — ghi đè giá trị property, không đụng DB. */
-    private function fakeSettings(array $over = []): SeoSettings
+    /** Mảng cấu hình 'seo' giả cho test. */
+    private function fakeSettings(array $over = []): array
     {
-        return new class($over) extends SeoSettings {
-            public function __construct(array $over)
-            {
-                $this->version = 1;
-                $this->title_template = $over['title_template'] ?? '%title% | %site_name%';
-                $this->default_description = $over['default_description'] ?? null;
-                $this->default_og_image_url = $over['default_og_image_url'] ?? null;
-                $this->twitter_site = $over['twitter_site'] ?? null;
-                $this->global_index = $over['global_index'] ?? true;
-                $this->global_follow = $over['global_follow'] ?? true;
-                $this->canonical_base_url = $over['canonical_base_url'] ?? null;
-            }
-        };
+        return $over;
     }
 
     public function test_has_seo_meta_morph_relation(): void

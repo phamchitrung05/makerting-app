@@ -4,7 +4,6 @@ namespace Modules\Seo\Services;
 
 use Illuminate\Database\Eloquent\Model;
 use Modules\Seo\Models\SeoMetadata;
-use Modules\Seo\Settings\SeoSettings;
 
 /**
  * =====================================================================
@@ -14,11 +13,17 @@ use Modules\Seo\Settings\SeoSettings;
  *
  * Nguyên tắc: bảng seo_metadata CHỈ lưu phần người dùng ghi đè. Khi render
  * thẻ meta / trả API, giá trị trống được bù từ:
- *   - title   : model->title + SeoSettings.title_template (%title%|%site_name%)
- *   - description: seo_description ?? model->excerpt/description ?? default_description
+ *   - title   : model->title + cấu hình title_template (%title%|%site_name%)
+ *   - description: seo_description ?? model->excerpt/description ?? default
  *   - canonical: canonical_url ?? canonical_base_url + '/' + slug (HasSlug)
  *   - og_*    : rơi về seo_title/description, og_image -> thumbnail (HasThumbnail)
- *   - robots  : robots_index/follow của model && global_index/follow của SeoSettings
+ *   - robots  : robots_index/follow của model && global_index/follow toàn cục
+ *
+ * Nhận mảng cấu hình 'seo' (không phụ thuộc SeoSettings trực tiếp) để dễ
+ * test + tránh vòng phụ thuộc container; SeoServiceProvider inject
+ * SeoSettings::toArray() khi bind. Khóa đọc qua cfg(): title_template,
+ * default_description, default_og_image_url, twitter_site, global_index,
+ * global_follow, canonical_base_url.
  *
  * CÁC HÀM/METHOD TRONG FILE:
  * - resolve()      : mảng meta đầy đủ đã fallback cho 1 model
@@ -26,13 +31,16 @@ use Modules\Seo\Settings\SeoSettings;
  * - canonicalFor() : canonical URL cuối
  * - robotsFor()    : 'index,follow'|...
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : Model có (tuỳ chọn) HasSeoMeta/HasSlug/HasThumbnail.
+ * - INPUT : Model có (tuỳ chọn) HasSeoMeta/HasSlug/HasThumbnail + cfg array.
  * - OUTPUT: array meta đã merge fallback, sẵn sàng render <head>.
  * =====================================================================
  */
 class SeoMetadataService
 {
-    public function __construct(private readonly SeoSettings $settings) {}
+    /**
+     * @param  array<string,mixed>  $config  Cấu hình nhóm 'seo' (SeoSettings::toArray()).
+     */
+    public function __construct(private readonly array $config = []) {}
 
     /**
      * =====================================================================
@@ -61,7 +69,7 @@ class SeoMetadataService
             'og_title' => $meta?->og_title ?: $title,
             'og_description' => $meta?->og_description ?: $description,
             'og_image' => $this->ogImageFor($model, $meta),
-            'twitter_site' => $this->settings->twitter_site,
+            'twitter_site' => $this->cfg('twitter_site'),
             'schema_org' => $meta?->schema_org_json,
         ];
     }
@@ -78,12 +86,11 @@ class SeoMetadataService
         }
 
         $base = (string) ($model->title ?? $model->name ?? '');
-        $site = config('app.name');
 
         return str_replace(
             ['%title%', '%site_name%'],
-            [$base, $site],
-            $this->settings->title_template,
+            [$base, (string) config('app.name')],
+            (string) $this->cfg('title_template', '%title% | %site_name%'),
         );
     }
 
@@ -98,20 +105,20 @@ class SeoMetadataService
             return $meta->canonical_url;
         }
 
-        $base = rtrim((string) ($this->settings->canonical_base_url ?? ''), '/');
+        $base = rtrim((string) ($this->cfg('canonical_base_url') ?? ''), '/');
         $slug = $this->modelSlug($model);
 
         return ($base !== '' && $slug !== null && $slug !== '') ? "{$base}/{$slug}" : null;
     }
 
     /**
-     * CHỨC NĂNG: Chuỗi robots — AND cờ model với cờ toàn cục của SeoSettings.
+     * CHỨC NĂNG: Chuỗi robots — AND cờ model với cờ toàn cục.
      * INPUT: ?SeoMetadata. OUTPUT: 'index,follow'|...
      */
     public function robotsFor(?SeoMetadata $meta): string
     {
-        $index = ($meta?->robots_index ?? true) && $this->settings->global_index;
-        $follow = ($meta?->robots_follow ?? true) && $this->settings->global_follow;
+        $index = ($meta?->robots_index ?? true) && (bool) $this->cfg('global_index', true);
+        $follow = ($meta?->robots_follow ?? true) && (bool) $this->cfg('global_follow', true);
 
         return ($index ? 'index' : 'noindex').','.($follow ? 'follow' : 'nofollow');
     }
@@ -123,7 +130,7 @@ class SeoMetadataService
     protected function descriptionFor(Model $model, ?SeoMetadata $meta): ?string
     {
         return $meta?->seo_description
-            ?: ($model->seo_excerpt ?? $model->excerpt ?? $model->description ?? $this->settings->default_description);
+            ?: ($model->seo_excerpt ?? $model->excerpt ?? $model->description ?? $this->cfg('default_description'));
     }
 
     /**
@@ -132,8 +139,7 @@ class SeoMetadataService
      */
     protected function ogImageFor(Model $model, ?SeoMetadata $meta): ?string
     {
-        // Ưu tiên ảnh OG riêng nếu model cung cấp accessor og_image_url
-        // (HasSeoMeta::resolveOgImage() đọc MediaAsset khi có og_image_id).
+        // Ưu tiên ảnh OG riêng: HasSeoMeta::resolveOgImageUrl() đọc MediaAsset.
         if (method_exists($model, 'resolveOgImageUrl') && ($url = $model->resolveOgImageUrl($meta))) {
             return $url;
         }
@@ -142,7 +148,7 @@ class SeoMetadataService
             return $url;
         }
 
-        return $this->settings->default_og_image_url;
+        return $this->cfg('default_og_image_url');
     }
 
     /**
@@ -167,5 +173,14 @@ class SeoMetadataService
         return method_exists($model, 'seoMetadata')
             ? $model->seoMetadata()->first()
             : null;
+    }
+
+    /**
+     * CHỨC NĂNG: Đọc khóa cấu hình 'seo' kèm mặc định.
+     * INPUT: key + fallback. OUTPUT: mixed.
+     */
+    private function cfg(string $key, mixed $default = null): mixed
+    {
+        return $this->config[$key] ?? $default;
     }
 }
