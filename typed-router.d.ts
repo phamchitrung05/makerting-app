@@ -24,6 +24,7 @@ declare module 'vue-router/auto-routes' {
     'admin-blog-posts': RouteRecordInfo<'admin-blog-posts', '/admin/blog/posts', Record<never, never>, Record<never, never>>,
     'admin-identity-channel-groups': RouteRecordInfo<'admin-identity-channel-groups', '/admin/identity/channel-groups', Record<never, never>, Record<never, never>>,
     'admin-identity-roles': RouteRecordInfo<'admin-identity-roles', '/admin/identity/roles', Record<never, never>, Record<never, never>>,
+    'admin-media-media': RouteRecordInfo<'admin-media-media', '/admin/media/media', Record<never, never>, Record<never, never>>,
     'admin-settings': RouteRecordInfo<'admin-settings', '/admin/settings', Record<never, never>, Record<never, never>>,
     'admin-settings-ai-providers': RouteRecordInfo<'admin-settings-ai-providers', '/admin/settings/ai-providers', Record<never, never>, Record<never, never>>,
     'admin-settings-general': RouteRecordInfo<'admin-settings-general', '/admin/settings/general', Record<never, never>, Record<never, never>>,

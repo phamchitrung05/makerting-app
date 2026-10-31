@@ -7,6 +7,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AddAiModelDialog: typeof import('./Modules/Settings/resources/js/components/dialogs/AddAiModelDialog.vue')['default']
     AddAuthenticatorAppDialog: typeof import('./resources/js/components/dialogs/AddAuthenticatorAppDialog.vue')['default']
     AddEditAddressDialog: typeof import('./resources/js/components/dialogs/AddEditAddressDialog.vue')['default']
     AddEditPermissionDialog: typeof import('./resources/js/components/dialogs/AddEditPermissionDialog.vue')['default']
@@ -377,6 +378,10 @@ declare module 'vue' {
     ErrorHeader: typeof import('./resources/js/components/ErrorHeader.vue')['default']
     GeneralTab: typeof import('./Modules/Settings/resources/js/components/tabs/GeneralTab.vue')['default']
     I18n: typeof import('./resources/js/@core/components/I18n.vue')['default']
+    MediaGalleryField: typeof import('./Modules/Media/resources/js/components/MediaGalleryField.vue')['default']
+    MediaPickerDialog: typeof import('./Modules/Media/resources/js/components/MediaPickerDialog.vue')['default']
+    MediaSlotField: typeof import('./Modules/Media/resources/js/components/MediaSlotField.vue')['default']
+    MediaUploadZone: typeof import('./Modules/Media/resources/js/components/MediaUploadZone.vue')['default']
     MoreBtn: typeof import('./resources/js/@core/components/MoreBtn.vue')['default']
     Notifications: typeof import('./resources/js/@core/components/Notifications.vue')['default']
     OtherTab: typeof import('./Modules/Settings/resources/js/components/tabs/OtherTab.vue')['default']
@@ -388,6 +393,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     ScrollToTop: typeof import('./resources/js/@core/components/ScrollToTop.vue')['default']
     SecurityTab: typeof import('./Modules/Settings/resources/js/components/tabs/SecurityTab.vue')['default']
+    SeoMetaCard: typeof import('./Modules/Seo/resources/js/components/SeoMetaCard.vue')['default']
     SettingsShell: typeof import('./Modules/Settings/resources/js/components/SettingsShell.vue')['default']
     ShareProjectDialog: typeof import('./resources/js/components/dialogs/ShareProjectDialog.vue')['default']
     Shortcuts: typeof import('./resources/js/@core/components/Shortcuts.vue')['default']

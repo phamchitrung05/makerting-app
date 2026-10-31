@@ -366,6 +366,7 @@
     "isConflictError": true,
     "isValidationError": true,
     "useSettingsGroup": true,
-    "useTaskCenterStore": true
+    "useTaskCenterStore": true,
+    "useMediaAssetStore": true
   }
 }

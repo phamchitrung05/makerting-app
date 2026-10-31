@@ -3,8 +3,10 @@
 namespace Modules\Media\Providers;
 
 use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Media\Contracts\MediaUsageServiceContract;
 use Modules\Media\Models\MediaAsset;
 use Modules\Media\Registries\MediaSlotRegistry;
+use Modules\Media\Services\MediaUsageService;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
 /**
@@ -58,6 +60,11 @@ class MediaServiceProvider extends ModuleServiceProvider
         parent::register();
 
         $this->app->singleton(MediaSlotRegistry::class, fn () => new MediaSlotRegistry());
+
+        $this->app->singleton(
+            MediaUsageServiceContract::class,
+            fn ($app) => new MediaUsageService($app->make(MediaSlotRegistry::class)),
+        );
     }
 
     /**
