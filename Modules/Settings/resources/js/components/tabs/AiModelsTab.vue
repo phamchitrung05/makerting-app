@@ -9,13 +9,16 @@
   backend (ai_providers/ai_models/CoreAi triển khai ở P2-01). Chuẩn Vuexy:
   tabler-* icons + Vuetify components + typography/mật độ/rounded mặc định.
 
-  CÁC HÀM/METHOD TRONG FILE: không — chỉ data + template.
+  CÁC HÀM/METHOD TRONG FILE: openProviderDialog/saveProvider (dialog Thêm
+  nhà cung cấp inline), openModelDialog/addModel (dialog Thêm mô hình tách
+  riêng tại ../dialogs/AddAiModelDialog.vue), goToTab (chuyển tab nội bộ).
   INPUT/OUTPUT CỦA CLASS (tổng thể): không — render UI tĩnh.
   SIDE EFFECT: không.
   =====================================================================
 -->
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, useId } from 'vue'
+import AddAiModelDialog from '../dialogs/AddAiModelDialog.vue'
 
 // ---- Tab ngang bên trong phần AI & Mô hình (không phải route) ----
 const activeTab = ref('overview')
@@ -127,6 +130,102 @@ const advancedAi = reactive({
 const popularTimeframe = ref('7 ngày qua')
 const modelTypeFilter = ref('Tất cả loại')
 
+// ---- Dialog Thêm nhà cung cấp (chuẩn 3 vùng AppDialogLayout, §4 docs) ----
+const providerDialog = ref(false)
+const providerSaving = ref(false)
+const providerFormId = useId()
+
+const blankProvider = () => ({
+  name: 'OpenAI',
+  customName: '',
+  apiKey: '',
+  endpoint: '',
+  monthlyCap: '50',
+  enabled: true,
+})
+
+const providerForm = ref(blankProvider())
+
+const providerTypeOptions = [
+  'OpenAI',
+  'Anthropic (Claude)',
+  'Google AI (Gemini)',
+  'Stability AI',
+  'Runway',
+  'Replicate',
+  'Tùy chỉnh (Custom)',
+]
+
+const providerEndpointHints = {
+  'OpenAI': 'https://api.openai.com/v1',
+  'Anthropic (Claude)': 'https://api.anthropic.com/v1',
+  'Google AI (Gemini)': 'https://generativelanguage.googleapis.com',
+  'Stability AI': 'https://api.stability.ai/v1',
+  'Runway': 'https://api.runwayml.com/v1',
+  'Replicate': 'https://api.replicate.com/v1',
+}
+
+function openProviderDialog() {
+  providerDialog.value = true
+}
+
+function closeProviderDialog() {
+  if (!providerSaving.value) providerDialog.value = false
+}
+
+// Reset form chỉ sau khi animation đóng hoàn tất (tránh giật trống) — chuẩn §4.2.
+function resetProviderAfterLeave() {
+  if (providerDialog.value) return
+  providerForm.value = blankProvider()
+}
+
+function onProviderTypeChange(name) {
+  if (providerEndpointHints[name])
+    providerForm.value.endpoint = providerEndpointHints[name]
+}
+
+// Demo tĩnh: push vào danh sách cục bộ. Khi nối backend (P2-01) chuyển sang gọi API async.
+function saveProvider() {
+  providerSaving.value = true
+
+  const isCustom = providerForm.value.name === 'Tùy chỉnh (Custom)'
+  const displayName = isCustom && providerForm.value.customName
+    ? providerForm.value.customName
+    : providerForm.value.name
+
+  providerDetails.value.push({
+    name: displayName,
+    latency: '-',
+    modelsCount: 0,
+    enabled: providerForm.value.enabled,
+    apiKey: providerForm.value.apiKey,
+    endpoint: providerForm.value.endpoint,
+    monthlyCap: providerForm.value.monthlyCap,
+    showKey: false,
+    icon: 'tabler-server',
+    bg: '#eef2ff',
+    color: '#4285F4',
+  })
+
+  providerSaving.value = false
+  providerDialog.value = false
+}
+
+// ---- Dialog Thêm mô hình AI (component riêng trong components/dialogs/) ----
+const modelDialog = ref(false)
+
+function openModelDialog() {
+  modelDialog.value = true
+}
+
+// Nhận payload từ AddAiModelDialog -> push vào danh sách cục bộ (demo tĩnh).
+function addModel(payload) {
+  aiModelCatalog.value.push({
+    id: Math.max(0, ...aiModelCatalog.value.map(m => m.id)) + 1,
+    ...payload,
+  })
+}
+
 function goToTab(tab) {
   if (tab) { activeTab.value = tab }
 }
@@ -226,7 +325,7 @@ function goToTab(tab) {
                   <VBtn
                     size="small"
                     prepend-icon="tabler-plus"
-                    @click="goToTab('providers')"
+                    @click="openProviderDialog"
                   >
                     Thêm nhà cung cấp
                   </VBtn>
@@ -620,12 +719,21 @@ function goToTab(tab) {
           border
         >
           <template #append>
-            <VBtn
-              prepend-icon="tabler-plug-connected"
-              size="small"
-            >
-              Kiểm tra tất cả kết nối
-            </VBtn>
+            <div class="d-flex align-center gap-2">
+              <VBtn
+                prepend-icon="tabler-plug-connected"
+                size="small"
+              >
+                Kiểm tra tất cả kết nối
+              </VBtn>
+              <VBtn
+                prepend-icon="tabler-plus"
+                size="small"
+                @click="openProviderDialog"
+              >
+                Thêm nhà cung cấp
+              </VBtn>
+            </div>
           </template>
           <VCardText>
             <VRow>
@@ -748,6 +856,7 @@ function goToTab(tab) {
               <VBtn
                 prepend-icon="tabler-plus"
                 size="small"
+                @click="openModelDialog"
               >
                 Thêm Model
               </VBtn>
@@ -1199,6 +1308,118 @@ function goToTab(tab) {
         </VCard>
       </VWindowItem>
     </VWindow>
+
+    <!-- Dialog Thêm nhà cung cấp (chuẩn 3 vùng, §4 docs) -->
+    <VDialog
+      v-model="providerDialog"
+      max-width="620"
+      scrollable
+      :persistent="providerSaving"
+      @after-leave="resetProviderAfterLeave"
+    >
+      <AppDialogLayout
+        title="Thêm nhà cung cấp AI"
+        subtitle="Kết nối nhà cung cấp mới bằng API key và endpoint."
+        :close-disabled="providerSaving"
+        @close="closeProviderDialog"
+      >
+        <VCardText>
+          <VForm
+            :id="providerFormId"
+            @submit.prevent="saveProvider"
+          >
+            <VRow>
+              <VCol cols="12">
+                <AppSelect
+                  v-model="providerForm.name"
+                  :items="providerTypeOptions"
+                  label="Nhà cung cấp"
+                  placeholder="Chọn nhà cung cấp"
+                  prepend-inner-icon="tabler-server"
+                  @update:model-value="onProviderTypeChange"
+                />
+              </VCol>
+              <VCol
+                v-if="providerForm.name === 'Tùy chỉnh (Custom)'"
+                cols="12"
+              >
+                <AppTextField
+                  v-model="providerForm.customName"
+                  label="Tên hiển thị"
+                  placeholder="VD: Azure OpenAI, Ollama Local..."
+                  prepend-inner-icon="tabler-pencil"
+                />
+              </VCol>
+              <VCol cols="12">
+                <AppTextField
+                  v-model="providerForm.apiKey"
+                  label="API Secret Key"
+                  placeholder="sk-..."
+                  prepend-inner-icon="tabler-key"
+                />
+              </VCol>
+              <VCol
+                cols="12"
+                md="8"
+              >
+                <AppTextField
+                  v-model="providerForm.endpoint"
+                  label="Base URL / Endpoint"
+                  placeholder="https://api.example.com/v1"
+                  prepend-inner-icon="tabler-link"
+                />
+              </VCol>
+              <VCol
+                cols="12"
+                md="4"
+              >
+                <AppTextField
+                  v-model="providerForm.monthlyCap"
+                  label="Hạn mức tháng ($)"
+                  prefix="$"
+                />
+              </VCol>
+              <VCol cols="12">
+                <VSwitch
+                  v-model="providerForm.enabled"
+                  label="Kích hoạt ngay sau khi thêm"
+                  color="primary"
+                  hide-details
+                  inset
+                />
+              </VCol>
+            </VRow>
+          </VForm>
+        </VCardText>
+        <template #footer>
+          <VCardActions class="justify-end">
+            <VBtn
+              variant="tonal"
+              color="secondary"
+              :disabled="providerSaving"
+              @click="closeProviderDialog"
+            >
+              Hủy
+            </VBtn>
+            <VBtn
+              type="submit"
+              :form="providerFormId"
+              variant="flat"
+              color="primary"
+              :loading="providerSaving"
+            >
+              Thêm nhà cung cấp
+            </VBtn>
+          </VCardActions>
+        </template>
+      </AppDialogLayout>
+    </VDialog>
+
+    <!-- Dialog Thêm mô hình AI (component riêng) -->
+    <AddAiModelDialog
+      v-model="modelDialog"
+      @saved="addModel"
+    />
   </div>
 </template>
 
