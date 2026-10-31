@@ -4,6 +4,9 @@ namespace Modules\Seo\Providers;
 
 use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Seo\Settings\SeoSettings;
+use Modules\Settings\Registries\SettingsRegistry;
 
 /**
  * =====================================================================
@@ -51,6 +54,33 @@ class SeoServiceProvider extends ModuleServiceProvider
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký SeoSettings vào SettingsRegistry + nhóm quyền 'seo'.
+     * =====================================================================
+     * - SettingsRegistry nhận SeoSettings (group 'seo') để trang Settings
+     *   đọc/ghi qua ModularSettingsService.
+     * - PermissionRegistry thêm module 'seo' với quyền seo.view/seo.manage
+     *   để ma trận phân quyền hiển thị; siêu admin qua Gate::before.
+     * INPUT: không. OUTPUT: void. SIDE EFFECT: ghi vào 2 registry singleton.
+     */
+    public function boot(): void
+    {
+        /** @var SettingsRegistry $settings */
+        $settings = $this->app->make(SettingsRegistry::class);
+        $settings->register(SeoSettings::class);
+
+        /** @var PermissionRegistry $permissions */
+        $permissions = $this->app->make(PermissionRegistry::class);
+        $permissions->registerModule('seo', [
+            'label' => 'SEO & Meta',
+            'permissions' => [
+                'seo.view' => 'Xem siêu dữ liệu SEO',
+                'seo.manage' => 'Sửa siêu dữ liệu SEO',
+            ],
+        ]);
+    }
 
     /**
      * Define module schedules.

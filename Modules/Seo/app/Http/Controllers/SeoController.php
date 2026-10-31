@@ -3,72 +3,119 @@
 namespace Modules\Seo\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
+use Modules\Core\Http\Responses\BaseResponse;
+use Modules\Seo\Actions\SyncSeoMetadataAction;
+use Modules\Seo\Http\Resources\SeoMetadataResource;
+use Modules\Seo\Services\SeoMetadataService;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Controller điều phối HTTP của module Seo (khung ban đầu).
+ * CHỨC NĂNG FILE: Controller điều phối HTTP của module Seo.
  * =====================================================================
  *
- * Siêu dữ liệu SEO đa hình qua trait HasSeoMeta (title, description, OpenGraph, Canonical).
- *
- * Controller chỉ điều phối HTTP: Route → Middleware → FormRequest → Controller
- * → Action/Service → JsonResource/BaseResponse; không chứa business rule dài.
- * Các method resource là khung mặc định, sẽ thay bằng endpoint thực ở Phase sau.
+ * Endpoint phục vụ khối <SeoMetaCard /> khi lưu/đọc meta SEO của một
+ * Domain Model bất kỳ qua morph (seoable_type + seoable_id). Vì meta SEO
+ * là quan hệ 1-1, không cần CRUD nhiều bản ghi — chỉ GET (đọc/resolved) và
+ * PUT (upsert ghi đè). Controller chỉ điều phối HTTP -> Action/Service.
  *
  * CÁC HÀM/METHOD TRONG FILE:
- * - index/create/store/show/edit/update/destroy: khung resource mặc định
+ * - resolve()   : GET  — meta thô + meta đã fallback cho preview.
+ * - update()    : PUT  — ghi đè các trường seo_* / og_*.
+ * - findModel() : resolve model chủ từ seoable_type/seoable_id (morphMap).
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : Illuminate\Http\Request và route params
- * - OUTPUT: view/response placeholder (đổi sang BaseResponse)
+ * - INPUT : Request {seoable_type, seoable_id} + payload seo_*.
+ * - OUTPUT: BaseResponse::success (SeoMetadataResource + resolved meta).
  * =====================================================================
  */
 class SeoController extends Controller
 {
+    public function __construct(
+        private readonly SeoMetadataService $service,
+        private readonly SyncSeoMetadataAction $sync,
+    ) {}
+
     /**
-     * Display a listing of the resource.
+     * =====================================================================
+     * CHỨC NĂNG: GET meta SEO của model — gồm bản ghi thô + meta đã fallback.
+     * =====================================================================
+     * INPUT: Request query {seoable_type, seoable_id}.
+     * OUTPUT: BaseResponse::success { meta: ?SeoMetadataResource, resolved: array }.
+     * =====================================================================
      */
-    public function index()
+    public function resolve(Request $request)
     {
-        return view('seo::index');
+        $model = $this->findModel($request);
+        if (! $model) {
+            return BaseResponse::error('Không tìm thấy đối tượng cần lấy SEO.', 404);
+        }
+
+        return BaseResponse::success([
+            'meta' => $model->seo() ? new SeoMetadataResource($model->seo()) : null,
+            'resolved' => $this->service->resolve($model),
+        ]);
     }
 
     /**
-     * Show the form for creating a new resource.
+     * =====================================================================
+     * CHỨC NĂNG: PUT ghi đè meta SEO của model (upsert theo morph).
+     * =====================================================================
+     * INPUT: Request {seoable_type, seoable_id} + các trường seo_*/og_*.
+     * OUTPUT: BaseResponse::success SeoMetadataResource + resolved meta.
+     * =====================================================================
      */
-    public function create()
+    public function update(Request $request)
     {
-        return view('seo::create');
+        $model = $this->findModel($request);
+        if (! $model) {
+            return BaseResponse::error('Không tìm thấy đối tượng cần cập nhật SEO.', 404);
+        }
+
+        $payload = $request->validate([
+            'focus_keyword' => ['nullable', 'string', 'max:160'],
+            'seo_title' => ['nullable', 'string', 'max:255'],
+            'seo_description' => ['nullable', 'string', 'max:500'],
+            'canonical_url' => ['nullable', 'url', 'max:2048'],
+            'robots_index' => ['sometimes', 'boolean'],
+            'robots_follow' => ['sometimes', 'boolean'],
+            'og_title' => ['nullable', 'string', 'max:255'],
+            'og_description' => ['nullable', 'string', 'max:500'],
+            'og_image_id' => ['nullable', 'integer', 'exists:media_assets,id'],
+            'schema_org_json' => ['nullable', 'array'],
+        ]);
+
+        $meta = $this->sync->execute($model, $payload);
+
+        return BaseResponse::success([
+            'meta' => new SeoMetadataResource($meta),
+            'resolved' => $this->service->resolve($model->fresh()),
+        ], 'Đã lưu siêu dữ liệu SEO.');
     }
 
     /**
-     * Store a newly created resource in storage.
+     * =====================================================================
+     * CHỨC NĂNG: Resolve model chủ từ morph alias + id trong request.
+     * =====================================================================
+     * Dùng Relation::getMorphedModel() để map 'post' => Post::class (hỗ trợ
+     * morphMap của enforceMorphMap); fallback coi type là FQCN.
+     * INPUT: Request. OUTPUT: ?Model — null khi type/id không hợp lệ.
+     * =====================================================================
      */
-    public function store(Request $request) {}
-
-    /**
-     * Show the specified resource.
-     */
-    public function show($id)
+    protected function findModel(Request $request): ?Model
     {
-        return view('seo::show');
+        $type = (string) $request->input('seoable_type');
+        $id = (int) $request->input('seoable_id');
+        if ($type === '' || $id <= 0) {
+            return null;
+        }
+
+        $class = Relation::getMorphedModel($type) ?? $type;
+        if (! is_string($class) || ! class_exists($class) || ! is_subclass_of($class, Model::class)) {
+            return null;
+        }
+
+        return $class::find($id);
     }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit($id)
-    {
-        return view('seo::edit');
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, $id) {}
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy($id) {}
 }
