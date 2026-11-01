@@ -18,9 +18,8 @@
 <script setup>
 import { ref, useId } from 'vue'
 
-const isOpen = defineModel({ type: Boolean, default: false })
 const emit = defineEmits(['saved'])
-
+const isOpen = defineModel({ type: Boolean, default: false })
 const saving = ref(false)
 const formId = useId()
 

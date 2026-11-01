@@ -7,16 +7,16 @@
   - Nút "+" mở <MediaPickerDialog multiple> để thêm nhiều.
   - model-value = mảng media_asset_id đã sắp xếp (id[]).
   PROPS:
-    modelValue   : number[] media_asset_id đã chọn, theo thứ tự.
-    slot         : slot đích ('post.gallery'...).
-    label        : nhãn field.
-    allowedKinds : whitelist kind (lấy từ slot khi không truyền).
-    maxItems     : giới hạn số media (0 = không giới hạn; mặc định lấy slot).
-    channelGroupId: lọc theo nhóm kênh khi mở picker.
-    disabled     : khóa field.
+  modelValue   : number[] media_asset_id đã chọn, theo thứ tự.
+  slot         : slot đích ('post.gallery'...).
+  label        : nhãn field.
+  allowedKinds : whitelist kind (lấy từ slot khi không truyền).
+  maxItems     : giới hạn số media (0 = không giới hạn; mặc định lấy slot).
+  channelGroupId: lọc theo nhóm kênh khi mở picker.
+  disabled     : khóa field.
   EMITS:
-    update:modelValue(ids[]) — mảng id theo sort_order mới.
-    change(ids[])            — giống update (cho parent thuận tiện).
+  update:modelValue(ids[]) — mảng id theo sort_order mới.
+  change(ids[])            — giống update (cho parent thuận tiện).
   =====================================================================
 -->
 <script setup>
@@ -43,9 +43,11 @@ const dragIndex = ref(null)
 
 /* Slot metadata. */
 const slotInfo = computed(() => store.slotInfo(props.slot))
+
 const effectiveKinds = computed(() =>
   props.allowedKinds.length ? props.allowedKinds : (slotInfo.value?.allowedKinds || []),
 )
+
 const effectiveMax = computed(() =>
   props.maxItems !== null ? props.maxItems : (slotInfo.value?.maxItems ?? 0),
 )
@@ -53,6 +55,7 @@ const effectiveMax = computed(() =>
 /* Sync từ modelValue -> items (nạp asset info khi thiếu). */
 watch(() => props.modelValue, async ids => {
   const list = ids || []
+
   // Giữ thứ tự id; chỉ nạp asset mới khi chưa có trong items.
   const known = new Map(items.value.map(i => [i.id, i]))
   const out = []
@@ -97,6 +100,7 @@ function onDragOver(e) { e.preventDefault() }
 function onDrop(target) {
   if (dragIndex.value === null || dragIndex.value === target) { return }
   const moved = items.value.splice(dragIndex.value, 1)[0]
+
   items.value.splice(target, 0, moved)
   dragIndex.value = null
   emitAll()
@@ -104,6 +108,7 @@ function onDrop(target) {
 
 function emitAll() {
   const ids = items.value.map(i => i.id)
+
   emit('update:modelValue', ids)
   emit('change', ids)
 }
@@ -111,9 +116,15 @@ function emitAll() {
 
 <template>
   <div class="media-gallery-field">
-    <VLabel v-if="label" class="mb-2 text-body-2 font-weight-medium">
+    <VLabel
+      v-if="label"
+      class="mb-2 text-body-2 font-weight-medium"
+    >
       {{ label }}
-      <span v-if="effectiveMax > 0" class="text-caption text-medium-emphasis">
+      <span
+        v-if="effectiveMax > 0"
+        class="text-caption text-medium-emphasis"
+      >
         ({{ items.length }}/{{ effectiveMax }})
       </span>
     </VLabel>
@@ -135,7 +146,10 @@ function emitAll() {
             aspect-ratio="1"
             cover
           />
-          <div v-else class="media-gallery-field__icon">
+          <div
+            v-else
+            class="media-gallery-field__icon"
+          >
             <VIcon
               :icon="item.kind === 'video' ? 'tabler-video' : (item.kind === 'audio' ? 'tabler-music' : 'tabler-file')"
               size="24"
@@ -144,10 +158,18 @@ function emitAll() {
           </div>
 
           <div class="media-gallery-field__actions">
-            <VBtn icon="tabler-trash" size="x-small" variant="flat" color="error" @click.stop="removeAt(idx)" />
+            <VBtn
+              icon="tabler-trash"
+              size="x-small"
+              variant="flat"
+              color="error"
+              @click.stop="removeAt(idx)"
+            />
           </div>
         </div>
-        <div class="text-caption text-truncate pa-1 text-center">{{ item.title }}</div>
+        <div class="text-caption text-truncate pa-1 text-center">
+          {{ item.title }}
+        </div>
       </div>
 
       <button
@@ -156,19 +178,22 @@ function emitAll() {
         class="media-gallery-field__add rounded d-flex flex-column align-center justify-center"
         @click="openPicker"
       >
-        <VIcon icon="tabler-plus" size="28" />
+        <VIcon
+          icon="tabler-plus"
+          size="28"
+        />
         <span class="text-caption mt-1">Thêm media</span>
       </button>
     </div>
 
     <MediaPickerDialog
       ref="picker"
+      :slot-prop="slot"
       :model-value="modelValue"
-      :slot="slot"
       :allowed-kinds="effectiveKinds"
       :max-items="effectiveMax"
       :channel-group-id="channelGroupId"
-      :multiple="true"
+      multiple
       :title="`Chọn ${slotInfo?.label || 'media'}`"
       @select="onSelect"
     />

@@ -50,6 +50,9 @@ trait HasSeoMeta
      * =====================================================================
      * CHỨC NĂNG: URL ảnh OG — đọc MediaAsset theo og_image_id của meta.
      * =====================================================================
+     * AN TOÀN: chỉ trả URL khi asset là ảnh (kind='image'), công khai
+     * (visibility='public') và chưa bị xóa mềm — chặn lộ đường dẫn private
+     * trên thẻ meta công khai, và chặn gắn sai loại file.
      * Được SeoMetadataService::ogImageFor() gọi khi model có quan hệ này.
      * INPUT: ?SeoMetadata (đã nạp sẵn). OUTPUT: ?string URL media.
      * =====================================================================
@@ -60,7 +63,12 @@ trait HasSeoMeta
             return null;
         }
 
-        $asset = MediaAsset::find($meta->og_image_id);
+        $asset = MediaAsset::query()
+            ->where('id', $meta->og_image_id)
+            ->where('kind', MediaAsset::KIND_IMAGE)
+            ->where('visibility', MediaAsset::VISIBILITY_PUBLIC)
+            ->whereNull('deleted_at')
+            ->first();
 
         return $asset?->getFirstMediaUrl('library', 'og') ?: $asset?->getFirstMediaUrl('library');
     }

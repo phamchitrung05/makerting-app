@@ -39,7 +39,8 @@ const fileInput = ref(null)
 
 /* Extension map để validate client-side. */
 const KIND_EXT = {
-  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico'],
+  // SVG tạm chặn phía server (chưa có sanitizer an toàn) — đồng bộ client.
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'ico'],
   video: ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg'],
   audio: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'],
   document: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'md', 'json', 'xml'],

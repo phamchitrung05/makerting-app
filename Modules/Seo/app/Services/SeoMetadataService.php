@@ -70,7 +70,7 @@ class SeoMetadataService
             'og_description' => $meta?->og_description ?: $description,
             'og_image' => $this->ogImageFor($model, $meta),
             'twitter_site' => $this->cfg('twitter_site'),
-            'schema_org' => $meta?->schema_org_json,
+            'schema_org' => $this->sanitizeSchemaOrg($meta?->schema_org_json),
         ];
     }
 
@@ -182,5 +182,34 @@ class SeoMetadataService
     private function cfg(string $key, mixed $default = null): mixed
     {
         return $this->config[$key] ?? $default;
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Sanitize mảng schema_org_json — loại bỏ nội dung có thể
+     * phá thẻ <script type="application/ld+json">.
+     * =====================================================================
+     * - Đệ quy qua mọi giá trị chuỗi trong mảng; escape chuỗi `</` thành
+     *   `<\/` để không đóng sớm thẻ <script> (stored XSS).
+     * - Trả nguyên mảng (đã chuỗi là chuỗi escape) cho render an toàn.
+     * INPUT: ?array $schema (payload người dùng ghi đè).
+     * OUTPUT: ?array — cùng cấu trúc nhưng chuỗi đã escape `</`.
+     * =====================================================================
+     */
+    private function sanitizeSchemaOrg(?array $schema): ?array
+    {
+        if ($schema === null) {
+            return null;
+        }
+
+        array_walk_recursive($schema, function (&$value): void {
+            if (is_string($value)) {
+                // Escape </script> (và mọi </...) -> <\/ — an toàn khi nhúng
+                // vào <script type="application/ld+json">.
+                $value = str_replace('</', '<\/', $value);
+            }
+        });
+
+        return $schema;
     }
 }

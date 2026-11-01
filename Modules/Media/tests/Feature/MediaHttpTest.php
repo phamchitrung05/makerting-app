@@ -5,6 +5,7 @@ namespace Modules\Media\Tests\Feature;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Modules\Identity\Models\User;
@@ -30,6 +31,11 @@ class MediaHttpTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Fake 3 disk media để test không ghi rác vào storage/app/media thật.
+        Storage::fake('media_public');
+        Storage::fake('media_private');
+        Storage::fake('temp_processing');
 
         Schema::create('_test_posts', function (Blueprint $t) {
             $t->id(); $t->string('title'); $t->timestamps();
@@ -82,11 +88,15 @@ class MediaHttpTest extends TestCase
         $this->withHeaders($this->token($this->admin()))
             ->getJson('/api/v1/admin/media/assets')
             ->assertOk()
-            ->assertJsonStructure(['data' => ['items' => [['id','kind','title']]], 'data' => ['itemsLength']]);
+            ->assertJsonStructure([
+                'data' => [
+                    'items' => [['id', 'kind', 'title']],
+                    'itemsLength',
+                ],
+            ]);
     }
 
-    /** @test GET /slots -> danh sách slot đã đăng ký */
-    public function slots_returns_registered(): void
+    public function test_slots_returns_registered(): void
     {
         $this->withHeaders($this->token($this->admin()))
             ->getJson('/api/v1/admin/media/slots')
@@ -94,8 +104,7 @@ class MediaHttpTest extends TestCase
             ->assertJsonStructure(['data' => [['slot','allowedKinds','maxItems','visibility','label']]]);
     }
 
-    /** @test POST /assets upload ảnh thành công */
-    public function store_uploads_image(): void
+    public function test_store_uploads_image(): void
     {
         $res = $this->withHeaders($this->token($this->admin()))
             ->postJson('/api/v1/admin/media/assets', [
@@ -110,8 +119,7 @@ class MediaHttpTest extends TestCase
         $this->assertDatabaseHas('media_assets', ['title' => 'Test Upload', 'kind' => 'image']);
     }
 
-    /** @test POST /assets trùng file -> dedupe trả asset cũ */
-    public function store_dedupe_returns_existing(): void
+    public function test_store_dedupe_returns_existing(): void
     {
         $first = $this->withHeaders($this->token($this->admin()))
             ->postJson('/api/v1/admin/media/assets', ['file' => $this->png()])
@@ -163,8 +171,7 @@ class MediaHttpTest extends TestCase
             ->assertJsonPath('data.detached', 1);
     }
 
-    /** @test 403 khi không có quyền */
-    public function forbidden_without_permission(): void
+    public function test_forbidden_without_permission(): void
     {
         $user = User::create([
             'name' => 'NoPerm',

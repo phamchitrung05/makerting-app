@@ -29,16 +29,16 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'save'])
 
 const blank = () => ({
-  focus_keyword: '',
-  seo_title: '',
-  seo_description: '',
-  canonical_url: '',
-  robots_index: true,
-  robots_follow: true,
-  og_title: '',
-  og_description: '',
-  og_image_id: null,
-  schema_org_json: null,
+  'focus_keyword': '', // eslint-disable-line camelcase
+  'seo_title': '', // eslint-disable-line camelcase
+  'seo_description': '', // eslint-disable-line camelcase
+  'canonical_url': '', // eslint-disable-line camelcase
+  'robots_index': true, // eslint-disable-line camelcase
+  'robots_follow': true, // eslint-disable-line camelcase
+  'og_title': '', // eslint-disable-line camelcase
+  'og_description': '', // eslint-disable-line camelcase
+  'og_image_id': null, // eslint-disable-line camelcase
+  'schema_org_json': null, // eslint-disable-line camelcase
 })
 
 const form = reactive({ ...blank(), ...props.modelValue })
@@ -52,6 +52,16 @@ function update(field, val) {
 
 function emitSave() {
   emit('save', { ...form })
+}
+
+/* Chuẩn hóa og_image_id: chuỗi rỗng -> null (xóa trắng = bỏ ảnh),
+   chuỗi số -> int; giá trị khác giữ nguyên (đã là int/null). */
+function normalizeOgImageId(val) {
+  if (val === '' || val === undefined || val === null) { return null }
+
+  const n = Number(val)
+
+  return Number.isInteger(n) && n > 0 ? n : val
 }
 </script>
 
@@ -160,7 +170,7 @@ function emitSave() {
             prepend-inner-icon="tabler-photo"
             type="number"
             :disabled="loading"
-            @update:model-value="update('og_image_id', $event)"
+            @update:model-value="update('og_image_id', normalizeOgImageId($event))"
           />
         </VCol>
         <VCol cols="12">

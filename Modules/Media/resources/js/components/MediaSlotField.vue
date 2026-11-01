@@ -6,15 +6,15 @@
   - Nút "Chọn media" mở <MediaPickerDialog /> (slot + allowedKinds).
   - model-value = media_asset_id (number|null).
   PROPS:
-    modelValue   : number|null media_asset_id.
-    slot         : slot đích trong MediaSlotRegistry ('post.thumbnail'...).
-    label        : nhãn field.
-    allowedKinds : override whitelist kind (lấy từ slot khi không truyền).
-    channelGroupId: lọc theo nhóm kênh khi mở picker.
-    disabled     : khóa field.
+  modelValue   : number|null media_asset_id.
+  slot         : slot đích trong MediaSlotRegistry ('post.thumbnail'...).
+  label        : nhãn field.
+  allowedKinds : override whitelist kind (lấy từ slot khi không truyền).
+  channelGroupId: lọc theo nhóm kênh khi mở picker.
+  disabled     : khóa field.
   EMITS:
-    update:modelValue(id|null) — id asset đã chọn / null khi xóa.
-    select(asset)              — asset object vừa chọn (cho parent dùng thêm).
+  update:modelValue(id|null) — id asset đã chọn / null khi xóa.
+  select(asset)              — asset object vừa chọn (cho parent dùng thêm).
   =====================================================================
 -->
 <script setup>
@@ -38,6 +38,7 @@ const current = ref(null) // asset object đang hiển thị
 
 /* Slot metadata (cho allowedKinds mặc định). */
 const slotInfo = computed(() => store.slotInfo(props.slot))
+
 const effectiveKinds = computed(() =>
   props.allowedKinds.length ? props.allowedKinds : (slotInfo.value?.allowedKinds || []),
 )
@@ -48,6 +49,7 @@ const previewUrl = computed(() => {
   if (current.value.kind === 'image') {
     return current.value.conversions?.thumb || current.value.url
   }
+  
   return current.value.url
 })
 
@@ -57,6 +59,7 @@ const previewAlt = computed(() => current.value?.altText || current.value?.title
 watch(() => props.modelValue, async id => {
   if (!id) {
     current.value = null
+    
     return
   }
   if (current.value?.id === id) { return }
@@ -89,7 +92,10 @@ function clear() {
 
 <template>
   <div class="media-slot-field">
-    <VLabel v-if="label" class="mb-2 text-body-2 font-weight-medium">
+    <VLabel
+      v-if="label"
+      class="mb-2 text-body-2 font-weight-medium"
+    >
       {{ label }}
     </VLabel>
 
@@ -106,18 +112,38 @@ function clear() {
             aspect-ratio="16/9"
             cover
           />
-          <div v-else class="media-slot-field__icon d-flex flex-column align-center justify-center pa-6">
+          <div
+            v-else
+            class="media-slot-field__icon d-flex flex-column align-center justify-center pa-6"
+          >
             <VIcon
               :icon="current.kind === 'video' ? 'tabler-video' : (current.kind === 'audio' ? 'tabler-music' : 'tabler-file')"
               size="40"
               color="primary"
             />
-            <div class="text-body-2 mt-2 text-truncate" style="max-width: 100%">{{ current.title }}</div>
+            <div
+              class="text-body-2 mt-2 text-truncate"
+              style="max-width: 100%"
+            >
+              {{ current.title }}
+            </div>
           </div>
 
           <div class="media-slot-field__overlay d-flex align-center justify-center gap-2">
-            <VBtn icon="tabler-pencil" size="small" variant="tonal" color="white" @click.stop="openPicker" />
-            <VBtn icon="tabler-trash" size="small" variant="tonal" color="error" @click.stop="clear" />
+            <VBtn
+              icon="tabler-pencil"
+              size="small"
+              variant="tonal"
+              color="white"
+              @click.stop="openPicker"
+            />
+            <VBtn
+              icon="tabler-trash"
+              size="small"
+              variant="tonal"
+              color="error"
+              @click.stop="clear"
+            />
           </div>
         </div>
       </template>
@@ -129,9 +155,16 @@ function clear() {
         :disabled="disabled"
         @click="openPicker"
       >
-        <VIcon icon="tabler-photo-plus" size="32" class="mb-2" />
+        <VIcon
+          icon="tabler-photo-plus"
+          size="32"
+          class="mb-2"
+        />
         <span class="text-body-2">Chọn {{ slotInfo?.label || 'media' }}</span>
-        <span v-if="effectiveKinds.length" class="text-caption text-medium-emphasis mt-1">
+        <span
+          v-if="effectiveKinds.length"
+          class="text-caption text-medium-emphasis mt-1"
+        >
           ({{ effectiveKinds.join(', ') }})
         </span>
       </button>
@@ -139,8 +172,8 @@ function clear() {
 
     <MediaPickerDialog
       ref="picker"
+      :slot-prop="slot"
       :model-value="modelValue"
-      :slot="slot"
       :allowed-kinds="effectiveKinds"
       :channel-group-id="channelGroupId"
       :multiple="false"

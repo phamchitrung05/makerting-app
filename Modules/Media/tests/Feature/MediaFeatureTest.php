@@ -4,6 +4,7 @@ namespace Modules\Media\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Modules\Media\Actions\CalculateMediaChecksumAction;
@@ -30,6 +31,11 @@ class MediaFeatureTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Fake 3 disk media để test không ghi rác vào storage/app/media thật.
+        Storage::fake('media_public');
+        Storage::fake('media_private');
+        Storage::fake('temp_processing');
 
         Schema::create('_test_posts', function (Blueprint $t) {
             $t->id(); $t->string('title'); $t->timestamps();

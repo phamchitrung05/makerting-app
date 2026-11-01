@@ -145,6 +145,7 @@ function testPing(prov) {
   // Giả lập độ trễ mạng 0.8–1.6s rồi trả kết quả ngẫu nhiên.
   setTimeout(() => {
     prov.pinging = false
+
     const ok = Math.random() > 0.2
     if (ok) {
       prov.latencyText = `${120 + Math.floor(Math.random() * 500)}ms`
@@ -177,7 +178,9 @@ function testModelPing(model) {
   model.ok = null
   setTimeout(() => {
     model.pinging = false
+
     const ok = Math.random() > 0.2
+
     model.ok = ok
     model.latencyText = ok ? `${80 + Math.floor(Math.random() * 600)}ms` : 'timeout'
   }, 600 + Math.random() * 700)
@@ -252,6 +255,7 @@ function saveProvider() {
   providerSaving.value = true
 
   const isCustom = providerForm.value.name === 'Tùy chỉnh (Custom)'
+
   const displayName = isCustom && providerForm.value.customName
     ? providerForm.value.customName
     : providerForm.value.name

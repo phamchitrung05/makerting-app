@@ -121,8 +121,13 @@ class MediaAssetController extends Controller
             'title' => $a->title,
             'kind' => $a->kind,
             'folder' => $a->folder,
-            'url' => $a->mediaFile()?->getFullUrl(),
-            'thumb' => $a->mediaFile()?->getUrl('thumb') ?: $a->mediaFile()?->getFullUrl(),
+            // Private: không lộ URL trực tiếp — frontend dùng /assets/{id}/stream.
+            'url' => $a->visibility === MediaAsset::VISIBILITY_PUBLIC
+                ? $a->mediaFile()?->getFullUrl()
+                : null,
+            'thumb' => $a->visibility === MediaAsset::VISIBILITY_PUBLIC
+                ? ($a->mediaFile()?->getUrl('thumb') ?: $a->mediaFile()?->getFullUrl())
+                : null,
         ])->values();
 
         return BaseResponse::success($options);
@@ -225,12 +230,54 @@ class MediaAssetController extends Controller
      */
     public function update(MediaAsset $asset, MediaAssetUpdateRequest $request)
     {
-        $asset->update($request->validated());
+        $data = $request->validated();
+        $oldVisibility = $asset->visibility;
+        $newVisibility = $data['visibility'] ?? $oldVisibility;
+
+        $asset->update($data);
+
+        // Đổi visibility -> phải di chuyển file vật lý giữa hai disk
+        // media_public <-> media_private để đồng bộ quyền truy cập trên disk.
+        if ($newVisibility !== $oldVisibility) {
+            $this->moveFileBetweenDisks($asset, $newVisibility);
+        }
 
         return BaseResponse::success(
             new MediaAssetResource($asset->fresh(['creator', 'channelGroup'])->loadCount('usages')),
             'Cập nhật media thành công',
         );
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Di chuyển file Spatie + conversions giữa media_public và
+     * media_private khi visibility đổi (đồng bộ cờ DB với vị trí file thật).
+     * =====================================================================
+     * INPUT: $asset, $newVisibility.
+     * OUTPUT: void — file đã move (hoặc log warning khi lỗi).
+     * SIDE EFFECT: Spatie move() file gốc + conversions sang disk đích.
+     * =====================================================================
+     */
+    private function moveFileBetweenDisks(MediaAsset $asset, string $newVisibility): void
+    {
+        $newDisk = $newVisibility === MediaAsset::VISIBILITY_PRIVATE
+            ? 'media_private'
+            : 'media_public';
+
+        $media = $asset->mediaFile();
+        if (! $media || $media->disk === $newDisk) {
+            return;
+        }
+
+        try {
+            $media->move($asset, MediaAsset::COLLECTION_LIBRARY, $newDisk);
+        } catch (\Throwable $e) {
+            // File vẫn ở disk cũ nhưng cờ đã đúng — endpoint stream vẫn an toàn
+            // (kiểm quyền trước khi đọc). Chỉ log để debug.
+            \Illuminate\Support\Facades\Log::warning(
+                "Không chuyển được file media {$media->id} sang {$newDisk}: {$e->getMessage()}",
+            );
+        }
     }
 
     /**
@@ -294,8 +341,16 @@ class MediaAssetController extends Controller
             ? 'application/octet-stream'
             : $mime;
 
-        return new StreamedResponse(function () use ($disk, $path) {
-            $stream = Storage::disk($disk)->readStream($path);
+        // Mở stream — file vật lý có thể đã bị xóa trên disk khi cờ còn.
+        $stream = Storage::disk($disk)->readStream($path);
+        if ($stream === false || $stream === null || ! is_resource($stream)) {
+            return BaseResponse::error(
+                "File vật lý của asset này không còn trên disk ({$disk}).",
+                404,
+            );
+        }
+
+        return new StreamedResponse(function () use ($stream) {
             fpassthru($stream);
             fclose($stream);
         }, 200, [

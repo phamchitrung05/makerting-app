@@ -459,6 +459,103 @@ Khi xây dựng các trang ứng dụng có bố cục nhiều cột chạm nhau
    - Luôn cấu hình `:options="{ wheelPropagation: false, suppressScrollX: true }"` và gọi `ps.update()` bên trong `nextTick()` sau khi thay đổi bộ lọc/trang.
    - Ở màn hình nhỏ (`< 960px`), trả chiều cao về `auto` để cuộn tự nhiên theo trang, tránh kẹt cuộn lồng nhau trên mobile.
 
+### 5.1. Mẫu khung chuẩn: `VLayout` + `VMain` + `VCard flat` (theo trang Email)
+
+Đây là **mẫu khung chuẩn** cho mọi trang nhiều vùng cố định viewport (Media Library, Email, Chat, File Manager…). Tham chiếu trực tiếp `resources/js/pages/apps/email/index.vue` và `Modules/Media/resources/js/pages/media/index.vue`.
+
+**Điểm then chốt:** khung ngoài là `VLayout` nhận **1 bóng duy nhất** qua `mixins.elevation(vuetify.$card-elevation)`; `VMain` > `VCard flat h-100 d-flex flex-column` là vùng nội dung (KHÔNG prop elevation trên card con). Bên trong card chia cột bằng **`VRow no-gutters` + `VCol` (hệ col-md-*)** — mỗi `VCol` `d-flex flex-column` + `min-block-size:0` + `overflow:hidden` để `PerfectScrollbar` bên trong bound được chiều cao; toolbar/action bar/`TablePagination` là flex-item tĩnh (đứng yên), chỉ vùng `PerfectScrollbar` có `flex:1 1 0` cuộn.
+
+**Hai cách chia cột — chọn theo nhu cầu:**
+- **`VCol` (grid `col-md-*`)** — khi muốn tỷ lệ cột chuẩn (`md="2"/"8"/"2"`) và tự xếp dọc ở mobile (`cols="12"`). Dùng cho sidebar nội dung cố định như trang Media.
+- **`VNavigationDrawer` (`absolute touchless`, `:temporary="mdAndDown"`)** — khi sidebar cần **trượt đè** trên mobile (giống Email/Chat). Drawer là flex-item của `VLayout` nên chiều cao tự bound, không cần `min-block-size` thủ công.
+
+```vue
+<template>
+  <VLayout class="media-app-layout" style="min-block-size: 100%; z-index: 0">
+    <VMain>
+      <VCard flat class="media-content h-100 d-flex flex-column">
+        <VRow no-gutters class="flex-grow-1" style="min-block-size: 0">
+          <!-- Cột trái: điều hướng (col-md-2) — cuộn toàn cột -->
+          <VCol cols="12" md="2" class="border-e d-flex flex-column media-col">
+            <PerfectScrollbar :options="{ wheelPropagation: false, suppressScrollX: true }" class="media-scroll pa-5">
+              …điều hướng…
+            </PerfectScrollbar>
+          </VCol>
+
+          <!-- Cột giữa: lưới (col-md-8) — toolbar + footer đứng yên -->
+          <VCol cols="12" md="8" class="d-flex flex-column media-col">
+            <div class="pa-4">…toolbar…</div>
+            <VDivider />
+            <PerfectScrollbar :options="{ wheelPropagation: false, suppressScrollX: true }" class="media-grid-scroll pa-5">
+              …lưới item…
+            </PerfectScrollbar>
+            <VDivider />
+            <div class="pa-4">…action bar…</div>
+            <TablePagination v-model:page="page" :items-per-page="n" :total-items="total" />
+          </VCol>
+
+          <!-- Cột phải: chi tiết (col-md-2) — cuộn toàn cột -->
+          <VCol cols="12" md="2" class="border-s d-flex flex-column media-col">
+            <PerfectScrollbar :options="{ wheelPropagation: false, suppressScrollX: true }" class="media-scroll pa-5">
+              …chi tiết…
+            </PerfectScrollbar>
+          </VCol>
+        </VRow>
+      </VCard>
+    </VMain>
+  </VLayout>
+</template>
+```
+
+**Script setup (tối thiểu):**
+```js
+import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
+
+definePage({ meta: { layout: 'default', layoutWrapperClasses: 'layout-content-height-fixed' } })
+// Với biến thể VNavigationDrawer thêm: `const { mdAndDown } = useDisplay()` + ref isXSidebarOpen.
+```
+
+**Style bắt buộc (SCSS — đổ bóng/bo góc theo biến chuẩn Vuexy):**
+```scss
+@use "@styles/variables/vuetify";
+@use "@core-scss/base/mixins";
+
+/* Khung ngoài: 1 bóng + bo góc duy nhất (giống .email-app-layout). */
+.media-app-layout {
+  border-radius: vuetify.$card-border-radius;
+  @include mixins.elevation(vuetify.$card-elevation);
+}
+
+/* Card nội dung: flat + bo góc mép tiếp giáp = 0. */
+.media-content {
+  border-end-start-radius: 0;
+  border-start-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Mỗi VCol: flex-column + min-height:0 + overflow:hidden để vùng cuộn bound. */
+.media-col { min-block-size: 0; overflow: hidden; }
+
+/* Vùng cuộn co giãn duy nhất của cột chính. */
+.media-grid-scroll { flex: 1 1 0; min-block-size: 0; }
+.media-scroll      { block-size: 100%; min-block-size: 0; }
+```
+
+#### Quy tắc áp dụng (bắt buộc)
+- **Đổ bóng:** đặt `mixins.elevation(vuetify.$card-elevation)` trên `VLayout` — KHÔNG `elevation` prop trên VCard con (con dùng `flat`), KHÔNG `box-shadow` thủ công.
+- **Bo góc:** `vuetify.$card-border-radius` trên layout; card con đặt `border-*-radius: 0` ở mép tiếp giáp.
+- **Chia cột bằng grid chuẩn `VRow no-gutters` + `VCol` (`cols`/`md`)** — KHÔNG tự dựng flex `flex-basis`/`width %` thủ công; `VCol` cho tỷ lệ chuẩn + tự xếp dọc ở `cols="12"`.
+- **Bound chiều cao cột:** mỗi `VCol` cần `d-flex flex-column` + `min-block-size:0` + `overflow:hidden`; nếu thiếu, nội dung đẩy cột vượt chiều cao hàng -> footer/action bar bị tràn/ẩn.
+- **Drawer (tuỳ chọn):** nếu sidebar cần trượt đè mobile, dùng `VNavigationDrawer absolute touchless :temporary="mdAndDown"` thay cho `VCol` — nó là flex-item của `VLayout` nên chiều cao tự bound.
+- **Vùng cuộn:** là `PerfectScrollbar` (`flex: 1 1 0; min-block-size: 0` ở cột chính, `block-size: 100%` ở cột cuộn toàn phần); toolbar/action bar/`TablePagination` là flex-item tĩnh (đứng yên, có `VDivider` ngăn).
+- **Không cuộn trang:** toàn trang fixed-height; chỉ vùng cuộn trong mỗi cột được cuộn.
+
+#### Lưới item vuông (tuỳ chọn, trang Media)
+- `grid-template-columns: repeat(N,1fr)` + breakpoint giảm cột khi co màn hình.
+- Ô thumbnail vuông: `aspect-ratio: 1` trên khung, `VImg aspect-ratio="1"`, fallback `block-size:100%`.
+- Checkbox/menu đặt `position:absolute` phủ lên góc ảnh (`inset-block-start`/`inset-inline-*`) thay vì hàng riêng — card gọn, ảnh là chủ đạo.
+- `itemsPerPage` chọn là bội số của số cột để hàng cuối đều.
+
 ---
 
 ## 6. Kiến trúc Backend Laravel & Chuẩn API Response

@@ -10,6 +10,7 @@ return [
         Modules\Settings\Settings\GeneralSettings::class,
         Modules\Settings\Settings\SecuritySettings::class,
         Modules\Settings\Settings\MailSettings::class,
+        Modules\Seo\Settings\SeoSettings::class,
     ],
 
     /*

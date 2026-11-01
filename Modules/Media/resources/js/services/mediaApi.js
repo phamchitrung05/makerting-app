@@ -22,6 +22,7 @@
 import { $api } from '@/utils/api'
 
 const BASE = '/v1/admin/media'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 
 export const mediaApi = {
   /* Danh sách media phân trang + filter {kind,visibility,folder,channel_group_id,search,itemsPerPage,page,sortBy,orderBy}. */
@@ -98,9 +99,9 @@ export const mediaApi = {
     return $api(`${BASE}/assets/${id}`, { method: 'DELETE' })
   },
 
-  /* URL stream file vật lý (cho video private / preview). */
+  /* URL stream file vật lý (cho video private / preview) — có tiền tố /api. */
   streamUrl(id) {
-    return `${BASE}/assets/${id}/stream`
+    return `${API_BASE}${BASE}/assets/${id}/stream`
   },
 
   /* Metadata slot registry (kind/maxItems/visibility/label). */
