@@ -2,8 +2,17 @@
 
 namespace Modules\CoreAi\Providers;
 
-use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\CoreAi\Drivers\AnthropicCompatibleDriver;
+use Modules\CoreAi\Drivers\AnthropicDriver;
+use Modules\CoreAi\Drivers\GeminiDriver;
+use Modules\CoreAi\Drivers\OpenAiCompatibleDriver;
+use Modules\CoreAi\Drivers\OpenAiDriver;
+use Modules\CoreAi\Models\AiProvider;
+use Modules\CoreAi\Registries\AiDriverRegistry;
+use Modules\CoreAi\Services\AiProviderClient;
+use Modules\Identity\Registries\PermissionRegistry;
+use Nwidart\Modules\Support\ModuleServiceProvider;
 
 /**
  * =====================================================================
@@ -51,6 +60,58 @@ class CoreAiServiceProvider extends ModuleServiceProvider
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký binding container của module.
+     * =====================================================================
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: singleton AiDriverRegistry + AiProviderClient.
+     * =====================================================================
+     */
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->singleton(AiDriverRegistry::class, fn () => new AiDriverRegistry());
+        $this->app->singleton(AiProviderClient::class, fn () => new AiProviderClient());
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Boot module — đăng ký driver + quyền coreai.
+     * =====================================================================
+     * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT:
+     * - AiDriverRegistry nhận 5 driver nền (openai, anthropic, gemini,
+     *   openai-compatible, anthropic-compatible). ElevenLabs chưa đăng ký
+     *   (P4-03) — resolve sẽ ném unsupported cho đến khi có driver.
+     * - PermissionRegistry thêm 'coreai.view'/'coreai.manage'/'coreai.execute'.
+     * =====================================================================
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        /** @var AiDriverRegistry $drivers */
+        $drivers = $this->app->make(AiDriverRegistry::class);
+        $drivers->register(AiProvider::DRIVER_OPENAI, OpenAiDriver::class);
+        $drivers->register(AiProvider::DRIVER_ANTHROPIC, AnthropicDriver::class);
+        $drivers->register(AiProvider::DRIVER_GEMINI, GeminiDriver::class);
+        $drivers->register(AiProvider::DRIVER_OPENAI_COMPATIBLE, OpenAiCompatibleDriver::class);
+        $drivers->register(AiProvider::DRIVER_ANTHROPIC_COMPATIBLE, AnthropicCompatibleDriver::class);
+
+        /** @var PermissionRegistry $permissions */
+        $permissions = $this->app->make(PermissionRegistry::class);
+        $permissions->registerModule('coreai', [
+            'label' => 'Quản lý AI',
+            'permissions' => [
+                'coreai.view' => 'Xem cấu hình AI providers/models/runs',
+                'coreai.manage' => 'Thêm/sửa/xóa AI providers/models',
+                'coreai.execute' => 'Chạy tác vụ AI (sinh nội dung/ảnh/audio)',
+            ],
+        ]);
+    }
 
     /**
      * Define module schedules.
