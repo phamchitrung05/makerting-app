@@ -185,4 +185,56 @@ class SettingsTest extends TestCase
         $this->assertArrayNotHasKey('config', $res->json('data.values'));
         $this->assertArrayNotHasKey('mapper', $res->json('data.values'));
     }
+
+    public function test_update_ghi_audit_log_thay_doi(): void
+    {
+        $user = $this->admin(['settings.site.view', 'settings.site.manage']);
+        $svc = app(ModularSettingsService::class);
+
+        // Gán causer = user đăng nhập để log ghi đúng ai sửa.
+        $this->actingAs($user, 'admin');
+        $svc->update('site', ['site_name' => 'Tên mới ABC'], 1);
+
+        $log = \DB::table('activity_log')->latest('id')->first();
+        $this->assertNotNull($log, 'phải ghi activity_log khi đổi config');
+        $this->assertSame('updated', $log->event);
+        $this->assertSame('settings.site.updated', $log->description);
+        $this->assertSame($user->id, (int) $log->causer_id);
+
+        $props = json_decode($log->properties, true);
+        $this->assertSame('site', $props['settings_group']);
+        $this->assertContains('site_name', $props['changed_fields']);
+        $this->assertSame('Tên mới ABC', $props['changes']['site_name']['new']);
+    }
+
+    public function test_audit_log_khong_lo_gia_tri_secret(): void
+    {
+        $user = $this->admin(['settings.mail.view', 'settings.mail.manage']);
+        $this->actingAs($user, 'admin');
+        $svc = app(ModularSettingsService::class);
+
+        $svc->update('mail', ['mail_password' => 'super-secret-pass'], 1);
+
+        $raw = (string) \DB::table('activity_log')->latest('id')->value('properties');
+        $this->assertStringNotContainsString('super-secret-pass', $raw, 'log không được chứa secret thật');
+
+        $props = json_decode($raw, true);
+        // Secret chỉ lưu cờ configured + tên trong secrets_touched.
+        $this->assertContains('mail_password', $props['secrets_touched']);
+        $this->assertTrue($props['changes']['mail_password_configured']['new'] ?? false);
+    }
+
+    public function test_audit_log_bo_qua_khi_khong_co_thay_doi(): void
+    {
+        $this->admin(['settings.site.view', 'settings.site.manage']);
+        $svc = app(ModularSettingsService::class);
+
+        $svc->update('site', ['site_name' => 'Giống y hệt'], 1);
+        $countAfterFirst = \DB::table('activity_log')->count();
+        $this->assertSame(1, $countAfterFirst, 'lần đổi đầu phải ghi 1 log');
+
+        // Ghi đúng giá trị y hệt -> chỉ bump version, không log nghiệp vụ.
+        $svc->update('site', ['site_name' => 'Giống y hệt'], 2);
+        $this->assertSame(1, \DB::table('activity_log')->count(), 'không đổi gì thì không thêm log');
+    }
 }

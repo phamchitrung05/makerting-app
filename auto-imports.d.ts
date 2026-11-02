@@ -162,6 +162,7 @@ declare global {
   const useAbility: typeof import('./resources/js/plugins/casl/composables/useAbility.js')['useAbility']
   const useAbs: typeof import('@vueuse/math')['useAbs']
   const useActiveElement: typeof import('@vueuse/core')['useActiveElement']
+  const useAiConfigStore: typeof import('./Modules/CoreAi/resources/js/stores/aiConfig.js')['useAiConfigStore']
   const useAnimate: typeof import('@vueuse/core')['useAnimate']
   const useApi: typeof import('./resources/js/composables/useApi.js')['useApi']
   const useArrayDifference: typeof import('@vueuse/core')['useArrayDifference']
@@ -529,6 +530,7 @@ declare module 'vue' {
     readonly useAbility: UnwrapRef<typeof import('./resources/js/plugins/casl/composables/useAbility.js')['useAbility']>
     readonly useAbs: UnwrapRef<typeof import('@vueuse/math')['useAbs']>
     readonly useActiveElement: UnwrapRef<typeof import('@vueuse/core')['useActiveElement']>
+    readonly useAiConfigStore: UnwrapRef<typeof import('./Modules/CoreAi/resources/js/stores/aiConfig.js')['useAiConfigStore']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useApi: UnwrapRef<typeof import('./resources/js/composables/useApi.js')['useApi']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>

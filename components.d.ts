@@ -412,5 +412,6 @@ declare module 'vue' {
     UserInfoEditDialog: typeof import('./resources/js/components/dialogs/UserInfoEditDialog.vue')['default']
     UsersRolesTab: typeof import('./Modules/Settings/resources/js/components/tabs/UsersRolesTab.vue')['default']
     UserUpgradePlanDialog: typeof import('./resources/js/components/dialogs/UserUpgradePlanDialog.vue')['default']
+    VueApexCharts: typeof import('vue3-apexcharts')['default']
   }
 }

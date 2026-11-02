@@ -367,6 +367,7 @@
     "isValidationError": true,
     "useSettingsGroup": true,
     "useTaskCenterStore": true,
-    "useMediaAssetStore": true
+    "useMediaAssetStore": true,
+    "useAiConfigStore": true
   }
 }

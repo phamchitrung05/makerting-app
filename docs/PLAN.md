@@ -421,6 +421,38 @@ makerting-app/
 - **`Modules/<ModuleName>/resources/js/`:**
   - Chứa `pages/`, `views/`, `stores/`, `services/` và `navigation.js` của riêng từng module, được cấu hình quét tự động trong `vite.config.js`.
 
+#### 4.3.1. Chuẩn Kiến trúc & Quy tắc Sử dụng Pinia Store trong các Module
+Để đảm bảo hiệu năng SPA mượt mà, dùng chung trạng thái xuyên module và **hạn chế tối đa việc gọi lại API nhiều lần khi chuyển tab/trang**, mọi Pinia Store trong dự án bắt buộc tuân thủ 6 quy tắc sau:
+
+1. **Vị trí đặt file & Quy ước đặt tên (Ownership theo Module dữ liệu gốc):**
+   - Pinia Store của tài nguyên nào phải đặt tại thư mục `Modules/<OwnerModule>/resources/js/stores/<camelCaseName>.js` của chính module sở hữu API đó (kết hợp với `Modules/<OwnerModule>/resources/js/services/<name>Api.js`).
+   - *Ví dụ:* Store quản lý AI Providers & Models đặt tại `Modules/CoreAi/resources/js/stores/coreAi.js` (`export const useCoreAiStore = defineStore('coreAi', ...)`), dù giao diện cấu hình có thể được nhúng trong tab của `Modules/Settings` hay gọi từ `Modules/Blog`, `Modules/VideoStudio`.
+   - Nhờ `unplugin-auto-import` trong `vite.config.js` đã quét sẵn `Modules/*/resources/js/stores`, các component ở mọi module có thể gọi trực tiếp `use<Name>Store()` mà không tạo phụ thuộc import đường dẫn cứng chéo module.
+
+2. **Tách biệt rõ `services/*Api.js` và `stores/*.js`:**
+   - Tầng `services/<name>Api.js` chỉ làm nhiệm vụ gọi `$api` (HTTP GET/POST/PUT/DELETE) và trả về Promise dữ liệu đã unwrap từ `BaseResponse`.
+   - Tầng `stores/<name>.js` quản lý State, Getters và Actions điều phối nghiệp vụ UI; **Component `.vue` không gọi trực tiếp `$api` cho dữ liệu dùng chung mà đi qua Store**.
+
+3. **Cơ chế "Tải 1 lần - Dùng nhiều nơi" (`ensureLoaded` + Chống gọi trùng Request):**
+   - Mỗi Store quản lý danh sách/cấu hình phải có cờ trạng thái `initialized: false` (hoặc `loadedAt`) và biến chống đua `_initPromise` (in-flight promise deduplication):
+     - Khi Component mount (`onMounted`), chỉ gọi `store.ensureLoaded()` (mặc định `force = false`).
+     - Nếu `initialized === true` và `!force`: **Trả dữ liệu ngay lập tức từ RAM (0ms, không gọi lại API)** khi người dùng chuyển qua lại giữa các tab/trang.
+     - Nếu đang có một request khởi tạo chạy dở (`_initPromise !== null`), các component mount cùng lúc phải đợi chung Promise đó thay vì bắn nhiều request trùng lặp lên server.
+     - Chỉ khi người dùng bấm nút **"Làm mới / Đồng bộ"** mới gọi `store.ensureLoaded(true)` (`force = true`).
+
+4. **Cập nhật Trực tiếp tại chỗ sau khi CRUD (In-place State Mutation — Không Fetch lại toàn bộ):**
+   - **Tạo mới (`POST`):** Lấy bản ghi vừa tạo từ response `201 Created` thêm trực tiếp (`unshift` / `push`) vào mảng state hiện tại trong Store.
+   - **Cập nhật / Bật–Tắt nhanh (`PUT` / `PATCH`):** Tìm phần tử theo `id` trong mảng state và cập nhật tại chỗ (`Object.assign(item, updatedData)` hoặc thay tại `index`).
+   - **Xóa (`DELETE`):** Sau khi API trả về thành công, lọc bỏ phần tử khỏi mảng state (`this.items = this.items.filter(i => i.id !== id)`).
+   - **Tác vụ kiểm tra cục bộ (như Test Ping kết nối, chạy thử từng item):** Quản lý trạng thái loading theo từng ID (`testingIds: { [id]: true }`) thay vì khóa `loading` toàn trang, và chỉ cập nhật trạng thái của đúng phần tử đó khi hoàn tất.
+
+5. **Kết hợp `<KeepAlive>` cho các Trang Đa Tab (Multi-Tab Containers):**
+   - Tại các trang đóng vai trò khung chứa nhiều tab động (như `Modules/Settings` dùng `<component :is="tabComponent" />`), bọc `<KeepAlive>` quanh component động để giữ nguyên trạng thái DOM (tab con đang chọn, ô tìm kiếm đang gõ, vị trí cuộn) song hành cùng dữ liệu đã cache trong Pinia Store.
+
+6. **Khi nào dùng Pinia Store vs. Local `ref/reactive`:**
+   - **Bắt buộc dùng Pinia Store:** Dữ liệu danh mục/cấu hình cần giữ khi chuyển tab (`CoreAi` providers/models, `Settings` groups, `Media` library/folders/slots, `Taxonomy` categories/tags, `TaskCenter` queue runs, `ChannelGroup` options).
+   - **Dùng Local `ref/reactive` trong Component:** Trạng thái đóng/mở Dialog (`isDialogOpen`), dữ liệu form nháp đang nhập trong Dialog trước khi bấm Lưu, hoặc từ khóa tìm kiếm cục bộ của riêng một bảng.
+
 ### 4.4. Phân tách 5 Hàng đợi (Queue Workers) Vật lý
 Để tác vụ dựng video nặng hoặc tải file lớn không bao giờ làm treo Web Admin hay nghẽn lệnh gọi AI:
 1. `default` — tác vụ hệ thống nhẹ, gửi thông báo Telegram/Email, dọn file tạm.
@@ -501,5 +533,6 @@ Sau khi 13 Core Modules đi vào vận hành ổn định, các tiện ích mở
    - Dùng Vue 3 Composition API (`<script setup>`) và JavaScript đồng nhất với template Vuexy của dự án.
    - Mọi Dialog dùng `<AppDialogLayout />` (header và footer cố định, chỉ phần nội dung ở giữa cuộn).
    - Mọi trang Thêm/Sửa chính tuân theo bố cục 2 cột chuẩn (`VCol md="8"` cho nội dung chính, `VCol md="4"` cho cấu hình/phân loại/media).
+   - Quản lý trạng thái dữ liệu qua **Pinia Store** (`Modules/<ModuleName>/resources/js/stores/`) tuân thủ mục **4.3.1**: dùng `ensureLoaded(force = false)` để cache dữ liệu khi chuyển tab/trang và cập nhật state trực tiếp tại chỗ (in-place mutation) sau khi Thêm/Sửa/Xóa nhằm tránh gọi lại API dư thừa.
 4. **Definition of Done (DoD) cho mỗi Task:**
    - Có đầy đủ Migration (kèm khóa ngoại, index và hàm `down()`), Validation, Phân quyền Policy/Permission, Comment chuẩn tiếng Việt, vượt qua `php artisan test`, `eslint` và `npm run build` không phát sinh cảnh báo lỗi.

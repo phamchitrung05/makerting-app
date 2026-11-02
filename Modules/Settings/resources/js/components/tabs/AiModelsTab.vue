@@ -17,8 +17,12 @@
   =====================================================================
 -->
 <script setup>
-import { computed, reactive, ref, useId } from 'vue'
+import { computed, onMounted, reactive, ref, useId } from 'vue'
+import { useAiConfigStore } from '@modules/CoreAi/resources/js/stores/aiConfig'
 import AddAiModelDialog from '../dialogs/AddAiModelDialog.vue'
+
+// Store cấu hình AI (providers/models) — nguồn data thật cho panel Nhà cung cấp.
+const ai = useAiConfigStore()
 
 // ---- Tab ngang bên trong phần AI & Mô hình (không phải route) ----
 const activeTab = ref('overview')
@@ -45,24 +49,58 @@ const overviewKpis = [
 // Mỗi model là object { name, type, pinging, latencyText, ok } để có nút Test Ping riêng.
 const M = (name, type) => ({ name, type, pinging: false, latencyText: '—', ok: null })
 
-const activeProviders = ref([
-  { name: 'OpenAI', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$2.45 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('GPT-4o', 'Văn bản'), M('GPT-4o Mini', 'Văn bản'), M('DALL-E 3 HD', 'Hình ảnh')], icon: 'tabler-sparkles', bg: '#10a37f', color: 'white' },
-  { name: 'Anthropic', active: true, statusText: 'Đang hoạt động', modelCount: '2 mô hình', pricing: '$2.90 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Claude 3.5 Sonnet', 'Văn bản'), M('Claude 3 Opus', 'Văn bản')], shortText: 'A\\', bg: '#f3e5d8', color: '#1f1f1f' },
-  { name: 'Google AI (Gemini)', active: true, statusText: 'Đang hoạt động', modelCount: '4 mô hình', pricing: '$0.70 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Gemini 1.5 Flash', 'Văn bản'), M('Gemini 1.5 Pro', 'Văn bản'), M('Gemini Flash Image', 'Hình ảnh'), M('Imagen 3', 'Hình ảnh')], icon: 'tabler-star-four-points', bg: '#eef2ff', color: '#4285F4' },
-  { name: 'Stability AI', active: false, statusText: 'Chưa cấu hình', modelCount: '2 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: [M('Stable Diffusion XL', 'Hình ảnh'), M('Stable Video', 'Video')], icon: 'tabler-photo', bg: '#5b4ce0', color: 'white' },
-  { name: 'Runway', active: true, statusText: 'Đang hoạt động', modelCount: '3 mô hình', pricing: '$0.50 / 1M tokens', latencyText: '—', pinging: false, syncing: false, models: [M('Runway Gen-3 Alpha', 'Video'), M('Runway Gen-2', 'Video'), M('Act-One', 'Video')], shortText: 'R', bg: '#18181b', color: 'white' },
-  { name: 'Replicate', active: false, statusText: 'Chưa cấu hình', modelCount: '1 mô hình', pricing: '-', latencyText: '—', pinging: false, syncing: false, models: [M('Llama 3.1 (hosted)', 'Văn bản')], icon: 'tabler-code', bg: '#f4f4f5', color: '#18181b' },
-])
+// Provider hiển thị ở panel trái — lấy từ store (data thật ai_providers).
+const activeProviders = computed(() => ai.providersForUI)
 
 // ---- Provider đang chọn ở panel trái -> panel phải hiển thị model của nó ----
-const selectedProviderName = ref('OpenAI')
+const selectedProvider = computed(() => {
+  const p = ai.selectedProvider
+  if (!p) {
+    return { name: '—', active: false, statusText: 'Chưa có provider', modelCount: '0 mô hình', models: [], latencyText: '—', icon: 'tabler-server', bg: '#eef2ff', color: '#4285F4', pinging: false, syncing: false }
+  }
 
-const selectedProvider = computed(() =>
-  activeProviders.value.find(p => p.name === selectedProviderName.value) ?? activeProviders.value[0],
-)
+  const style = ai.providersForUI.find(x => x.id === p.id) ?? {}
+
+  return {
+    ...p,
+    icon: style.icon, bg: style.bg, color: style.color,
+    pinging: ai.testingId === p.id,
+    syncing: false,
+    active: p.is_active,
+    latencyText: p._latencyText ?? '—',
+    statusText: p.test_status === 'ok' ? 'Đang hoạt động' : (p.test_status === 'failed' ? 'Lỗi kết nối' : 'Đã cấu hình'),
+    modelCount: `${p.models_count ?? (p.models?.length ?? 0)} mô hình`,
+
+    // Model đã gán capabilities xếp trước, chưa gán xuống sau (giữ thứ tự trong nhóm).
+    models: (p.models ?? [])
+      .slice()
+      .sort((a, b) => ((b.capabilities?.length ?? 0) > 0 ? 1 : 0) - ((a.capabilities?.length ?? 0) > 0 ? 1 : 0))
+      .map(m => ({
+        id: m.id,
+        name: m.label ?? m.remote_model_id,
+        remoteModelId: m.remote_model_id,
+        capabilities: m.capabilities ?? [],
+        type: capLabel(m.capabilities?.[0]),
+        isEnabled: m.is_enabled !== false,
+        pinging: ai.testingModelId === m.id,
+        latencyText: m._latencyText ?? '—',
+        ok: m._testOk ?? null,
+        _raw: m,
+      })),
+  }
+})
+
+// Nhãn loại tiếng Việt cho capability đầu của model.
+function capLabel(cap) {
+  return {
+    'text_generation': 'Văn bản (LLM)', 'structured_output': 'Văn bản (LLM)',
+    'vision': 'Hình ảnh', 'image_generation': 'Hình ảnh',
+    'tts': 'Âm thanh', 'stt': 'Âm thanh',
+  }[cap] ?? 'Văn bản (LLM)'
+}
 
 function selectProvider(prov) {
-  selectedProviderName.value = prov.name
+  ai.selectProvider(prov.id)
 }
 
 const syncingAll = ref(false)
@@ -137,63 +175,93 @@ const advancedAi = reactive({
 
 const modelTypeFilter = ref('Tất cả loại')
 
-// ---- Test ping / Sync models cho một provider (demo tĩnh, chưa nối backend) ----
-function testPing(prov) {
-  prov.pinging = true
-  prov.statusText = 'Đang ping...'
+// ---- Test ping / Sync models cho một provider (nối API CoreAi thật) ----
+async function testPing(prov) {
+  if (!prov?.id) return
+  try {
+    const data = await ai.testProvider(prov.id)
 
-  // Giả lập độ trễ mạng 0.8–1.6s rồi trả kết quả ngẫu nhiên.
-  setTimeout(() => {
-    prov.pinging = false
-
-    const ok = Math.random() > 0.2
-    if (ok) {
-      prov.latencyText = `${120 + Math.floor(Math.random() * 500)}ms`
-      prov.statusText = `Kết nối tốt • ${prov.latencyText}`
-      prov.active = true
-    } else {
-      prov.latencyText = 'timeout'
-      prov.statusText = 'Mất kết nối'
-      prov.active = false
-    }
-  }, 800 + Math.random() * 800)
+    prov._latencyText = data.latency_ms != null ? `${data.latency_ms}ms` : '—'
+  } catch {
+    // lỗi đã lưu trong test_status qua store; UI đọc lại.
+  }
 }
 
-function syncProviderModels(prov) {
-  prov.syncing = true
-  setTimeout(() => {
-    prov.syncing = false
-
-    // Demo: đôi khi "tìm thấy" thêm 1 model mới.
-    if (Math.random() > 0.5)
-      prov.models = [...prov.models, M(`${prov.name.split(' ')[0]} Model ${prov.models.length + 1}`, 'Văn bản')]
-    prov.modelCount = `${prov.models.length} mô hình`
-    prov.statusText = `Đã đồng bộ ${prov.models.length} mô hình`
-  }, 1000 + Math.random() * 800)
+// Sync models — gọi endpoint sync-models (backend upsert ai_models).
+async function syncProviderModels(prov) {
+  if (!prov?.id) return
+  await ai.syncProvider(prov.id)
 }
 
-// Test ping riêng cho một model (demo tĩnh).
-function testModelPing(model) {
-  model.pinging = true
-  model.ok = null
-  setTimeout(() => {
-    model.pinging = false
+// Test ping riêng cho một model — gọi POST /models/{id}/test thật.
+async function testModelPing(model) {
+  if (!model?.id || !ai.selectedProvider?.id) return
+  await ai.testModel(ai.selectedProvider.id, model.id)
 
-    const ok = Math.random() > 0.2
+  const p = ai.providers.find(x => x.id === ai.selectedProvider.id)
+  const m = p?.models?.find(x => x.id === model.id)
+  if (m) {
+    model.ok = m._testOk ?? model.ok
+    model.latencyText = m._latencyText ?? '—'
+  }
+}
 
-    model.ok = ok
-    model.latencyText = ok ? `${80 + Math.floor(Math.random() * 600)}ms` : 'timeout'
-  }, 600 + Math.random() * 700)
+// ---- Dialog chỉnh capabilities của model ----
+const capDialog = ref(false)
+const capSaving = ref(false)
+const capError = ref('')
+const capEditing = ref(null)   // model đang sửa
+const capSelected = ref([])
+
+// Nhãn capability lấy từ backend (slug + tiếng Việt); fallback nếu chưa nạp.
+const CAPABILITY_OPTIONS = computed(() =>
+  ai.capabilities.length
+    ? ai.capabilities
+    : [
+      { value: 'text_generation', label: 'Sinh văn bản', icon: 'tabler-file-text', color: 'primary' },
+      { value: 'structured_output', label: 'Xuất có cấu trúc (JSON)', icon: 'tabler-braces', color: 'info' },
+      { value: 'vision', label: 'Hiểu ảnh (Vision)', icon: 'tabler-eye', color: 'success' },
+      { value: 'image_generation', label: 'Sinh ảnh', icon: 'tabler-photo', color: 'warning' },
+      { value: 'tts', label: 'Chuyển chữ thành giọng (TTS)', icon: 'tabler-microphone', color: 'error' },
+      { value: 'stt', label: 'Chuyển giọng thành chữ (STT)', icon: 'tabler-headphones', color: 'secondary' },
+    ],
+)
+
+// Meta của 1 capability slug (icon/label tiếng Việt) — dùng render icon.
+function capMeta(cap) {
+  return CAPABILITY_OPTIONS.value.find(c => c.value === cap) ?? null
+}
+
+function openCapabilitiesDialog(model) {
+  capEditing.value = model
+  capSelected.value = [...(model.capabilities ?? [])]
+  capError.value = ''
+  capDialog.value = true
+}
+
+async function saveCapabilities() {
+  if (!capEditing.value?.id || !ai.selectedProvider?.id) return
+  capSaving.value = true
+  capError.value = ''
+  try {
+    await ai.saveModelCapabilities(ai.selectedProvider.id, capEditing.value.id, capSelected.value)
+    capEditing.value.capabilities = [...capSelected.value]
+    capEditing.value.type = capSelected.value.length ? capLabel(capSelected.value[0]) : ''
+    capDialog.value = false
+  } catch (e) {
+    const errs = e?.data?.errors ?? e?.errors
+
+    capError.value = errs ? Object.values(errs).flat()[0] : (e?.data?.message ?? e?.message ?? 'Không lưu được')
+  } finally {
+    capSaving.value = false
+  }
 }
 
 function syncAllProviders() {
   syncingAll.value = true
-  activeProviders.value.forEach((p, i) => {
-    setTimeout(() => syncProviderModels(p), i * 200)
-  })
-  setTimeout(() => {
+  ai.testAllProviders().finally(() => {
     syncingAll.value = false
-  }, 1000 + activeProviders.value.length * 200)
+  })
 }
 
 // ---- Dialog Thêm nhà cung cấp (chuẩn 3 vùng AppDialogLayout, §4 docs) ----
@@ -202,36 +270,46 @@ const providerSaving = ref(false)
 const providerFormId = useId()
 
 const blankProvider = () => ({
-  name: 'OpenAI',
-  customName: '',
+  preset: 'openai',
+  key: '',
+  name: '',
+  driver: 'openai',
   apiKey: '',
+  showKey: false,
   endpoint: '',
-  monthlyCap: '50',
+  extraKeysText: '',
   enabled: true,
 })
 
 const providerForm = ref(blankProvider())
 
-const providerTypeOptions = [
-  'OpenAI',
-  'Anthropic (Claude)',
-  'Google AI (Gemini)',
-  'Stability AI',
-  'Runway',
-  'Replicate',
-  'Tùy chỉnh (Custom)',
+// Preset -> {driver, endpoint} điền sẵn; 'custom' = tự nhập.
+const providerPresets = [
+  { title: 'OpenAI', value: 'openai', driver: 'openai', endpoint: 'https://api.openai.com/v1' },
+  { title: 'Anthropic (Claude)', value: 'anthropic', driver: 'anthropic', endpoint: 'https://api.anthropic.com/v1' },
+  { title: 'Google AI (Gemini)', value: 'gemini', driver: 'gemini', endpoint: 'https://generativelanguage.googleapis.com' },
+  { title: 'OpenAI tương thích (Custom)', value: 'openai-compatible', driver: 'openai-compatible', endpoint: '' },
+  { title: 'Anthropic tương thích (Custom)', value: 'anthropic-compatible', driver: 'anthropic-compatible', endpoint: '' },
+  { title: 'ElevenLabs', value: 'elevenlabs', driver: 'elevenlabs', endpoint: 'https://api.elevenlabs.io/v1' },
 ]
 
-const providerEndpointHints = {
-  'OpenAI': 'https://api.openai.com/v1',
-  'Anthropic (Claude)': 'https://api.anthropic.com/v1',
-  'Google AI (Gemini)': 'https://generativelanguage.googleapis.com',
-  'Stability AI': 'https://api.stability.ai/v1',
-  'Runway': 'https://api.runwayml.com/v1',
-  'Replicate': 'https://api.replicate.com/v1',
+function onProviderPresetChange(presetValue) {
+  const preset = providerPresets.find(p => p.value === presetValue)
+  if (!preset) return
+  providerForm.value.driver = preset.driver
+  if (preset.endpoint) providerForm.value.endpoint = preset.endpoint
+
+  // Gợi ý key/name theo preset nếu đang trống.
+  if (!providerForm.value.key) {
+    providerForm.value.key = preset.value.replace(/[^a-z0-9-]/g, '-')
+  }
+  if (!providerForm.value.name) {
+    providerForm.value.name = preset.title.replace(/\s*\(Custom\)/, '')
+  }
 }
 
 function openProviderDialog() {
+  providerForm.value = blankProvider()
   providerDialog.value = true
 }
 
@@ -245,37 +323,43 @@ function resetProviderAfterLeave() {
   providerForm.value = blankProvider()
 }
 
-function onProviderTypeChange(name) {
-  if (providerEndpointHints[name])
-    providerForm.value.endpoint = providerEndpointHints[name]
-}
+// Lỗi validate trả về từ API (422) hiển thị trong dialog.
+const providerError = ref('')
 
-// Demo tĩnh: push vào danh sách cục bộ. Khi nối backend (P2-01) chuyển sang gọi API async.
-function saveProvider() {
+// Gọi API tạo provider -> unshift vào store -> hiện ngay trong panel.
+async function saveProvider() {
   providerSaving.value = true
+  providerError.value = ''
+  try {
+    const f = providerForm.value
 
-  const isCustom = providerForm.value.name === 'Tùy chỉnh (Custom)'
+    const extraKeys = (f.extraKeysText || '')
+      .split(/\r?\n|,/)
+      .map(s => s.trim())
+      .filter(Boolean)
 
-  const displayName = isCustom && providerForm.value.customName
-    ? providerForm.value.customName
-    : providerForm.value.name
+    await ai.addProvider({
+      key: f.key.trim(),
+      name: f.name.trim(),
+      kind: 'official',
+      driver: f.driver,
+      base_url: f.endpoint.trim(), // eslint-disable-line camelcase
+      api_key: f.apiKey, // eslint-disable-line camelcase
+      extra_keys: extraKeys, // eslint-disable-line camelcase
+      is_active: f.enabled, // eslint-disable-line camelcase
+    })
 
-  providerDetails.value.push({
-    name: displayName,
-    latency: '-',
-    modelsCount: 0,
-    enabled: providerForm.value.enabled,
-    apiKey: providerForm.value.apiKey,
-    endpoint: providerForm.value.endpoint,
-    monthlyCap: providerForm.value.monthlyCap,
-    showKey: false,
-    icon: 'tabler-server',
-    bg: '#eef2ff',
-    color: '#4285F4',
-  })
+    providerDialog.value = false
+  } catch (e) {
+    // Hiển thị thông điệp validate đầu tiên (422) hoặc lỗi chung.
+    const errs = e?.data?.errors ?? e?.errors
 
-  providerSaving.value = false
-  providerDialog.value = false
+    providerError.value = errs
+      ? Object.values(errs).flat()[0]
+      : (e?.data?.message ?? e?.message ?? 'Không tạo được nhà cung cấp')
+  } finally {
+    providerSaving.value = false
+  }
 }
 
 // ---- Dialog Thêm mô hình AI (component riêng trong components/dialogs/) ----
@@ -296,6 +380,12 @@ function addModel(payload) {
 function goToTab(tab) {
   if (tab) { activeTab.value = tab }
 }
+
+// Nạp providers thật + metadata form (drivers/capabilities) khi tab mount.
+onMounted(() => {
+  ai.fetchProviders({ withModels: true })
+  ai.fetchFormMeta()
+})
 </script>
 
 <template>
@@ -377,8 +467,11 @@ function goToTab(tab) {
             </VCol>
           </VRow>
 
-          <!-- Nhà cung cấp + Mô hình phổ biến -->
-          <VRow dense>
+          <!-- Nhà cung cấp + Kết nối — hai panel cùng chiều cao cố định, scroll khi dài -->
+          <VRow
+            dense
+            align="stretch"
+          >
             <VCol
               cols="12"
               lg="7"
@@ -387,6 +480,7 @@ function goToTab(tab) {
                 title="Nhà cung cấp đang sử dụng"
                 subtitle="Quản lý kết nối và trạng thái các nhà cung cấp AI."
                 border
+                class="h-100 d-flex flex-column"
               >
                 <template #append>
                   <VBtn
@@ -397,15 +491,15 @@ function goToTab(tab) {
                     Thêm nhà cung cấp
                   </VBtn>
                 </template>
-                <VCardText class="pa-0">
+                <VCardText class="pa-0 flex-grow-1 overflow-y-auto provider-list-scroll panel-fixed-h">
                   <div class="d-flex flex-column">
                     <div
                       v-for="(prov, idx) in activeProviders"
-                      :key="prov.name"
+                      :key="prov.id"
                       class="provider-item d-flex align-center justify-space-between pa-4"
                       :class="{
                         'border-b': idx < activeProviders.length - 1,
-                        'provider-item--selected': selectedProviderName === prov.name,
+                        'provider-item--selected': ai.selectedProviderId === prov.id,
                       }"
                       @click="selectProvider(prov)"
                     >
@@ -503,6 +597,7 @@ function goToTab(tab) {
                 title="Kết nối nhà cung cấp"
                 :subtitle="`Test ping, đồng bộ và xem model của ${selectedProvider.name}.`"
                 border
+                class="h-100 d-flex flex-column"
               >
                 <template #append>
                   <VBtn
@@ -515,7 +610,7 @@ function goToTab(tab) {
                     Đồng bộ tất cả
                   </VBtn>
                 </template>
-                <VCardText>
+                <VCardText class="flex-grow-1 overflow-y-auto panel-fixed-h">
                   <!-- Header provider đang chọn -->
                   <div class="d-flex align-center justify-space-between">
                     <div class="d-flex align-center">
@@ -589,12 +684,15 @@ function goToTab(tab) {
                     </VBtn>
                   </div>
 
-                  <!-- Danh sách model của provider đang chọn -->
+                  <!-- Danh sách model của provider đang chọn (scroll khi dài) -->
                   <div class="mt-4">
                     <div class="text-caption text-disabled mb-2">
                       {{ selectedProvider.models.length }} mô hình của {{ selectedProvider.name }}
                     </div>
-                    <div class="d-flex flex-column">
+                    <div
+                      class="d-flex flex-column model-list-scroll"
+                      style="overflow-y: auto;"
+                    >
                       <div
                         v-for="(m, i) in selectedProvider.models"
                         :key="m.name"
@@ -619,11 +717,32 @@ function goToTab(tab) {
                             <div class="text-body-2 font-weight-medium">
                               {{ m.name }}
                             </div>
-                            <div class="d-flex align-center gap-2">
-                              <span class="text-caption text-disabled">{{ m.type }}</span>
+                            <div class="d-flex align-center gap-1">
+                              <!-- Icon capabilities đã chọn; rỗng -> text Không có capabilities -->
+                              <template v-if="m.capabilities?.length">
+                                <VTooltip
+                                  v-for="cap in m.capabilities"
+                                  :key="cap"
+                                  :text="capMeta(cap)?.label ?? cap"
+                                  location="top"
+                                >
+                                  <template #activator="{ props }">
+                                    <VIcon
+                                      v-bind="props"
+                                      :icon="capMeta(cap)?.icon ?? 'tabler-cpu'"
+                                      :color="capMeta(cap)?.color ?? 'primary'"
+                                      size="15"
+                                    />
+                                  </template>
+                                </VTooltip>
+                              </template>
+                              <span
+                                v-else
+                                class="text-caption text-disabled"
+                              >Chưa có capabilities</span>
                               <span
                                 v-if="m.latencyText !== '—'"
-                                class="text-caption font-mono"
+                                class="text-caption font-mono ms-1"
                                 :class="m.ok === false ? 'text-error' : 'text-success'"
                               >
                                 {{ m.latencyText }}
@@ -631,16 +750,29 @@ function goToTab(tab) {
                             </div>
                           </div>
                         </div>
-                        <VBtn
-                          size="x-small"
-                          variant="tonal"
-                          color="primary"
-                          prepend-icon="tabler-plug-connected"
-                          :loading="m.pinging"
-                          @click="testModelPing(m)"
-                        >
-                          Test ping
-                        </VBtn>
+                        <div class="d-flex align-center gap-1">
+                          <IconBtn
+                            size="small"
+                            color="primary"
+                            title="Chỉnh capabilities"
+                            @click="openCapabilitiesDialog(m)"
+                          >
+                            <VIcon
+                              size="16"
+                              icon="tabler-adjustments"
+                            />
+                          </IconBtn>
+                          <VBtn
+                            size="x-small"
+                            variant="tonal"
+                            color="primary"
+                            prepend-icon="tabler-plug-connected"
+                            :loading="m.pinging"
+                            @click="testModelPing(m)"
+                          >
+                            Test ping
+                          </VBtn>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1482,6 +1614,16 @@ function goToTab(tab) {
         @close="closeProviderDialog"
       >
         <VCardText>
+          <VAlert
+            v-if="providerError"
+            color="error"
+            variant="tonal"
+            class="mb-4"
+            closable
+            @click:close="providerError = ''"
+          >
+            {{ providerError }}
+          </VAlert>
           <VForm
             :id="providerFormId"
             @submit.prevent="saveProvider"
@@ -1489,23 +1631,38 @@ function goToTab(tab) {
             <VRow>
               <VCol cols="12">
                 <AppSelect
-                  v-model="providerForm.name"
-                  :items="providerTypeOptions"
+                  v-model="providerForm.preset"
+                  :items="providerPresets"
+                  item-title="title"
+                  item-value="value"
                   label="Nhà cung cấp"
-                  placeholder="Chọn nhà cung cấp"
+                  placeholder="Chọn loại provider"
                   prepend-inner-icon="tabler-server"
-                  @update:model-value="onProviderTypeChange"
+                  @update:model-value="onProviderPresetChange"
                 />
               </VCol>
               <VCol
-                v-if="providerForm.name === 'Tùy chỉnh (Custom)'"
                 cols="12"
+                md="6"
               >
                 <AppTextField
-                  v-model="providerForm.customName"
+                  v-model="providerForm.key"
+                  label="Key định danh (unique)"
+                  placeholder="openai, gemini, azure-custom..."
+                  prepend-inner-icon="tabler-hash"
+                  hint="Chữ thường, số, dấu gạch — duy nhất toàn hệ thống"
+                />
+              </VCol>
+              <VCol
+                cols="12"
+                md="6"
+              >
+                <AppTextField
+                  v-model="providerForm.name"
                   label="Tên hiển thị"
-                  placeholder="VD: Azure OpenAI, Ollama Local..."
+                  placeholder="VD: OpenAI chính, Azure OpenAI..."
                   prepend-inner-icon="tabler-pencil"
+                  autocomplete="off"
                 />
               </VCol>
               <VCol cols="12">
@@ -1513,13 +1670,14 @@ function goToTab(tab) {
                   v-model="providerForm.apiKey"
                   label="API Secret Key"
                   placeholder="sk-..."
+                  :type="providerForm.showKey ? 'text' : 'password'"
                   prepend-inner-icon="tabler-key"
+                  :append-inner-icon="providerForm.showKey ? 'tabler-eye-off' : 'tabler-eye'"
+                  autocomplete="new-password"
+                  @click:append-inner="providerForm.showKey = !providerForm.showKey"
                 />
               </VCol>
-              <VCol
-                cols="12"
-                md="8"
-              >
+              <VCol cols="12">
                 <AppTextField
                   v-model="providerForm.endpoint"
                   label="Base URL / Endpoint"
@@ -1527,14 +1685,13 @@ function goToTab(tab) {
                   prepend-inner-icon="tabler-link"
                 />
               </VCol>
-              <VCol
-                cols="12"
-                md="4"
-              >
-                <AppTextField
-                  v-model="providerForm.monthlyCap"
-                  label="Hạn mức tháng ($)"
-                  prefix="$"
+              <VCol cols="12">
+                <AppTextarea
+                  v-model="providerForm.extraKeysText"
+                  label="API key phụ (xoay vòng) — mỗi dòng 1 key"
+                  placeholder="sk-phụ-1&#10;sk-phụ-2"
+                  rows="2"
+                  prepend-inner-icon="tabler-key"
                 />
               </VCol>
               <VCol cols="12">
@@ -1578,6 +1735,77 @@ function goToTab(tab) {
       v-model="modelDialog"
       @saved="addModel"
     />
+
+    <!-- Dialog chỉnh capabilities của model -->
+    <VDialog
+      v-model="capDialog"
+      max-width="560"
+      scrollable
+      :persistent="capSaving"
+    >
+      <AppDialogLayout
+        title="Capabilities của mô hình"
+        :subtitle="capEditing ? `${capEditing.name} (${capEditing.remoteModelId})` : ''"
+        :close-disabled="capSaving"
+        @close="capDialog = false"
+      >
+        <VCardText>
+          <VAlert
+            v-if="capError"
+            color="error"
+            variant="tonal"
+            class="mb-4"
+            closable
+            @click:close="capError = ''"
+          >
+            {{ capError }}
+          </VAlert>
+          <div class="text-body-2 text-medium-emphasis mb-3">
+            Chọn các tác vụ mô hình này có thể thực hiện (dùng để resolve model khi chạy AI).
+          </div>
+          <VCheckbox
+            v-for="cap in CAPABILITY_OPTIONS"
+            :key="cap.value"
+            v-model="capSelected"
+            :value="cap.value"
+            :label="cap.label"
+            :color="cap.color"
+            hide-details
+            density="compact"
+            class="mb-1"
+          >
+            <template #prepend>
+              <VIcon
+                :color="cap.color"
+                size="18"
+                class="me-2"
+                :icon="cap.icon"
+              />
+            </template>
+          </VCheckbox>
+        </VCardText>
+        <template #footer>
+          <VCardActions class="justify-end">
+            <VBtn
+              variant="tonal"
+              color="secondary"
+              :disabled="capSaving"
+              @click="capDialog = false"
+            >
+              Hủy
+            </VBtn>
+            <VBtn
+              variant="flat"
+              color="primary"
+              :loading="capSaving"
+              @click="saveCapabilities"
+            >
+              Lưu capabilities
+            </VBtn>
+          </VCardActions>
+        </template>
+      </AppDialogLayout>
+    </VDialog>
   </div>
 </template>
 
@@ -1613,5 +1841,31 @@ function goToTab(tab) {
 
 .font-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Hai panel provider/kết nối — cùng chiều cao cố định, scroll khi dài. */
+.panel-fixed-h {
+  height: 420px;
+  min-height: 420px;
+}
+
+/* Danh sách model trong panel Kết nối — thanh scroll rất mảnh, mờ. */
+.model-list-scroll,
+.provider-list-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-primary), 0.14) transparent;
+}
+.model-list-scroll::-webkit-scrollbar,
+.provider-list-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+.model-list-scroll::-webkit-scrollbar-thumb,
+.provider-list-scroll::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-primary), 0.14);
+  border-radius: 2px;
+}
+.model-list-scroll::-webkit-scrollbar-track,
+.provider-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 </style>

@@ -3,6 +3,7 @@
 namespace Modules\CoreAi\Providers;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\CoreAi\Contracts\CoreAiGatewayContract;
 use Modules\CoreAi\Drivers\AnthropicCompatibleDriver;
 use Modules\CoreAi\Drivers\AnthropicDriver;
 use Modules\CoreAi\Drivers\GeminiDriver;
@@ -11,6 +12,8 @@ use Modules\CoreAi\Drivers\OpenAiDriver;
 use Modules\CoreAi\Models\AiProvider;
 use Modules\CoreAi\Registries\AiDriverRegistry;
 use Modules\CoreAi\Services\AiProviderClient;
+use Modules\CoreAi\Services\CoreAiGateway;
+use Modules\CoreAi\Services\ModelResolver;
 use Modules\Identity\Registries\PermissionRegistry;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
@@ -75,6 +78,17 @@ class CoreAiServiceProvider extends ModuleServiceProvider
 
         $this->app->singleton(AiDriverRegistry::class, fn () => new AiDriverRegistry());
         $this->app->singleton(AiProviderClient::class, fn () => new AiProviderClient());
+        $this->app->singleton(ModelResolver::class, fn () => new ModelResolver());
+
+        // Cổng gọi AI duy nhất — mọi module nghiệp vụ inject contract này.
+        $this->app->singleton(
+            CoreAiGatewayContract::class,
+            fn ($app) => new CoreAiGateway(
+                $app->make(ModelResolver::class),
+                $app->make(AiDriverRegistry::class),
+            )
+        );
+        $this->app->alias(CoreAiGatewayContract::class, CoreAiGateway::class);
     }
 
     /**

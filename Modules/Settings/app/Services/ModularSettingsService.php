@@ -94,9 +94,9 @@ class ModularSettingsService
     {
         $secrets = $this->contractOf($group)::secretProperties();
 
-        [$writePayload] = $this->buildWritePayload($payload, $secrets);
+        [$writePayload, $secretsTouched] = $this->buildWritePayload($payload, $secrets);
 
-        return DB::transaction(function () use ($group, $writePayload, $expectedVersion, $secrets) {
+        return DB::transaction(function () use ($group, $writePayload, $expectedVersion, $secrets, $secretsTouched) {
             $current = $this->currentVersion($group);
 
             if ($current !== $expectedVersion) {
@@ -117,6 +117,9 @@ class ModularSettingsService
             $allowedProps = array_keys($this->contractOf($group)::validationRules());
             $safePayload = array_intersect_key($writePayload, array_flip($allowedProps));
 
+            // Snapshot giá trị CŨ trước khi fill (đã mask secret) để audit.
+            $before = $this->maskSecrets($settings->toArray(), $secrets);
+
             if (! empty($safePayload)) {
                 $settings->fill($safePayload);
             }
@@ -126,11 +129,16 @@ class ModularSettingsService
             unset($this->requestCache[$group]);
 
             $values = $settings->toArray();
+            $maskedAfter = $this->maskSecrets($values, $secrets);
+
+            // Ghi audit log (DoD P1-03): ai đổi config nào, trước/sau,
+            // field nào thay đổi — secret chỉ lưu cờ configured, KHÔNG lộ giá trị.
+            $this->writeAuditLog($group, $before, $maskedAfter, $secretsTouched);
 
             return [
                 'group' => $group,
                 'version' => (int) ($values['version'] ?? ($current + 1)),
-                'values' => $this->maskSecrets($values, $secrets),
+                'values' => $maskedAfter,
                 'secrets' => $secrets,
             ];
         });
@@ -281,5 +289,66 @@ class ModularSettingsService
         }
 
         return [$payload, $secretsTouched];
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghi một dòng audit log vào activity_log khi admin đổi config.
+     * =====================================================================
+     * So sánh $before/$after (đã mask secret) chỉ lấy các field THAY ĐỔI;
+     * secret chỉ lưu tên + cờ configured — TUYỆT ĐỐI không ghi giá trị thật.
+     * Bỏ qua hoàn toàn nếu không có field nào đổi (chỉ bump version).
+     *
+     * INPUT :
+     *   - string $group        — khóa nhóm settings.
+     *   - array  $before       — toàn bộ values CŨ (đã mask secret).
+     *   - array  $after        — toàn bộ values MỚI (đã mask secret).
+     *   - array  $secretsTouched — secret nào được ghi mới (giá trị luôn che).
+     *
+     * OUTPUT: void.
+     * SIDE EFFECT: INSERT activity_log (causer = user đăng nhập nếu có).
+     * =====================================================================
+     */
+    private function writeAuditLog(string $group, array $before, array $after, array $secretsTouched): void
+    {
+        // Chỉ giữ field thực sự đổi — bỏ 'version' vì nó luôn +1, không phải
+        // thay đổi nghiệp vụ mà admin cố tình cấu hình.
+        unset($before['version'], $after['version']);
+
+        $changed = [];
+        foreach ($after as $key => $newVal) {
+            $oldVal = $before[$key] ?? null;
+            if ($oldVal !== $newVal) {
+                $changed[$key] = ['old' => $oldVal, 'new' => $newVal];
+            }
+        }
+        // Field chỉ có trong before (bị xóa) cũng tính là đổi.
+        foreach ($before as $key => $oldVal) {
+            if (! array_key_exists($key, $after)) {
+                $changed[$key] = ['old' => $oldVal, 'new' => null];
+            }
+        }
+
+        if ($changed === []) {
+            return; // Không có thay đổi nghiệp vụ -> không spam log.
+        }
+
+        try {
+            activity()
+                ->event('updated')
+                ->withProperties([
+                    'settings_group' => $group,
+                    'changes' => $changed,
+                    'secrets_touched' => array_values($secretsTouched),
+                    'changed_fields' => array_keys($changed),
+                ])
+                ->log("settings.{$group}.updated");
+        } catch (\Throwable $e) {
+            // Audit lỗi không được làm hỏng việc lưu settings — chỉ log warning.
+            \Illuminate\Support\Facades\Log::warning('settings audit log failed', [
+                'group' => $group,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
