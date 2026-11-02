@@ -9,6 +9,7 @@ use Modules\CoreAi\Drivers\AnthropicDriver;
 use Modules\CoreAi\Drivers\GeminiDriver;
 use Modules\CoreAi\Drivers\OpenAiCompatibleDriver;
 use Modules\CoreAi\Drivers\OpenAiDriver;
+use Modules\CoreAi\Drivers\XpikiDriver;
 use Modules\CoreAi\Models\AiProvider;
 use Modules\CoreAi\Registries\AiDriverRegistry;
 use Modules\CoreAi\Services\AiProviderClient;
@@ -114,6 +115,7 @@ class CoreAiServiceProvider extends ModuleServiceProvider
         $drivers->register(AiProvider::DRIVER_GEMINI, GeminiDriver::class);
         $drivers->register(AiProvider::DRIVER_OPENAI_COMPATIBLE, OpenAiCompatibleDriver::class);
         $drivers->register(AiProvider::DRIVER_ANTHROPIC_COMPATIBLE, AnthropicCompatibleDriver::class);
+        $drivers->register(AiProvider::DRIVER_XPIKI, XpikiDriver::class);
 
         /** @var PermissionRegistry $permissions */
         $permissions = $this->app->make(PermissionRegistry::class);

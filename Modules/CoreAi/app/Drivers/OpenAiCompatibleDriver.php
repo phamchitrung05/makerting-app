@@ -74,7 +74,9 @@ class OpenAiCompatibleDriver extends OpenAiDriver
         } catch (AiGatewayException $e) {
             $ms = (int) round((microtime(true) - $start) * 1000);
 
-            if ($e->errorCode() === 'invalid_request') {
+            // Chỉ tha 404 (endpoint /models không có — Ollama/LM Studio).
+            // 400/422 (invalid_request) là lỗi request/base_url sai -> ok:false.
+            if ($e->errorCode() === 'not_found') {
                 return [
                     'ok' => true,
                     'latency_ms' => $ms,

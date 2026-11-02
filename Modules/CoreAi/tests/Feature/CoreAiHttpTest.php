@@ -299,6 +299,7 @@ class CoreAiHttpTest extends TestCase
             public function key(): string { return 'fake'; }
             public function supports(string $o): bool { return true; }
             public function test(\Modules\CoreAi\DTOs\AiResolvedModelDto $r): array { return ['ok' => true, 'latency_ms' => 5, 'message' => 'Kết nối tốt']; }
+            public function testModel(\Modules\CoreAi\DTOs\AiResolvedModelDto $r): array { return ['ok' => true, 'latency_ms' => 5, 'message' => 'Model ok']; }
             public function structured(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiStructuredRequest $q): \Modules\CoreAi\DTOs\AiStructuredResponse { return new \Modules\CoreAi\DTOs\AiStructuredResponse(text: 'x'); }
             public function image(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiImageRequest $q): \Modules\CoreAi\DTOs\AiImageResponse { return new \Modules\CoreAi\DTOs\AiImageResponse(); }
             public function speech(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiSpeechRequest $q): \Modules\CoreAi\DTOs\AiSpeechResponse { return new \Modules\CoreAi\DTOs\AiSpeechResponse(); }
@@ -337,6 +338,7 @@ class CoreAiHttpTest extends TestCase
             {
                 return ['ok' => true, 'latency_ms' => 5, 'message' => 'ok', 'models' => $this->ids];
             }
+            public function testModel(\Modules\CoreAi\DTOs\AiResolvedModelDto $r): array { return ['ok' => true, 'latency_ms' => 5, 'message' => 'Model ok']; }
             public function structured(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiStructuredRequest $q): \Modules\CoreAi\DTOs\AiStructuredResponse { return new \Modules\CoreAi\DTOs\AiStructuredResponse(text: 'x'); }
             public function image(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiImageRequest $q): \Modules\CoreAi\DTOs\AiImageResponse { return new \Modules\CoreAi\DTOs\AiImageResponse(); }
             public function speech(\Modules\CoreAi\DTOs\AiResolvedModelDto $r, \Modules\CoreAi\DTOs\AiSpeechRequest $q): \Modules\CoreAi\DTOs\AiSpeechResponse { return new \Modules\CoreAi\DTOs\AiSpeechResponse(); }
@@ -374,6 +376,61 @@ class CoreAiHttpTest extends TestCase
         $this->assertSame([], AiModel::where('remote_model_id','whisper-1')->first()->capabilities());
     }
 
+    /* ================= TASK 2: XÓA MODEL CŨ KHI ĐỔI KEY / SYNC ================= */
+
+    public function test_update_doi_api_key_xoa_model_cu(): void
+    {
+        $u = $this->admin(['coreai.manage']);
+        $p = $this->makeProvider(['key' => 'pv', 'api_key_encrypted' => app(CredentialVault::class)->encrypt('key-cu')]);
+        $this->makeModel($p, ['remote_model_id' => 'm-a']);
+        $this->makeModel($p, ['remote_model_id' => 'm-b']);
+        $this->assertSame(2, AiModel::where('ai_provider_id', $p->id)->count());
+        $p->update(['test_status' => 'ok']);
+
+        // Đổi sang key MỚI khác -> toàn bộ model cũ bị xóa + reset test_status.
+        $res = $this->putJson("/api/v1/admin/core-ai/providers/{$p->id}", [
+            'api_key' => 'sk-moi-khac-12345',
+        ], $this->token($u));
+        $res->assertOk();
+        $this->assertSame(0, AiModel::where('ai_provider_id', $p->id)->count());
+        $this->assertSame(2, (int) $res->json('data.deleted_models'));
+        $this->assertSame('untested', $p->fresh()->test_status);
+    }
+
+    public function test_update_giu_nguyen_key_khong_xoa_model(): void
+    {
+        $u = $this->admin(['coreai.manage']);
+        $p = $this->makeProvider(['api_key_encrypted' => app(CredentialVault::class)->encrypt('sk-cung-mot-key-123')]);
+        $this->makeModel($p, ['remote_model_id' => 'm-a']);
+        $p->update(['test_status' => 'ok']);
+
+        // PUT nhưng api_key giống key cũ -> KHÔNG xóa model.
+        $res = $this->putJson("/api/v1/admin/core-ai/providers/{$p->id}", [
+            'name' => 'Đổi tên', 'api_key' => 'sk-cung-mot-key-123',
+        ], $this->token($u));
+        $res->assertOk();
+        $this->assertSame(1, AiModel::where('ai_provider_id', $p->id)->count());
+        $this->assertSame(0, (int) $res->json('data.deleted_models'));
+        $this->assertSame('ok', $p->fresh()->test_status); // không reset
+    }
+
+    public function test_sync_models_xoa_model_khong_con_trong_remote(): void
+    {
+        $u = $this->admin(['coreai.manage']);
+        $p = $this->makeProvider(['key' => 'pv', 'driver' => 'fake']);
+        $this->makeModel($p, ['remote_model_id' => 'gpt-4o']);
+        $this->makeModel($p, ['remote_model_id' => 'stale-model']); // không có trong remote -> xóa
+
+        $this->registerFakeDriverReturningModels(['gpt-4o', 'new-model']);
+
+        $res = $this->postJson("/api/v1/admin/core-ai/providers/{$p->id}/sync-models", [], $this->token($u));
+        $res->assertOk();
+        $this->assertSame(1, (int) $res->json('data.deleted'));
+
+        $ids = AiModel::where('ai_provider_id', $p->id)->pluck('remote_model_id')->sort()->values()->all();
+        $this->assertSame(['gpt-4o', 'new-model'], $ids);
+        $this->assertNull(AiModel::where('remote_model_id', 'stale-model')->first());
+    }
     public function test_sync_models_loi_khi_provider_khong_key(): void
     {
         $u = $this->admin(['coreai.manage']);
@@ -404,7 +461,10 @@ class CoreAiHttpTest extends TestCase
         $this->assertTrue($res->json('data.ok'));
         $this->assertTrue((bool) $res->json('data.is_available'));
         $this->assertTrue((bool) $m->fresh()->is_available);
-        $this->assertSame('ok', $p->fresh()->test_status);
+
+        // Model-ping KHÔNG đụng test_status của provider (model riêng fail
+        // không có nghĩa provider hỏng) — vẫn giữ giá trị trước đó.
+        $this->assertNotSame('failed', $p->fresh()->test_status);
     }
 
     public function test_test_model_loi_khi_provider_khong_key(): void

@@ -82,7 +82,8 @@ class AnthropicCompatibleDriver extends AnthropicDriver
         } catch (AiGatewayException $e) {
             $ms = (int) round((microtime(true) - $start) * 1000);
 
-            if ($e->errorCode() === 'invalid_request') {
+            // Chỉ tha 404 — 400/422 là lỗi thật.
+            if ($e->errorCode() === 'not_found') {
                 return [
                     'ok' => true,
                     'latency_ms' => $ms,

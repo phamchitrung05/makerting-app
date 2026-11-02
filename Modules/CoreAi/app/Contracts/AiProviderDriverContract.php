@@ -74,4 +74,14 @@ interface AiProviderDriverContract
 
     /** STT → AiTranscribeResponse. */
     public function transcribe(AiResolvedModelDto $resolved, AiTranscribeRequest $request): AiTranscribeResponse;
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Deep-ping 1 model cụ thể (gọi generate tối thiểu, không phải
+     * chỉ /models) — dùng cho nút "Test ping" từng model trong UI.
+     * INPUT: resolved (model->remote_model_id là model đang test).
+     * OUTPUT: array{ok,latency_ms,message,model_id?,error_code?}.
+     * =====================================================================
+     */
+    public function testModel(AiResolvedModelDto $resolved): array;
 }

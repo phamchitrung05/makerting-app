@@ -172,6 +172,7 @@ class CoreAiGatewayTest extends TestCase
             public function key(): string { return 'fake'; }
             public function supports(string $operation): bool { return in_array($operation, ['structured', 'image', 'speech', 'transcribe'], true); }
             public function test(AiResolvedModelDto $r): array { return ['ok' => true, 'message' => 'fake']; }
+            public function testModel(AiResolvedModelDto $r): array { return ['ok' => true, 'latency_ms' => 1, 'message' => 'fake model', 'model_id' => $r->model->remote_model_id]; }
             public function structured(AiResolvedModelDto $r, AiStructuredRequest $req): AiStructuredResponse
             {
                 return ($this->fn)($r, $req);

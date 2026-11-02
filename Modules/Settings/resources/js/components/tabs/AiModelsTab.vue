@@ -9,8 +9,8 @@
   backend (ai_providers/ai_models/CoreAi triển khai ở P2-01). Chuẩn Vuexy:
   tabler-* icons + Vuetify components + typography/mật độ/rounded mặc định.
 
-  CÁC HÀM/METHOD TRONG FILE: openProviderDialog/saveProvider (dialog Thêm
-  nhà cung cấp inline), openModelDialog/addModel (dialog Thêm mô hình tách
+  CÁC HÀM/METHOD TRONG FILE: openProviderDialog/configureProvider/saveProvider
+  (dialog Thêm+Sửa nhà cung cấp inline), openModelDialog/addModel (dialog Thêm mô hình tách
   riêng tại ../dialogs/AddAiModelDialog.vue), goToTab (chuyển tab nội bộ).
   INPUT/OUTPUT CỦA CLASS (tổng thể): không — render UI tĩnh.
   SIDE EFFECT: không.
@@ -65,7 +65,8 @@ const selectedProvider = computed(() => {
     ...p,
     icon: style.icon, bg: style.bg, color: style.color,
     pinging: ai.testingId === p.id,
-    syncing: false,
+    syncing: ai.syncingId === p.id,
+    _syncError: p._syncError ?? null,
     active: p.is_active,
     latencyText: p._latencyText ?? '—',
     statusText: p.test_status === 'ok' ? 'Đang hoạt động' : (p.test_status === 'failed' ? 'Lỗi kết nối' : 'Đã cấu hình'),
@@ -91,6 +92,18 @@ const selectedProvider = computed(() => {
 })
 
 // Nhãn loại tiếng Việt cho capability đầu của model.
+// Màu trạng thái theo test_status: failed->đỏ, ok->xanh, khác->vàng.
+function statusColorClass(p) {
+  const s = p?.test_status ?? p?._raw?.test_status
+
+  return s === 'failed' ? 'text-error' : (s === 'ok' ? 'text-success' : 'text-warning')
+}
+function statusDotColor(p) {
+  const s = p?.test_status ?? p?._raw?.test_status
+
+  return s === 'failed' ? 'rgb(var(--v-theme-error))' : (s === 'ok' ? 'rgb(var(--v-theme-success))' : 'rgb(var(--v-theme-warning))')
+}
+
 function capLabel(cap) {
   return {
     'text_generation': 'Văn bản (LLM)', 'structured_output': 'Văn bản (LLM)',
@@ -187,10 +200,27 @@ async function testPing(prov) {
   }
 }
 
-// Sync models — gọi endpoint sync-models (backend upsert ai_models).
+// Thông báo kết quả sync/ping (snackbar).
+const snack = ref({ show: false, text: '', color: 'success' })
+function notify(text, color = 'success') {
+  snack.value = { show: true, text, color }
+}
+
+// Sync models — gọi endpoint sync-models (backend upsert ai_models + delete stale).
 async function syncProviderModels(prov) {
   if (!prov?.id) return
-  await ai.syncProvider(prov.id)
+  try {
+    const data = await ai.syncProvider(prov.id)
+
+    // Hiện chi tiết: model mới + model cũ đã dọn (Task 2 backend trả deleted).
+    const created = data?.created ?? 0
+    const deleted = data?.deleted ?? 0
+    const synced = data?.synced ?? 0
+
+    notify(`Đồng bộ xong: ${synced} model${created ? `, ${created} mới` : ''}${deleted ? `, dọn ${deleted} cũ` : ''}`)
+  } catch (e) {
+    notify(e?.data?.message ?? e?.message ?? 'Đồng bộ thất bại', 'error')
+  }
 }
 
 // Test ping riêng cho một model — gọi POST /models/{id}/test thật.
@@ -282,15 +312,22 @@ const blankProvider = () => ({
 })
 
 const providerForm = ref(blankProvider())
+const providerEditing = ref(null) // provider đang sửa — null = chế độ Thêm mới
+const providerDialogMode = computed(() => (providerEditing.value ? 'edit' : 'create'))
 
 // Preset -> {driver, endpoint} điền sẵn; 'custom' = tự nhập.
 const providerPresets = [
   { title: 'OpenAI', value: 'openai', driver: 'openai', endpoint: 'https://api.openai.com/v1' },
-  { title: 'Anthropic (Claude)', value: 'anthropic', driver: 'anthropic', endpoint: 'https://api.anthropic.com/v1' },
+
+  // Anthropic: base_url là ORIGIN — driver tự nối 'v1/...' (không để /v1 ở đây kẻo /v1/v1).
+  { title: 'Anthropic (Claude)', value: 'anthropic', driver: 'anthropic', endpoint: 'https://api.anthropic.com' },
+
+  // Gemini: ORIGIN — driver tự nối 'v1beta/...'.
   { title: 'Google AI (Gemini)', value: 'gemini', driver: 'gemini', endpoint: 'https://generativelanguage.googleapis.com' },
   { title: 'OpenAI tương thích (Custom)', value: 'openai-compatible', driver: 'openai-compatible', endpoint: '' },
   { title: 'Anthropic tương thích (Custom)', value: 'anthropic-compatible', driver: 'anthropic-compatible', endpoint: '' },
   { title: 'ElevenLabs', value: 'elevenlabs', driver: 'elevenlabs', endpoint: 'https://api.elevenlabs.io/v1' },
+  { title: 'XPIKI (ảnh/video)', value: 'xpiki', driver: 'xpiki', endpoint: 'https://api.xpiki.com/v1' },
 ]
 
 function onProviderPresetChange(presetValue) {
@@ -309,7 +346,33 @@ function onProviderPresetChange(presetValue) {
 }
 
 function openProviderDialog() {
+  providerEditing.value = null
   providerForm.value = blankProvider()
+  providerError.value = ''
+  providerDialog.value = true
+}
+
+/*
+ * Mở dialog ở chế độ Cấu hình cho provider có sẵn — đổ dữ liệu không bí mật
+ * vào form; apiKey/extraKeys để TRỐNG (server giữ nguyên khi không gửi).
+ */
+function configureProvider(prov) {
+  const p = prov?._raw ?? prov
+
+  providerEditing.value = p
+  providerError.value = ''
+  providerForm.value = {
+    preset: p.driver ?? 'openai',
+    key: p.key ?? '',
+    name: p.name ?? '',
+    driver: p.driver ?? 'openai',
+    apiKey: '',
+    showKey: false,
+    endpoint: p.base_url ?? '',
+    extraKeysText: '',
+    enabled: p.is_active !== false,
+  }
+
   providerDialog.value = true
 }
 
@@ -321,12 +384,18 @@ function closeProviderDialog() {
 function resetProviderAfterLeave() {
   if (providerDialog.value) return
   providerForm.value = blankProvider()
+  providerEditing.value = null
 }
 
 // Lỗi validate trả về từ API (422) hiển thị trong dialog.
 const providerError = ref('')
 
-// Gọi API tạo provider -> unshift vào store -> hiện ngay trong panel.
+/*
+ * Lưu provider — dual-mode:
+ * - create: POST toàn bộ form (key/name/kind=official/driver/endpoint/key/extra).
+ * - edit  : PUT partial — api_key chỉ gửi khi nhập mới; extra_keys chỉ gửi khi
+ *           người dùng gõ vào ô (để trống = giữ nguyên danh sách key phụ cũ).
+ */
 async function saveProvider() {
   providerSaving.value = true
   providerError.value = ''
@@ -338,16 +407,32 @@ async function saveProvider() {
       .map(s => s.trim())
       .filter(Boolean)
 
-    await ai.addProvider({
-      key: f.key.trim(),
-      name: f.name.trim(),
-      kind: 'official',
-      driver: f.driver,
-      base_url: f.endpoint.trim(), // eslint-disable-line camelcase
-      api_key: f.apiKey, // eslint-disable-line camelcase
-      extra_keys: extraKeys, // eslint-disable-line camelcase
-      is_active: f.enabled, // eslint-disable-line camelcase
-    })
+    if (providerDialogMode.value === 'edit' && providerEditing.value?.id) {
+      const payload = {
+        key: f.key.trim(),
+        name: f.name.trim(),
+        kind: providerEditing.value.kind ?? 'official',
+        driver: f.driver,
+        base_url: f.endpoint.trim(), // eslint-disable-line camelcase
+        is_active: f.enabled, // eslint-disable-line camelcase
+      }
+
+      if ((f.apiKey || '').trim() !== '') payload.api_key = f.apiKey.trim() // eslint-disable-line camelcase
+      if ((f.extraKeysText || '').trim() !== '') payload.extra_keys = extraKeys // eslint-disable-line camelcase
+
+      await ai.updateProvider(providerEditing.value.id, payload)
+    } else {
+      await ai.addProvider({
+        key: f.key.trim(),
+        name: f.name.trim(),
+        kind: 'official',
+        driver: f.driver,
+        base_url: f.endpoint.trim(), // eslint-disable-line camelcase
+        api_key: f.apiKey, // eslint-disable-line camelcase
+        extra_keys: extraKeys, // eslint-disable-line camelcase
+        is_active: f.enabled, // eslint-disable-line camelcase
+      })
+    }
 
     providerDialog.value = false
   } catch (e) {
@@ -356,7 +441,7 @@ async function saveProvider() {
 
     providerError.value = errs
       ? Object.values(errs).flat()[0]
-      : (e?.data?.message ?? e?.message ?? 'Không tạo được nhà cung cấp')
+      : (e?.data?.message ?? e?.message ?? 'Không lưu được nhà cung cấp')
   } finally {
     providerSaving.value = false
   }
@@ -383,7 +468,7 @@ function goToTab(tab) {
 
 // Nạp providers thật + metadata form (drivers/capabilities) khi tab mount.
 onMounted(() => {
-  ai.fetchProviders({ withModels: true })
+  ai.ensureLoaded({ withModels: true })
   ai.fetchFormMeta()
 })
 </script>
@@ -531,11 +616,11 @@ onMounted(() => {
                           <div class="d-flex align-center gap-1">
                             <span
                               class="status-dot"
-                              :style="{ backgroundColor: prov.active ? 'rgb(var(--v-theme-success))' : 'rgb(var(--v-theme-warning))' }"
+                              :style="{ backgroundColor: statusDotColor(prov) }"
                             />
                             <span
                               class="text-caption"
-                              :class="prov.active ? 'text-success' : 'text-warning'"
+                              :class="statusColorClass(prov)"
                             >
                               {{ prov.statusText }}
                             </span>
@@ -575,7 +660,7 @@ onMounted(() => {
                         <VBtn
                           variant="tonal"
                           size="small"
-                          @click="goToTab('providers')"
+                          @click="configureProvider(prov)"
                         >
                           Cấu hình
                         </VBtn>
@@ -638,11 +723,11 @@ onMounted(() => {
                         <div class="d-flex align-center gap-1">
                           <span
                             class="status-dot"
-                            :style="{ backgroundColor: selectedProvider.active ? 'rgb(var(--v-theme-success))' : 'rgb(var(--v-theme-warning))' }"
+                            :style="{ backgroundColor: statusDotColor(selectedProvider) }"
                           />
                           <span
                             class="text-caption"
-                            :class="selectedProvider.active ? 'text-success' : 'text-warning'"
+                            :class="statusColorClass(selectedProvider)"
                           >
                             {{ selectedProvider.statusText }}
                           </span>
@@ -650,8 +735,11 @@ onMounted(() => {
                       </div>
                     </div>
                     <div class="text-end">
-                      <div class="text-caption text-disabled">
-                        {{ selectedProvider.modelCount }}
+                      <div
+                        class="text-caption"
+                        :class="selectedProvider._syncError ? 'text-error font-weight-medium' : 'text-disabled'"
+                      >
+                        {{ selectedProvider._syncError ?? selectedProvider.modelCount }}
                       </div>
                       <div class="text-caption text-disabled font-mono">
                         {{ selectedProvider.latencyText }}
@@ -1608,8 +1696,10 @@ onMounted(() => {
       @after-leave="resetProviderAfterLeave"
     >
       <AppDialogLayout
-        title="Thêm nhà cung cấp AI"
-        subtitle="Kết nối nhà cung cấp mới bằng API key và endpoint."
+        :title="providerDialogMode === 'edit' ? 'Cấu hình nhà cung cấp AI' : 'Thêm nhà cung cấp AI'"
+        :subtitle="providerDialogMode === 'edit'
+          ? `Chỉnh sửa kết nối ${providerEditing?.name ?? ''} — để trống ô key nếu giữ nguyên.`
+          : 'Kết nối nhà cung cấp mới bằng API key và endpoint.'"
         :close-disabled="providerSaving"
         @close="closeProviderDialog"
       >
@@ -1638,6 +1728,7 @@ onMounted(() => {
                   label="Nhà cung cấp"
                   placeholder="Chọn loại provider"
                   prepend-inner-icon="tabler-server"
+                  :hint="providerDialogMode === 'edit' ? 'Đổi loại provider sẽ đổi driver xử lý request' : ''"
                   @update:model-value="onProviderPresetChange"
                 />
               </VCol>
@@ -1668,8 +1759,8 @@ onMounted(() => {
               <VCol cols="12">
                 <AppTextField
                   v-model="providerForm.apiKey"
-                  label="API Secret Key"
-                  placeholder="sk-..."
+                  :label="providerDialogMode === 'edit' ? 'API Secret Key (để trống = giữ key hiện tại)' : 'API Secret Key'"
+                  :placeholder="providerDialogMode === 'edit' ? 'Nhập key mới nếu muốn thay' : 'sk-...'"
                   :type="providerForm.showKey ? 'text' : 'password'"
                   prepend-inner-icon="tabler-key"
                   :append-inner-icon="providerForm.showKey ? 'tabler-eye-off' : 'tabler-eye'"
@@ -1688,7 +1779,9 @@ onMounted(() => {
               <VCol cols="12">
                 <AppTextarea
                   v-model="providerForm.extraKeysText"
-                  label="API key phụ (xoay vòng) — mỗi dòng 1 key"
+                  :label="providerDialogMode === 'edit'
+                    ? `API key phụ (xoay vòng) — đã lưu ${providerEditing?.extra_keys_count ?? 0} key; nhập để THAY TOÀN BỘ`
+                    : 'API key phụ (xoay vòng) — mỗi dòng 1 key'"
                   placeholder="sk-phụ-1&#10;sk-phụ-2"
                   rows="2"
                   prepend-inner-icon="tabler-key"
@@ -1697,7 +1790,7 @@ onMounted(() => {
               <VCol cols="12">
                 <VSwitch
                   v-model="providerForm.enabled"
-                  label="Kích hoạt ngay sau khi thêm"
+                  :label="providerDialogMode === 'edit' ? 'Đang kích hoạt' : 'Kích hoạt ngay sau khi thêm'"
                   color="primary"
                   hide-details
                   inset
@@ -1723,7 +1816,7 @@ onMounted(() => {
               color="primary"
               :loading="providerSaving"
             >
-              Thêm nhà cung cấp
+              {{ providerDialogMode === 'edit' ? 'Lưu cấu hình' : 'Thêm nhà cung cấp' }}
             </VBtn>
           </VCardActions>
         </template>
@@ -1735,6 +1828,16 @@ onMounted(() => {
       v-model="modelDialog"
       @saved="addModel"
     />
+
+    <!-- Snackbar thông báo sync/ping -->
+    <VSnackbar
+      v-model="snack.show"
+      :color="snack.color"
+      location="bottom right"
+      :timeout="4000"
+    >
+      {{ snack.text }}
+    </VSnackbar>
 
     <!-- Dialog chỉnh capabilities của model -->
     <VDialog

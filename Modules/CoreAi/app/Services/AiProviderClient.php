@@ -42,6 +42,9 @@ class AiProviderClient extends SafeRemoteFetcher
     /** Mặc định kích thước response tối đa (32MB — đủ audio/ảnh lớn). */
     protected int $maxBytes = 32 * 1024 * 1024;
 
+    /** Boundary multipart vừa build (để normalizeBody gắn vào Content-Type). */
+    protected ?string $lastMultipartBoundary = null;
+
     /**
      * =====================================================================
      * CHỨC NĂNG: Gọi HTTP tới provider AI — POST JSON/multipart, binary
@@ -231,7 +234,10 @@ class AiProviderClient extends SafeRemoteFetcher
             $status === 401 || $status === 403 => AiGatewayException::auth($msg, $ctx),
             $status === 429 => AiGatewayException::rateLimit($msg, $ctx),
             $status >= 500 => AiGatewayException::providerError($msg, $ctx),
-            $status === 400 || $status === 404 || $status === 422 => AiGatewayException::withCode('invalid_request', $msg, $ctx),
+            // 404 = endpoint không tồn tại (mã riêng để driver compatible chỉ
+            // tha trường hợp này — KHÔNG tha 400/422 là lỗi request thật).
+            $status === 404 => AiGatewayException::withCode('not_found', $msg, $ctx),
+            $status === 400 || $status === 422 => AiGatewayException::withCode('invalid_request', $msg, $ctx),
             default => AiGatewayException::providerError($msg, $ctx),
         };
     }
@@ -299,7 +305,9 @@ class AiProviderClient extends SafeRemoteFetcher
         // array — multipart nếu có field file, ngược lại JSON.
         foreach ($body as $v) {
             if (is_array($v) && (isset($v['path']) || isset($v['contents']) || isset($v['file']))) {
-                return [$this->buildMultipart($body), $options['contentType'] ?? 'multipart/form-data'];
+                $mp = $this->buildMultipart($body);
+
+                return [$mp, ($options['contentType'] ?? 'multipart/form-data') . '; boundary=' . $this->lastMultipartBoundary];
             }
         }
 
@@ -314,6 +322,7 @@ class AiProviderClient extends SafeRemoteFetcher
     protected function buildMultipart(array $fields): string
     {
         $boundary = '----CoreAiFormBoundary' . bin2hex(random_bytes(8));
+        $this->lastMultipartBoundary = $boundary;
         $lines = [];
         foreach ($fields as $name => $value) {
             if (is_array($value) && (isset($value['path']) || isset($value['contents']))) {

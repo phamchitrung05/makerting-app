@@ -284,7 +284,7 @@ class OpenAiDriver extends AbstractAiDriver
                 $r->provider,
                 'POST',
                 $this->url($r->provider, 'audio/speech'),
-                $this->headers($r->apiKey) + ['Content-Type: application/json'],
+                array_merge($this->headers($r->apiKey), ['Content-Type: application/json']),
                 json_encode($payload, JSON_UNESCAPED_UNICODE),
                 ['keyIndex' => $r->keyIndex, 'maxBytes' => 64 * 1024 * 1024]
             );

@@ -119,9 +119,31 @@ class AiProviderController extends Controller
             }
         }
 
+
         // api_key chỉ ghi khi client gửi giá trị mới không rỗng.
+        $deletedModels = 0;
         if (array_key_exists('api_key', $data) && filled($data['api_key'])) {
-            $aiProvider->api_key_encrypted = $this->vault->encrypt($data['api_key']);
+            $newKey = (string) $data['api_key'];
+            $keyChanged = $newKey !== (string) ($aiProvider->apiKey() ?? '');
+
+            $aiProvider->api_key_encrypted = $this->vault->encrypt($newKey);
+
+            if ($keyChanged) {
+                // Key mới khác key cũ -> model cũ không còn thuộc key này:
+                // xóa sạch để tránh rác (ai_runs/ai_usage_logs đã snapshot tên
+                // model độc lập nên việc xóa là an toàn), reset trạng thái ping.
+                $deletedModels = $aiProvider->models()->count();
+                $aiProvider->models()->delete();
+                $aiProvider->test_status = AiProvider::TEST_UNTESTED;
+                $aiProvider->last_tested_at = null;
+
+                \Illuminate\Support\Facades\Log::info('core-ai provider key rotated -> cleared stale models', [
+                    'provider_id' => $aiProvider->id,
+                    'provider_key' => $aiProvider->key,
+                    'deleted_models' => $deletedModels,
+                    'by' => auth()->id(),
+                ]);
+            }
         }
 
         // extra_keys gửi (kể cả []) = THAY TOÀN BỘ danh sách key phụ.
@@ -131,8 +153,12 @@ class AiProviderController extends Controller
 
         $aiProvider->save();
 
+        $resource = new AiProviderResource($aiProvider->fresh());
+
         return BaseResponse::success(
-            new AiProviderResource($aiProvider->fresh()),
+            array_merge($resource->toArray($request), [
+                'deleted_models' => $deletedModels,
+            ]),
             'Cập nhật nhà cung cấp thành công',
         );
     }
@@ -232,6 +258,11 @@ class AiProviderController extends Controller
 
         $aiProvider->markTestResult((bool) ($result['ok'] ?? false));
 
+        // Ping thất bại (DNS/auth/mạng) -> báo lỗi, không coi như đồng bộ xong.
+        if (! ($result['ok'] ?? false)) {
+            return BaseResponse::error('Không đồng bộ được: '.($result['message'] ?? 'kết nối thất bại'), 502, [], ['test_status' => $aiProvider->fresh()->test_status]);
+        }
+
         $remoteIds = is_array($result['models'] ?? null) ? $result['models'] : [];
         $created = 0;
         $updated = 0;
@@ -266,12 +297,35 @@ class AiProviderController extends Controller
             $synced[] = $remoteId;
         }
 
+        // Dọn model cũ không còn trong danh sách remote trả về (đổi key /
+        // provider gỡ model) — ai_runs/ai_usage_logs đã snapshot tên model
+        // độc lập nên việc xóa là an toàn.
+        $deleted = 0;
+        if ($synced !== []) {
+            $deleted = $aiProvider->models()
+                ->whereNotIn('remote_model_id', $synced)
+                ->delete();
+        } else {
+            // Remote trả rỗng (endpoint không liệt kê) -> xóa hết model của provider.
+            $deleted = $aiProvider->models()->delete();
+        }
+
+        if ($deleted > 0) {
+            \Illuminate\Support\Facades\Log::info('core-ai sync-models removed stale models', [
+                'provider_id' => $aiProvider->id,
+                'provider_key' => $aiProvider->key,
+                'deleted' => $deleted,
+                'kept' => count($synced),
+            ]);
+        }
+
         return BaseResponse::success([
             'ok' => (bool) ($result['ok'] ?? false),
             'message' => $result['message'] ?? 'Đồng bộ xong',
             'synced' => count($synced),
             'created' => $created,
             'updated' => $updated,
+            'deleted' => $deleted,
             'models' => $synced,
             'test_status' => $aiProvider->fresh()->test_status,
         ]);

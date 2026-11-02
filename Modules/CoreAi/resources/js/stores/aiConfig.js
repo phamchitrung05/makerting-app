@@ -51,6 +51,11 @@ export const useAiConfigStore = defineStore('aiConfig', {
     syncingId: null,        // id provider đang sync models
     selectedProviderId: null,
     lastError: null,
+    providersInitialized: false,  // đã nạp providers (ít nhất 1 lần) chưa
+    providersModelsLoaded: false, // đã nạp providers kèm models chưa
+    formMetaInitialized: false,   // đã nạp drivers+capabilities chưa
+    _providersPromise: null,      // in-flight promise dedup nạp providers
+    _formMetaPromise: null,       // in-flight promise dedup nạp form meta
   }),
 
   getters: {
@@ -89,33 +94,71 @@ export const useAiConfigStore = defineStore('aiConfig', {
      * OUTPUT: providers[] đã nạp.
      * SIDE EFFECT: GET /providers + ghi providers[] + selectedProviderId.
      */
-    async fetchProviders({ withModels = false } = {}) {
-      this.loadingProviders = true
-      try {
-        // $api đã unwrap data -> dataTable trả {items, itemsLength} top-level.
-        const res = await coreAiApi.allProviders()
-        const items = res?.items ?? (Array.isArray(res) ? res : [])
-
-        // Nếu cần models per-provider (panel chọn model), nạp chi tiết từng cái.
-        this.providers = withModels
-          ? await Promise.all(items.map(async p => {
-            try {
-              const detail = await coreAiApi.provider(p.id)
-              
-              return { ...p, models: detail?.models ?? detail?.data?.models ?? [] }
-            } catch {
-              return { ...p, models: [] }
-            }
-          }))
-          : items
-
-        if (!this.selectedProviderId && this.providers.length)
-          this.selectedProviderId = this.providers[0].id
-
+    /*
+     * CHỨC NĂNG: Nạp toàn bộ provider — CHỈ 1 LẦN (trừ khi force).
+     * INPUT: {withModels:boolean, force:boolean} — force=true để refetch.
+     * OUTPUT: providers[].
+     * SIDE EFFECT: GET /providers (1 lần) + ghi providers[] + cờ init.
+     *
+     * Deduplication: nếu đã initialized và !force -> trả cache ngay (0ms,
+     * không gọi API) khi remount tab. Nếu đang có request dở (_providersPromise)
+     * -> mọi caller cùng await chung promise đó, không bắn request trùng.
+     */
+    async fetchProviders({ withModels = false, force = false } = {}) {
+      // Đã nạp đủ rồi và không bắt refetch -> trả state hiện có.
+      if (this.providersInitialized && !force && (!withModels || this.providersModelsLoaded))
         return this.providers
-      } finally {
-        this.loadingProviders = false
-      }
+
+      // Đang có request dở -> chờ chung, tránh gọi trùng.
+      if (this._providersPromise)
+        return this._providersPromise
+
+      this.loadingProviders = true
+
+      const run = (async () => {
+        try {
+          // $api đã unwrap data -> dataTable trả {items, itemsLength} top-level.
+          const res = await coreAiApi.allProviders()
+          const items = res?.items ?? (Array.isArray(res) ? res : [])
+
+          // Nếu cần models per-provider (panel chọn model), nạp chi tiết từng cái.
+          this.providers = withModels
+            ? await Promise.all(items.map(async p => {
+              try {
+                const detail = await coreAiApi.provider(p.id)
+
+                return { ...p, models: detail?.models ?? detail?.data?.models ?? [] }
+              } catch {
+                return { ...p, models: [] }
+              }
+            }))
+            : items
+
+          if (withModels) this.providersModelsLoaded = true
+          this.providersInitialized = true
+
+          if (!this.selectedProviderId && this.providers.length)
+            this.selectedProviderId = this.providers[0].id
+
+          return this.providers
+        } finally {
+          this.loadingProviders = false
+          this._providersPromise = null
+        }
+      })()
+
+      this._providersPromise = run
+
+      return run
+    },
+
+    /*
+     * CHỨC NĂNG: Đảm bảo providers đã nạp — gọi ở onMounted của mọi tab.
+     * INPUT: {withModels, force}. force=true chỉ dùng khi bấm "Làm mới/Đồng bộ".
+     * OUTPUT: providers[] (cache nếu đã nạp, fetch nếu chưa).
+     */
+    ensureLoaded(opts = {}) {
+      return this.fetchProviders(opts)
     },
 
     /*
@@ -144,7 +187,16 @@ export const useAiConfigStore = defineStore('aiConfig', {
      */
     async selectProvider(id) {
       this.selectedProviderId = id
-      if (id) await this.fetchModels({ 'ai_provider_id': id }) // eslint-disable-line camelcase
+
+      // Models đã eager-load sẵn trong provider (ensureLoaded withModels)
+      // -> không cần gọi lại GET /models mỗi lần bấm chọn provider.
+      const p = this.providers.find(x => x.id === id)
+      if (p && Array.isArray(p.models) && p.models.length) {
+        this.models = p.models
+      } else if (id && ! this.providersModelsLoaded) {
+        // Chỉ fetch khi chưa từng nạp models (providers nạp không kèm models).
+        await this.fetchModels({ 'ai_provider_id': id }) // eslint-disable-line camelcase
+      }
     },
 
     /*
@@ -165,6 +217,7 @@ export const useAiConfigStore = defineStore('aiConfig', {
           p.last_tested_at = new Date().toISOString() // eslint-disable-line camelcase
           p._latencyText = data.latency_ms != null ? `${data.latency_ms}ms` : '—'
           p._testMessage = data.message
+          p._syncError = null // ping lại ok/fail đều xóa cờ lỗi đồng bộ cũ
         }
 
         return data
@@ -180,14 +233,18 @@ export const useAiConfigStore = defineStore('aiConfig', {
      */
     async syncProvider(id) {
       this.syncingId = id
+
+      const p = this.providers.find(x => x.id === id)
       try {
         const data = await coreAiApi.syncProviderModels(id) ?? {}
+
+        // Sync thành công -> xóa cờ lỗi cũ.
+        if (p) p._syncError = null
 
         // Nạp lại chi tiết provider để panel Kết nối có models mới nhất.
         try {
           const detail = await coreAiApi.provider(id)
           const models = detail?.models ?? detail?.data?.models ?? []
-          const p = this.providers.find(x => x.id === id)
           if (p) {
             p.models = models
             p.models_count = models.length // eslint-disable-line camelcase
@@ -195,7 +252,15 @@ export const useAiConfigStore = defineStore('aiConfig', {
           }
         } catch { /* giữ models cũ nếu detail lỗi */ }
 
-        return data
+        return data // data giờ có {ok,synced,created,updated,deleted,models}
+      } catch (e) {
+        // Sync thất bại (502 ping fail / mạng): message lấy từ backend, gắn cờ
+        // để panel Kết nối hiển thị "Lỗi Đồng bộ Model" thay "N mô hình".
+        if (p) {
+          p._syncError = e?.data?.message ?? e?.message ?? 'Đồng bộ thất bại'
+          p.test_status = 'failed' // eslint-disable-line camelcase
+        }
+        throw e
       } finally {
         this.syncingId = null
       }
@@ -217,6 +282,12 @@ export const useAiConfigStore = defineStore('aiConfig', {
      */
     async testModel(providerId, modelId) {
       this.testingModelId = modelId
+
+      // Xóa kết quả cũ ngay khi bắt đầu -> UI không hiện latency/lần ping trước.
+      const pm = this.providers.find(x => x.id === providerId)
+      const mm = pm?.models?.find(x => x.id === modelId)
+      if (mm) { mm._latencyText = '…'; mm._testOk = null }
+
       try {
         const data = await coreAiApi.testModel(modelId) ?? {}
 
@@ -267,23 +338,77 @@ export const useAiConfigStore = defineStore('aiConfig', {
     },
 
     /*
-     * CHỨC NĂNG: Nạp drivers + capabilities cho các dialog form.
+     * CHỨC NĂNG: Cập nhật provider (partial) -> ghi đè tại chỗ trong providers[].
+     * INPUT: id + payload {key?,name?,driver?,base_url?,api_key?,extra_keys?,is_active?}.
+     * OUTPUT: provider đã cập nhật (Resource).
+     * SIDE EFFECT: PUT /providers/{id} + Object.assign vào providers[] (không refetch).
+     * Lưu ý: Resource không trả key — chỉ flag; khi client vừa gửi api_key mới
+     * thì set api_key_configured=true, vừa gửi extra_keys thì cập nhật count.
+     */
+    async updateProvider(id, payload) {
+      const data = await coreAiApi.updateProvider(id, payload) ?? {}
+
+      const p = this.providers.find(x => x.id === id)
+      const sentNewKey = typeof payload?.api_key === 'string' && payload.api_key.trim() !== '' // eslint-disable-line camelcase
+      const sentExtraKeys = Object.prototype.hasOwnProperty.call(payload ?? {}, 'extra_keys')
+
+      if (p) {
+        const prevModels = p.models ?? []
+
+        Object.assign(p, data)
+        if (sentNewKey) {
+          // Đổi key -> backend xóa model cũ; clear UI để không hiện model cũ.
+          p.models = []
+          p.models_count = 0 // eslint-disable-line camelcase
+          p.api_key_configured = true // eslint-disable-line camelcase
+        } else if (!data.models || data.models.length === 0) {
+          // Không đổi key + response không eager-load models -> giữ models cũ
+          // (Object.assign(p, data) với data.models=[] sẽ xóa nhầm nếu không guard).
+          p.models = prevModels
+        }
+        if (sentExtraKeys) p.extra_keys_count = (payload.extra_keys ?? []).length // eslint-disable-line camelcase
+      }
+
+      // Đổi API key -> backend xóa model cũ -> tự động sync lấy model của key
+      // mới lên UI ngay (không cần bấm Sync; bắt kể provider trước có 0 model).
+      if (sentNewKey) {
+        try {
+          await this.syncProvider(id)
+        } catch { /* sync fail giữ _syncError do syncProvider ghi */ }
+      }
+
+      return data
+    },
+
+    /*
+     * CHỨC NĂNG: Nạp drivers + capabilities — CHỈ 1 LẦN (dedup in-flight).
      * INPUT: không. OUTPUT: void.
+     * SIDE EFFECT: GET drivers + capabilities (1 lần) + ghi drivers/capabilities.
      */
     async fetchFormMeta() {
-      try {
-        const [d, c] = await Promise.all([
-          coreAiApi.drivers().catch(() => null),
-          coreAiApi.capabilities().catch(() => null),
-        ])
+      if (this.formMetaInitialized) return
+      if (this._formMetaPromise) return this._formMetaPromise
 
-        this.drivers = d?.drivers ?? d?.data?.drivers ?? []
+      const run = (async () => {
+        try {
+          const [d, c] = await Promise.all([
+            coreAiApi.drivers().catch(() => null),
+            coreAiApi.capabilities().catch(() => null),
+          ])
 
-        // capabilities() trả mảng [{value,label,icon,color}] trực tiếp.
-        this.capabilities = Array.isArray(c) ? c : (c?.data ?? [])
-      } catch {
-        // để trống — dialog fallback options cứng.
-      }
+          this.drivers = d?.drivers ?? d?.data?.drivers ?? []
+
+          // capabilities() trả mảng [{value,label,icon,color}] trực tiếp.
+          this.capabilities = Array.isArray(c) ? c : (c?.data ?? [])
+          this.formMetaInitialized = true
+        } finally {
+          this._formMetaPromise = null
+        }
+      })()
+
+      this._formMetaPromise = run
+
+      return run
     },
   },
 })

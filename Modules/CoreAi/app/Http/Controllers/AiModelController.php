@@ -204,18 +204,32 @@ class AiModelController extends Controller
 
         try {
             $driver = app(\Modules\CoreAi\Registries\AiDriverRegistry::class)->resolve($provider);
-            $result = $driver->test($resolved);
+            // Deep-ping: gọi generate tối thiểu với remote_model_id thật —
+            // phát hiện base_url sai version mà /models vẫn "qua".
+            $result = $driver->testModel($resolved);
         } catch (\Throwable $e) {
             $result = ['ok' => false, 'message' => $e->getMessage()];
         }
 
         $ok = (bool) ($result['ok'] ?? false);
-        $aiModel->update(['is_available' => $ok]);
-        $provider->markTestResult($ok);
+        $errCode = $result['error_code'] ?? null;
+
+        // Chỉ hạ is_available khi là lỗi THẬT (network/auth/4xx/5xx). Lỗi
+        // 'unsupported' (model chưa gán capability, hoặc model stt không ping
+        // giả được) KHÔNG khóa model — giữ is_available hiện tại.
+        if ($ok) {
+            $aiModel->update(['is_available' => true]);
+        } elseif ($errCode !== 'unsupported') {
+            $aiModel->update(['is_available' => false]);
+        }
+
+        // KHÔNG đụng provider->test_status — model ping fail (model riêng
+        // unsupported/sai id) không có nghĩa provider/key/kết nối hỏng.
+        // test_status của provider chỉ do POST /providers/{id}/test quyết.
 
         return BaseResponse::success(array_merge($result, [
             'model_id' => $aiModel->id,
-            'is_available' => $ok,
+            'is_available' => (bool) $aiModel->fresh()->is_available,
         ]));
     }
 }

@@ -44,6 +44,7 @@ class AiProvider extends Model
     public const DRIVER_OPENAI_COMPATIBLE = 'openai-compatible';
     public const DRIVER_ANTHROPIC_COMPATIBLE = 'anthropic-compatible';
     public const DRIVER_ELEVENLABS = 'elevenlabs';
+    public const DRIVER_XPIKI = 'xpiki';
     public const DRIVERS = [
         self::DRIVER_OPENAI,
         self::DRIVER_GEMINI,
@@ -51,6 +52,7 @@ class AiProvider extends Model
         self::DRIVER_OPENAI_COMPATIBLE,
         self::DRIVER_ANTHROPIC_COMPATIBLE,
         self::DRIVER_ELEVENLABS,
+        self::DRIVER_XPIKI,
     ];
 
     public const TEST_OK = 'ok';

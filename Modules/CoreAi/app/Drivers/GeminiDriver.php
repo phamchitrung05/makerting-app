@@ -91,8 +91,10 @@ class GeminiDriver extends AbstractAiDriver
                 'ok' => true,
                 'latency_ms' => $ms,
                 'message' => 'Kết nối thành công' . ($count !== null ? " — {$count} models" : ''),
+                // Gemini trả name dạng 'models/<id>' — strip tiền tố để
+                // remote_model_id sạch, tránh 'models/models/<id>' khi ghép URL.
                 'models' => is_array($data['models'] ?? null)
-                    ? array_map(static fn ($m) => $m['name'] ?? '', $data['models'])
+                    ? array_map(static fn ($m) => preg_replace('#^models/#', '', (string) ($m['name'] ?? '')), $data['models'])
                     : [],
             ];
         } catch (AiGatewayException $e) {
@@ -149,7 +151,7 @@ class GeminiDriver extends AbstractAiDriver
 
             $data = $this->client()->requestJson(
                 $r->provider,
-                $this->url($r->provider, "v1beta/models/{$r->model->remote_model_id}:generateContent"),
+                $this->url($r->provider, "v1beta/models/" . $this->bareModelId($r->model->remote_model_id) . ":generateContent"),
                 $payload,
                 $this->headers($r->apiKey),
                 ['keyIndex' => $r->keyIndex]
@@ -209,7 +211,7 @@ class GeminiDriver extends AbstractAiDriver
 
             $data = $this->client()->requestJson(
                 $r->provider,
-                $this->url($r->provider, "v1beta/models/{$r->model->remote_model_id}:predict"),
+                $this->url($r->provider, "v1beta/models/" . $this->bareModelId($r->model->remote_model_id) . ":predict"),
                 $payload,
                 $this->headers($r->apiKey),
                 ['keyIndex' => $r->keyIndex, 'maxBytes' => 64 * 1024 * 1024]
@@ -319,6 +321,20 @@ class GeminiDriver extends AbstractAiDriver
      * INPUT: 'W:H'. OUTPUT: 'W:H' hợp lệ cho Imagen.
      * =====================================================================
      */
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Strip tiền tố 'models/' khỏi remote_model_id (nếu có).
+     * =====================================================================
+     * Gemini /v1beta/models trả name 'models/<id>'; model cũ trong DB hoặc
+     * model nhập tay có thể đã chứa sẵn tiền tố -> tránh 'models/models/<id>'.
+     * INPUT: remote_model_id. OUTPUT: id sạch.
+     * =====================================================================
+     */
+    protected function bareModelId(string $id): string
+    {
+        return (string) preg_replace('#^models/#', '', $id);
+    }
+
     protected function aspectFor(string $aspectRatio): string
     {
         return match ($aspectRatio) {
