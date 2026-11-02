@@ -88,15 +88,46 @@ class XpikiDriver extends AbstractAiDriver
         throw AiGatewayException::providerError('xpiki task qua thoi gian cho', ['task'=>$id]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tải từng output binary trong task về (ảnh/audio...).
+     * =====================================================================
+     * `outputs[].url` có thể là relative ('outputs/1.png') HOẶC tuyệt đối:
+     * - Cùng host base_url (api.xpiki.com)   -> dùng trực tiếp + gửi Bearer
+     *   (vẫn là endpoint của chính provider, cần auth).
+     * - Host khác (CDN: storage.xpiki.com / S3/R2 presigned) -> dùng trực
+     *   tiếp, KHÔNG gửi Authorization: presigned đã ký sẵn trong query,
+     *   gửi thêm Bearer bị server từ chối "Only one auth mechanism" và
+     *   còn rò rỉ API key ra host ngoài. SSRF vẫn được assertUrlAllowed
+     *   chặn (private IP/localhost) nên cho phép host ngoài là an toàn.
+     *
+     * INPUT: resolved + task đã succeeded + $mimePrefix lọc loại file.
+     * OUTPUT: array{mime,data,width,height}[] — binary đã tải.
+     * =====================================================================
+     */
     protected function downloadOutputs(AiResolvedModelDto $r, array $task, string $mimePrefix): array
     {
         $images = [];
+        $baseHost = strtolower((string) parse_url($r->provider->base_url, PHP_URL_HOST));
+
         foreach ((array)($task['outputs'] ?? []) as $out) {
             $rel = $out['url'] ?? null; $mime = (string)($out['mime_type'] ?? '');
             if (! is_string($rel) || $rel === '') continue;
             if ($mimePrefix !== '' && $mime !== '' && ! str_starts_with($mime, $mimePrefix)) continue;
-            $bin = $this->client()->request($r->provider, 'GET', $this->url($r->provider, $rel),
-                $this->headers($r->apiKey), null, ['keyIndex'=>$r->keyIndex,'maxBytes'=>64*1024*1024,'timeout'=>120]);
+
+            if (preg_match('/^https?:\/\//i', $rel)) {
+                // URL tuyệt đối: chỉ giữ Bearer khi cùng host với provider.
+                $outHost = strtolower((string) parse_url($rel, PHP_URL_HOST));
+                $headers = ($outHost !== '' && $outHost === $baseHost)
+                    ? $this->headers($r->apiKey)
+                    : [];
+                $bin = $this->client()->request($r->provider, 'GET', $rel,
+                    $headers, null, ['keyIndex'=>$r->keyIndex,'maxBytes'=>64*1024*1024,'timeout'=>120]);
+            } else {
+                $bin = $this->client()->request($r->provider, 'GET', $this->url($r->provider, $rel),
+                    $this->headers($r->apiKey), null, ['keyIndex'=>$r->keyIndex,'maxBytes'=>64*1024*1024,'timeout'=>120]);
+            }
+
             $images[] = ['mime'=>$mime!==''?$mime:($bin->contentType??'image/png'),
                 'data'=>$bin->body, 'width'=>null, 'height'=>null];
         }

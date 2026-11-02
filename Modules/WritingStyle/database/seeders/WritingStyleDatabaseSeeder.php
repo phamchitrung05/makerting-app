@@ -38,6 +38,8 @@ class WritingStyleDatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // $this->call([]);
+        // Module không có bảng seed tĩnh — 16 RULE_KEYS + tiers nằm trong
+        // config/writing-style.php (source of truth đọc bởi WritingProfileDefinition).
+        // Thêm seeder nghiệp vụ vào đây khi cần.
     }
 }
