@@ -8,7 +8,7 @@
   CHUẨN UI (docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §2–3):
   - Icon Tabler (tabler-*), KHÔNG mdi-*.
   - Màu theme Vuetify / rgb(var(--v-theme-*)) cho hiệu ứng alpha —
-    không hex cứng (#7367F0, #fff...); Dark Mode tự đúng.
+  không hex cứng (#7367F0, #fff...); Dark Mode tự đúng.
   - VCard/VBtn/VChip/VAvatar PascalCase; border thay elevation.
   - Không inline font-size / !important — dùng text-h4/body/caption.
   - Spacing class Vuetify chuẩn (gap-2, pa-4, mb-3...).
@@ -36,6 +36,7 @@
           variant="tonal"
           color="secondary"
           prepend-icon="tabler-upload"
+          @click="openReverseDialog"
         >
           Nhập từ mẫu
         </VBtn>
@@ -43,6 +44,7 @@
         <VBtn
           color="primary"
           prepend-icon="tabler-plus"
+          @click="openCreateDialog"
         >
           Tạo Writing Profile
         </VBtn>
@@ -131,8 +133,8 @@
           />
 
           <AppSelect
-            v-model="selectedChannel"
-            :items="['Tất cả kênh', 'Facebook', 'Instagram', 'TikTok', 'Website / Blog']"
+            v-model="selectedOrigin"
+            :items="originOptions"
             density="compact"
             hide-details
             style="width: 135px;"
@@ -140,7 +142,7 @@
 
           <AppSelect
             v-model="sortBy"
-            :items="['Sắp xếp: Mới nhất', 'Sắp xếp: Cũ nhất', 'Độ hoàn thiện cao']"
+            :items="sortOptions"
             density="compact"
             hide-details
             style="width: 165px;"
@@ -151,10 +153,41 @@
 
     <!-- ================= ITEMS (không card bao) ================= -->
     <div>
+      <!-- Loading -->
+      <div
+        v-if="store.loadingProfiles && !profileCards.length"
+        class="d-flex justify-center py-12"
+      >
+        <VProgressCircular
+          indeterminate
+          color="primary"
+        />
+      </div>
+
+      <!-- Empty state -->
+      <VCard
+        v-else-if="!sortedProfiles.length"
+        border
+      >
+        <div class="pa-12 text-center text-medium-emphasis">
+          <VIcon
+            icon="tabler-file-text-off"
+            size="44"
+            class="mb-3"
+          />
+          <div class="text-body-1">
+            Chưa có văn phong nào. Bấm "Nhập từ mẫu" để giải mã DNA đầu tiên.
+          </div>
+        </div>
+      </VCard>
+
       <!-- ================= LƯỚI PROFILE (5 ITEM/HÀNG, RESPONSIVE) ================= -->
-      <div class="profile-grid">
+      <div
+        v-else
+        class="profile-grid"
+      >
         <div
-          v-for="profile in filteredProfiles"
+          v-for="profile in pagedProfiles"
           :key="profile.id"
         >
           <VCard
@@ -165,7 +198,7 @@
             <div
               class="card-corner-glow"
               :style="{ background: `radial-gradient(circle at top left, rgba(var(--v-theme-${profile.color}), 0.14), transparent 70%)` }"
-            ></div>
+            />
 
             <div
               class="position-relative"
@@ -195,7 +228,7 @@
                     <span
                       class="status-mini-dot me-1"
                       :style="{ backgroundColor: `rgb(var(--v-theme-${profile.statusColor}))` }"
-                    ></span>
+                    />
                     {{ profile.statusLabel }}
                   </VChip>
 
@@ -267,14 +300,6 @@
                   />
                   Cập nhật: {{ profile.updatedAt }}
                 </span>
-
-                <span class="d-flex align-center gap-1">
-                  <VIcon
-                    size="14"
-                    icon="tabler-user"
-                  />
-                  {{ profile.author }}
-                </span>
               </div>
             </div>
           </VCard>
@@ -284,161 +309,220 @@
 
     <!-- ================= 4. CARD PHÂN TRANG (chuẩn TablePagination) ================= -->
     <VCard
+      v-if="sortedProfiles.length > itemsPerPage"
       border
       class="pa-0 overflow-hidden"
     >
       <TablePagination
         v-model:page="page"
         :items-per-page="itemsPerPage"
-        :total-items="filteredProfiles.length"
+        :total-items="sortedProfiles.length"
       />
     </VCard>
+
+    <!-- Dialog giải mã DNA từ bài mẫu (dùng chung cho 2 nút header). -->
+    <ProfileReverseEngineerDialog
+      v-model="reverseDialog"
+      @analyze="onAnalyze"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useWritingStyleStore } from '../../stores/writingStyle'
+import ProfileReverseEngineerDialog from '../../components/ProfileReverseEngineerDialog.vue'
+
+const store = useWritingStyleStore()
 
 const activeStatusTab = ref('all')
 const searchQuery = ref('')
-const selectedChannel = ref('Tất cả kênh')
-const sortBy = ref('Sắp xếp: Mới nhất')
-// Phân trang (chuẩn TablePagination của project)
+const selectedOrigin = ref('all')
+const sortBy = ref('newest')
 const page = ref(1)
 const itemsPerPage = ref(10)
 
-// 4 Thẻ thống kê KPI trên đầu trang
-const kpiCards = [
-  { label: 'Tổng văn phong', value: '12', trend: '↑ +3', icon: 'tabler-layers-subtract', color: 'primary' },
-  { label: 'Đang sử dụng', value: '8', icon: 'tabler-circle-check', color: 'success' },
-  { label: 'Nháp', value: '3', icon: 'tabler-file-pencil', color: 'warning' },
-  { label: 'Đã lưu trữ', value: '1', icon: 'tabler-archive', color: 'secondary' },
-]
+/* Dialog "Nhập từ mẫu" (Reverse Engineer) — mở khi bấm nút header.
+ * Nút "Tạo Writing Profile" cũng mở dialog này (bạn sẽ tách form tạo tay
+ * sau — hiện chỉ nối dialog vào nút theo yêu cầu). */
+const reverseDialog = ref(false)
 
-// 4 Tabs lọc trạng thái (chuẩn VTab, icon Tabler)
-const statusTabs = [
-  { value: 'all', label: 'Tất cả', count: 12, icon: 'tabler-list' },
-  { value: 'active', label: 'Đang sử dụng', count: 8, icon: 'tabler-circle-check' },
-  { value: 'draft', label: 'Nháp', count: 3, icon: 'tabler-file-pencil' },
-  { value: 'archived', label: 'Đã lưu trữ', count: 1, icon: 'tabler-archive' },
-]
+/* =====================================================================
+ * Map profile (API) -> props card UI.
+ * =====================================================================
+ * API trả: {id,name,description,dominant_tier,origin,status,is_enabled,
+ *           version,updated_at,analysis_metadata_json,rules_json,...}
+ * Card cần: id,title,version,status(+label/color),description,tags[],
+ *           score,updatedAt,icon,color,link.
+ * ===================================================================== */
+const TIER_META = {
+  micro: { icon: 'tabler-letter-s',    color: 'error'   },
+  short: { icon: 'tabler-file-text',   color: 'warning' },
+  medium: { icon: 'tabler-article',     color: 'info'    },
+  long: { icon: 'tabler-book',        color: 'primary' },
+}
 
-// Màu thanh tiến độ — theo màu hệ thống (primary), không theo ngưỡng điểm.
-const scoreColor = () => 'primary'
+const STATUS_META = {
+  active: { label: 'Đang sử dụng', color: 'success'   },
+  draft: { label: 'Nháp',         color: 'warning'   },
+  archived: { label: 'Đã lưu trữ',   color: 'secondary' },
+}
 
-// Danh sách 8 Writing Profile (dữ liệu demo tĩnh)
-const writingProfiles = ref([
-  {
-    id: 1, title: 'Brand Voice – Mộc Cà Phê', version: 'v1.4',
-    status: 'active', statusLabel: 'Đang sử dụng', statusColor: 'success',
-    description: 'Văn phong gần gũi, ấm áp, truyền cảm hứng về cà phê và nhịp sống chậm.',
-    tags: [
-      { text: 'Cà phê', color: 'primary' },
-      { text: 'Lifestyle', color: 'secondary' },
-      { text: 'Truyền cảm hứng', color: 'success' },
-    ],
-    score: 92, updatedAt: '30/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-speakerphone', color: 'primary',
-  },
-  {
-    id: 2, title: 'Travel Storytelling', version: 'v1.2',
-    status: 'draft', statusLabel: 'Nháp', statusColor: 'warning',
-    description: 'Kể chuyện du lịch, khám phá, lịch sử và văn hoá một cách cuốn hút.',
-    tags: [
-      { text: 'Du lịch', color: 'info' },
-      { text: 'Khám phá', color: 'secondary' },
-      { text: 'Cảm hứng', color: 'primary' },
-    ],
-    score: 88, updatedAt: '29/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-plane', color: 'info',
-  },
-  {
-    id: 3, title: 'Ecommerce – Bán hàng', version: 'v2.0',
-    status: 'archived', statusLabel: 'Đã lưu trữ', statusColor: 'primary',
-    description: 'Văn phong thuyết phục, tập trung vào lợi ích và hành động mua.',
-    tags: [
-      { text: 'Bán hàng', color: 'info' },
-      { text: 'Ưu đãi', color: 'secondary' },
-      { text: 'Chuyển đổi', color: 'warning' },
-    ],
-    score: 76, updatedAt: '28/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-shopping-cart', color: 'error',
-  },
-  {
-    id: 4, title: 'Giáo dục – Chia sẻ kiến thức', version: 'v1.1',
-    status: 'active', statusLabel: 'Đang sử dụng', statusColor: 'success',
-    description: 'Trình bày kiến thức dễ hiểu, logic, đáng tin cậy và hữu ích.',
-    tags: [
-      { text: 'Giáo dục', color: 'info' },
-      { text: 'Kiến thức', color: 'success' },
-      { text: 'Học tập', color: 'secondary' },
-    ],
-    score: 60, updatedAt: '27/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-school', color: 'success',
-  },
-  {
-    id: 5, title: 'Kịch bản Video – Story', version: 'v1.3',
-    status: 'draft', statusLabel: 'Nháp', statusColor: 'warning',
-    description: 'Cấu trúc kịch bản video ngắn, giữ chân và tạo cảm xúc.',
-    tags: [
-      { text: 'Video', color: 'error' },
-      { text: 'Story', color: 'secondary' },
-      { text: 'Giải trí', color: 'primary' },
-    ],
-    score: 85, updatedAt: '26/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-movie', color: 'warning',
-  },
-  {
-    id: 6, title: 'Sống Xanh – Lifestyle', version: 'v1.0',
-    status: 'active', statusLabel: 'Đang sử dụng', statusColor: 'success',
-    description: 'Văn phong tích cực, truyền cảm hứng về lối sống lành mạnh, bền vững.',
-    tags: [
-      { text: 'Sống xanh', color: 'success' },
-      { text: 'Lối sống', color: 'info' },
-      { text: 'Bền vững', color: 'primary' },
-    ],
-    score: 70, updatedAt: '24/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-leaf', color: 'success',
-  },
-  {
-    id: 7, title: 'AI & Công nghệ', version: 'v1.1',
-    status: 'active', statusLabel: 'Đang sử dụng', statusColor: 'success',
-    description: 'Giới thiệu công cụ, mẹo AI và xu hướng công nghệ theo cách dễ hiểu.',
-    tags: [
-      { text: 'AI', color: 'primary' },
-      { text: 'Công nghệ', color: 'info' },
-      { text: 'Thủ thuật', color: 'error' },
-    ],
-    score: 89, updatedAt: '22/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-cpu', color: 'primary',
-  },
-  {
-    id: 8, title: 'Cảm hứng – Động lực', version: 'v1.0',
-    status: 'archived', statusLabel: 'Đã lưu trữ', statusColor: 'warning',
-    description: 'Những câu chuyện, trích dẫn và bài học truyền động lực trong cuộc sống.',
-    tags: [
-      { text: 'Truyền cảm hứng', color: 'error' },
-      { text: 'Tích cực', color: 'secondary' },
-      { text: 'Thành công', color: 'primary' },
-    ],
-    score: 74, updatedAt: '20/10/2026', author: 'bởi Phạm Chí Trung',
-    icon: 'tabler-heart', color: 'error',
-  },
-])
+function fmtDate(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('vi-VN')
+  } catch { return iso }
+}
 
-// Lọc danh sách theo Tab trạng thái & Từ khóa tìm kiếm
+/* Độ hoàn thiện DNA = % trong số 16 RULE_KEYS có nội dung (không rỗng).
+ * Với profile 'manual' mới tạo có thể < 100%. */
+function dnaScore(rules) {
+  if (!rules || typeof rules !== 'object') return 0
+  const total = 16
+
+  const filled = Object.values(rules).filter(v => {
+    if (Array.isArray(v)) return v.length > 0
+    
+    return v !== null && String(v).trim() !== ''
+  }).length
+
+  return Math.round((filled / total) * 100)
+}
+
+function toCardProps(p) {
+  const tier = TIER_META[p.dominant_tier] ?? TIER_META.medium
+
+  // "lưu trữ" = is_enabled=false (spec chỉ có status draft|active).
+  const statusKey = p.is_enabled ? p.status : 'archived'
+  const status = STATUS_META[statusKey] ?? STATUS_META.draft
+
+  // Tags từ analysis_metadata.taxonomy_suggestion, fallback tier+origin.
+  let tags = []
+  const sug = p.analysis_metadata_json?.taxonomy_suggestion
+  if (Array.isArray(sug) && sug.length) {
+    tags = sug.slice(0, 3).map(t => ({ text: t, color: 'primary' }))
+  } else {
+    tags = [
+      { text: p.dominant_tier ?? 'medium', color: 'info' },
+      { text: p.origin === 'reference' ? 'Giải mã' : 'Thủ công', color: p.origin === 'reference' ? 'info' : 'secondary' },
+    ]
+  }
+
+  return {
+    id: p.id,
+    title: p.name,
+    version: `v${p.version ?? 1}`,
+    status: statusKey,
+    statusLabel: status.label,
+    statusColor: status.color,
+    description: p.description ?? '',
+    tags,
+    score: dnaScore(p.rules_json),
+    updatedAt: fmtDate(p.updated_at),
+    icon: tier.icon,
+    color: tier.color,
+  }
+}
+
+/* =====================================================================
+ * Danh sách card đã map + lọc client.
+ * ===================================================================== */
+const profileCards = computed(() => store.profiles.map(toCardProps))
+
 const filteredProfiles = computed(() => {
-  return writingProfiles.value.filter((item) => {
-    const matchTab
-      = activeStatusTab.value === 'all' || item.status === activeStatusTab.value
-    const q = searchQuery.value.trim().toLowerCase()
-    const matchSearch
-      = !q
+  const q = searchQuery.value.trim().toLowerCase()
+
+  return profileCards.value.filter(item => {
+    // Tab trạng thái: all | active | draft | archived(=tắt).
+    const matchTab = activeStatusTab.value === 'all' || item.status === activeStatusTab.value
+
+    const matchSearch = !q
       || item.title.toLowerCase().includes(q)
       || item.description.toLowerCase().includes(q)
 
-    return matchTab && matchSearch
+    const p = store.profiles.find(x => x.id === item.id)
+    const matchOrigin = selectedOrigin.value === 'all' || p?.origin === selectedOrigin.value
+
+    return matchTab && matchSearch && matchOrigin
   })
+})
+
+/* KPI 4 thẻ tính từ store.statusCounts. */
+const kpiCards = computed(() => {
+  const c = store.statusCounts
+
+  return [
+    { label: 'Tổng văn phong', value: String(c.all), icon: 'tabler-layers-subtract', color: 'primary' },
+    { label: 'Đang sử dụng', value: String(c.active), icon: 'tabler-circle-check', color: 'success' },
+    { label: 'Nháp', value: String(c.draft), icon: 'tabler-file-pencil', color: 'warning' },
+    { label: 'Đã lưu trữ', value: String(c.archived), icon: 'tabler-archive', color: 'secondary' },
+  ]
+})
+
+/* Status tabs theo statusCounts. */
+const statusTabs = computed(() => {
+  const c = store.statusCounts
+
+  return [
+    { value: 'all', label: 'Tất cả', count: c.all, icon: 'tabler-list' },
+    { value: 'active', label: 'Đang sử dụng', count: c.active, icon: 'tabler-circle-check' },
+    { value: 'draft', label: 'Nháp', count: c.draft, icon: 'tabler-file-pencil' },
+    { value: 'archived', label: 'Đã lưu trữ', count: c.archived, icon: 'tabler-archive' },
+  ]
+})
+
+const originOptions = [
+  { title: 'Tất cả nguồn', value: 'all' },
+  { title: 'Thủ công', value: 'manual' },
+  { title: 'Giải mã', value: 'reference' },
+]
+
+const sortOptions = [
+  { title: 'Sắp xếp: Mới nhất', value: 'newest' },
+  { title: 'Sắp xếp: Cũ nhất', value: 'oldest' },
+  { title: 'Sắp xếp: Tên A–Z', value: 'name' },
+]
+
+const sortedProfiles = computed(() => {
+  const list = [...filteredProfiles.value]
+  if (sortBy.value === 'oldest') list.reverse()
+  else if (sortBy.value === 'name') list.sort((a, b) => a.title.localeCompare(b.title, 'vi'))
+
+  return list
+})
+
+const pagedProfiles = computed(() => {
+  const start = (page.value - 1) * itemsPerPage.value
+
+  return sortedProfiles.value.slice(start, start + itemsPerPage.value)
+})
+
+/* Giải mã từ dialog -> store.analyze -> refetch khi xong (job async).
+ * Hiện chỉ mở dialog; @analyze xử lý ở đây (bạn sẽ thêm poll task sau). */
+async function onAnalyze(payload) {
+  try {
+    await store.analyze(payload)
+
+    // Job chạy nền (queue ai-text) — profile draft sẽ có sau; refetch sau
+    // vài giây hoặc khi user mở lại. Ở đây để nguyên, có thể nối TaskCenter
+    // poll khi bạn làm phần "Nhập từ mẫu" đầy đủ.
+  } catch (e) {
+    // silent — lỗi đã log qua $api; có thể thêm snackbar sau.
+  }
+}
+
+function openReverseDialog() { reverseDialog.value = true }
+
+function openCreateDialog() {
+  // Bạn sẽ tách form tạo tay sau — hiện nối cùng dialog giải mã.
+  reverseDialog.value = true
+}
+
+const scoreColor = () => 'primary'
+
+onMounted(() => {
+  store.fetchProfiles()
 })
 </script>
 

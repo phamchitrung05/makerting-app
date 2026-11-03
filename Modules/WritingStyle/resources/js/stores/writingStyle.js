@@ -13,6 +13,7 @@ import { writingStyleApi } from '@modules/WritingStyle/resources/js/services/wri
 export const useWritingStyleStore = defineStore('writingStyle', {
   state: () => ({
     profiles: [],            // WritingProfileResource[]
+    total: 0,                // itemsLength từ server (dataTable)
     options: { tiers: [], rules: [] },
     profilesLoaded: false,
     optionsLoaded: false,
@@ -28,19 +29,36 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     tiers: state => state.options.tiers ?? [],
     ruleKeys: state => state.options.rules ?? [],
     enabledProfiles: state => state.profiles.filter(p => p.is_enabled),
+
+    /* Số lượng theo nhóm trạng thái UI:
+     * - active   : status='active' + đang bật.
+     * - draft    : status='draft'  + đang bật.
+     * - archived : tắt (is_enabled=false) — spec chỉ có draft|active,
+     *              "lưu trữ" quy ước là profile bị tắt. */
+    statusCounts: state => {
+      const list = state.profiles
+
+      return {
+        all: list.length,
+        active: list.filter(p => p.status === 'active' && p.is_enabled).length,
+        draft: list.filter(p => p.status === 'draft' && p.is_enabled).length,
+        archived: list.filter(p => !p.is_enabled).length,
+      }
+    },
   },
 
   actions: {
-    /* Nạp profiles 1 lần (force=true để refetch). */
-    async fetchProfiles({ force = false } = {}) {
-      if (this.profilesLoaded && !force) return this.profiles
+    /* Nạp profiles (force=true để refetch). params: search/tier/origin/status. */
+    async fetchProfiles({ force = false, ...params } = {}) {
+      if (this.profilesLoaded && !force && !Object.keys(params).length) return this.profiles
       this.loadingProfiles = true
       try {
-        const res = await writingStyleApi.profiles({ itemsPerPage: 100 })
+        const res = await writingStyleApi.profiles({ itemsPerPage: 100, ...params })
 
         this.profiles = res?.items ?? (Array.isArray(res) ? res : [])
+        this.total = res?.itemsLength ?? this.profiles.length
         this.profilesLoaded = true
-        
+
         return this.profiles
       } finally {
         this.loadingProfiles = false
@@ -94,6 +112,11 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     async deleteProfile(id) {
       await writingStyleApi.deleteProfile(id)
       this.profiles = this.profiles.filter(p => p.id !== id)
+    },
+
+    /* Tải chi tiết 1 profile (rules+evidence đầy đủ) từ server. */
+    async fetchProfile(id) {
+      return writingStyleApi.profile(id)
     },
 
     /* Giải mã DNA -> 202 {analysis_id, task_run_id}. */
