@@ -159,6 +159,7 @@
         >
           <VCard
             class="profile-grid-card pa-4 d-flex flex-column justify-space-between position-relative overflow-hidden cursor-pointer"
+            :to="{ name: 'admin-writing-style-writing-profiles-id', params: { id: profile.id } }"
           >
             <!-- Quầng màu tonal trang trí góc trên bên trái (màu theme) -->
             <div
