@@ -169,21 +169,16 @@
         </div>
       </div>
 
-      <!-- ================= LƯỚI 8 THẺ WRITING PROFILE (4 CỘT X 2 HÀNG) ================= -->
-      <VRow
+      <!-- ================= LƯỚI PROFILE (5 ITEM/HÀNG, RESPONSIVE) ================= -->
+      <div
         v-if="viewMode === 'grid'"
-        dense
+        class="profile-grid"
       >
-        <VCol
+        <div
           v-for="profile in filteredProfiles"
           :key="profile.id"
-          cols="12"
-          sm="6"
-          md="4"
-          lg="3"
         >
           <VCard
-            border
             class="profile-grid-card pa-4 h-100 d-flex flex-column justify-space-between position-relative overflow-hidden cursor-pointer"
           >
             <!-- Quầng màu tonal trang trí góc trên bên trái (màu theme) -->
@@ -302,8 +297,8 @@
               </div>
             </div>
           </VCard>
-        </VCol>
-      </VRow>
+        </div>
+      </div>
 
       <!-- ================= CHẾ ĐỘ XEM DANH SÁCH (LIST VIEW) ================= -->
       <VTable
@@ -462,8 +457,8 @@ const statusTabs = [
   { value: 'archived', label: 'Đã lưu trữ', count: 1, dotColor: 'primary' },
 ]
 
-// Màu thanh tiến độ theo ngưỡng điểm (dùng màu theme)
-const scoreColor = score => (score >= 80 ? 'success' : score >= 60 ? 'warning' : 'error')
+// Màu thanh tiến độ — theo màu hệ thống (primary), không theo ngưỡng điểm.
+const scoreColor = () => 'primary'
 
 // Danh sách 8 Writing Profile (dữ liệu demo tĩnh)
 const writingProfiles = ref([
@@ -615,8 +610,28 @@ const filteredProfiles = computed(() => {
   display: inline-block;
 }
 
-/* Card Writing Profile — hover nổi nhẹ theo chuẩn Vuexy. */
+/* Lưới profile — 5 item/hàng, co giãn theo màn hình (không lồng card). */
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 1600px) {
+  .profile-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 1280px) {
+  .profile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 960px) {
+  .profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .profile-grid { grid-template-columns: 1fr; }
+}
+
+/* Card Writing Profile — không border (tránh card lồng card), hover nổi nhẹ. */
 .profile-grid-card {
+  background-color: rgba(var(--v-theme-on-surface), 0.03);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .profile-grid-card:hover {
