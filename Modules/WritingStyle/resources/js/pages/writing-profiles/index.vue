@@ -94,10 +94,10 @@
       </VCol>
     </VRow>
 
-    <!-- ================= 3. CARD BỘ LỌC (tabs + search/channel/sort/view) ================= -->
+    <!-- ================= 3. CARD BỘ LỌC (tabs trái + inputs phải) ================= -->
     <VCard border>
       <VCardText class="d-flex align-center justify-space-between flex-wrap gap-3">
-        <!-- Tabs lọc theo trạng thái — chuẩn VTabs/VTab như menu tab Settings -->
+        <!-- Trái: Tabs lọc theo trạng thái (chuẩn VTabs/VTab) -->
         <VTabs
           v-model="activeStatusTab"
           color="primary"
@@ -119,8 +119,8 @@
           </VTab>
         </VTabs>
 
-        <!-- Cụm Tìm kiếm, Lọc kênh, Sắp xếp & Chuyển đổi chế độ xem -->
-        <div class="d-flex align-center flex-wrap gap-2 flex-grow-1 justify-md-end">
+        <!-- Phải: inputs tìm kiếm + lọc kênh + sắp xếp -->
+        <div class="d-flex align-center flex-wrap gap-2">
           <AppTextField
             v-model="searchQuery"
             placeholder="Tìm theo tên, mô tả..."
@@ -145,26 +145,6 @@
             hide-details
             style="width: 165px;"
           />
-
-          <VBtnToggle
-            v-model="viewMode"
-            mandatory
-            density="compact"
-            color="primary"
-            rounded="lg"
-            class="border"
-          >
-            <VBtn
-              value="grid"
-              icon="tabler-layout-grid"
-              size="small"
-            />
-            <VBtn
-              value="list"
-              icon="tabler-list"
-              size="small"
-            />
-          </VBtnToggle>
         </div>
       </VCardText>
     </VCard>
@@ -172,10 +152,7 @@
     <!-- ================= ITEMS (không card bao) ================= -->
     <div>
       <!-- ================= LƯỚI PROFILE (5 ITEM/HÀNG, RESPONSIVE) ================= -->
-      <div
-        v-if="viewMode === 'grid'"
-        class="profile-grid"
-      >
+      <div class="profile-grid">
         <div
           v-for="profile in filteredProfiles"
           :key="profile.id"
@@ -302,110 +279,6 @@
           </VCard>
         </div>
       </div>
-
-      <!-- ================= CHẾ ĐỘ XEM DANH SÁCH (LIST VIEW) ================= -->
-      <VTable
-        v-else
-        density="comfortable"
-        class="border rounded-lg mb-2"
-      >
-        <thead>
-          <tr class="text-caption text-medium-emphasis">
-            <th>Writing Profile</th>
-            <th>Phiên bản</th>
-            <th>Thẻ chủ đề</th>
-            <th>Độ hoàn thiện</th>
-            <th>Trạng thái</th>
-            <th>Cập nhật</th>
-            <th class="text-end">
-              Thao tác
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="profile in filteredProfiles"
-            :key="profile.id"
-          >
-            <td class="py-3">
-              <div class="d-flex align-center gap-3">
-                <VAvatar
-                  :color="profile.color"
-                  variant="tonal"
-                  size="36"
-                  rounded="lg"
-                >
-                  <VIcon
-                    :color="profile.color"
-                    size="20"
-                    :icon="profile.icon"
-                  />
-                </VAvatar>
-                <div>
-                  <div class="text-h6 font-weight-bold">
-                    {{ profile.title }}
-                  </div>
-                  <div class="text-caption text-disabled">
-                    {{ profile.description }}
-                  </div>
-                </div>
-              </div>
-            </td>
-            <td>
-              <VChip
-                size="x-small"
-                color="primary"
-                variant="tonal"
-                class="font-weight-bold"
-              >
-                {{ profile.version }}
-              </VChip>
-            </td>
-            <td>
-              <div class="d-flex gap-1 flex-wrap">
-                <VChip
-                  v-for="tag in profile.tags"
-                  :key="tag.text"
-                  size="x-small"
-                  :color="tag.color"
-                  variant="tonal"
-                >
-                  {{ tag.text }}
-                </VChip>
-              </div>
-            </td>
-            <td style="min-width: 130px;">
-              <div class="d-flex align-center gap-2">
-                <VProgressLinear
-                  :model-value="profile.score"
-                  :color="scoreColor(profile.score)"
-                  height="5"
-                  rounded
-                  class="flex-grow-1"
-                />
-                <span class="text-caption font-weight-medium">{{ profile.score }}%</span>
-              </div>
-            </td>
-            <td>
-              <VChip
-                size="x-small"
-                :color="profile.statusColor"
-                variant="tonal"
-              >
-                {{ profile.statusLabel }}
-              </VChip>
-            </td>
-            <td class="text-caption text-disabled">
-              {{ profile.updatedAt }}
-            </td>
-            <td class="text-end">
-              <IconBtn size="small">
-                <VIcon icon="tabler-dots-vertical" />
-              </IconBtn>
-            </td>
-          </tr>
-        </tbody>
-      </VTable>
     </div>
 
     <!-- ================= 4. CARD PHÂN TRANG (chuẩn TablePagination) ================= -->
@@ -429,8 +302,6 @@ const activeStatusTab = ref('all')
 const searchQuery = ref('')
 const selectedChannel = ref('Tất cả kênh')
 const sortBy = ref('Sắp xếp: Mới nhất')
-const viewMode = ref('grid')
-
 // Phân trang (chuẩn TablePagination của project)
 const page = ref(1)
 const itemsPerPage = ref(10)
