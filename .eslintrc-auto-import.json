@@ -368,6 +368,8 @@
     "useSettingsGroup": true,
     "useTaskCenterStore": true,
     "useMediaAssetStore": true,
-    "useAiConfigStore": true
+    "useAiConfigStore": true,
+    "useWritingStyleStore": true,
+    "useCardLoading": true
   }
 }

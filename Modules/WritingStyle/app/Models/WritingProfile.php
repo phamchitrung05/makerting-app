@@ -182,15 +182,22 @@ class WritingProfile extends Model
         $rules = $this->rules_json ?? [];
         $tier = $tier ?? $this->dominant_tier;
 
-        // Micro: đẩy các khóa "văn bản dài" vào uncertainties (không bắt AI
-        // bịa headings/bullets trong 1–3 câu).
-        if ($tier === self::TIER_MICRO) {
-            $longOnly = ['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns'];
+        // Các khóa chỉ có nghĩa ở văn bản dài — lọc theo tier + đẩy vào
+        // uncertainties để AI biết "không có trong mẫu" (không bịa):
+        //   micro : bỏ headings/bullets/paragraph_rhythm/structure_patterns.
+        //   short : bỏ headings/bullets/structure_patterns (giữ paragraph_rhythm).
+        $drop = match ($tier) {
+            self::TIER_MICRO => ['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns'],
+            self::TIER_SHORT => ['headings', 'bullets', 'structure_patterns'],
+            default          => [],
+        };
+
+        if ($drop !== []) {
             $uncertainties = (array) ($rules['uncertainties'] ?? []);
 
-            foreach ($longOnly as $key) {
+            foreach ($drop as $key) {
                 if (array_key_exists($key, $rules)) {
-                    $uncertainties[] = "{$key}: không áp dụng ở văn bản micro (mẫu không có)";
+                    $uncertainties[] = "{$key}: không áp dụng ở văn bản {$tier} (mẫu không có)";
                     unset($rules[$key]);
                 }
             }

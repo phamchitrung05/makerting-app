@@ -4,6 +4,11 @@ namespace Modules\WritingStyle\Providers;
 
 use Nwidart\Modules\Support\ModuleServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
+use Modules\WritingStyle\Services\WritingProfileSnapshotService;
+use Modules\WritingStyle\TaskCenter\WritingProfileAnalyzeAdapter;
+use Modules\TaskCenter\Registries\TaskRunAdapterRegistry;
+use Modules\Identity\Registries\PermissionRegistry;
 
 /**
  * =====================================================================
@@ -51,6 +56,44 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
         EventServiceProvider::class,
         RouteServiceProvider::class,
     ];
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký binding container của module.
+     * =====================================================================
+     * Bind WritingStyleCompilerContract -> WritingProfileSnapshotService
+     * (compiler duy nhất cấp DNA văn phong đã strip evidence cho AI).
+     * =====================================================================
+     */
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->bind(WritingStyleCompilerContract::class, WritingProfileSnapshotService::class);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký adapter TaskCenter để popup hiển thị task.
+     * =====================================================================
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        $this->app->make(TaskRunAdapterRegistry::class)->register(new WritingProfileAnalyzeAdapter());
+
+        // Đăng ký quyền module writing-style (writing.profile.* + writing.evaluate).
+        $this->app->make(PermissionRegistry::class)->registerModule('writingstyle', [
+            'label' => 'DNA Văn phong',
+            'permissions' => [
+                'writing.profile.view'   => 'Xem văn phong',
+                'writing.profile.create' => 'Tạo/sửa văn phong',
+                'writing.profile.manage' => 'Xóa văn phong',
+                'writing.evaluate'       => 'Giải mã & viết thử DNA',
+            ],
+        ]);
+    }
 
     /**
      * Define module schedules.

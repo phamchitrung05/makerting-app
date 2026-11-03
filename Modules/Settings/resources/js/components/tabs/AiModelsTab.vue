@@ -577,99 +577,104 @@ onMounted(() => {
                   </VBtn>
                 </template>
                 <VCardText class="pa-0 flex-grow-1 overflow-y-auto provider-list-scroll panel-fixed-h">
-                  <div class="d-flex flex-column">
-                    <div
-                      v-for="(prov, idx) in activeProviders"
-                      :key="prov.id"
-                      class="provider-item d-flex align-center justify-space-between pa-4"
-                      :class="{
-                        'border-b': idx < activeProviders.length - 1,
-                        'provider-item--selected': ai.selectedProviderId === prov.id,
-                      }"
-                      @click="selectProvider(prov)"
-                    >
+                  <AppCardLoader
+                    :loading="ai.loadingProviders"
+                    :has-data="activeProviders.length > 0"
+                  >
+                    <div class="d-flex flex-column">
                       <div
-                        class="d-flex align-center"
-                        style="min-width: 195px;"
+                        v-for="(prov, idx) in activeProviders"
+                        :key="prov.id"
+                        class="provider-item d-flex align-center justify-space-between pa-4"
+                        :class="{
+                          'border-b': idx < activeProviders.length - 1,
+                          'provider-item--selected': ai.selectedProviderId === prov.id,
+                        }"
+                        @click="selectProvider(prov)"
                       >
-                        <VAvatar
-                          :color="prov.bg"
-                          size="36"
-                          rounded="lg"
-                          class="me-3 font-weight-bold"
+                        <div
+                          class="d-flex align-center"
+                          style="min-width: 195px;"
                         >
-                          <VIcon
-                            v-if="prov.icon"
-                            :color="prov.color"
-                            size="20"
-                            :icon="prov.icon"
-                          />
-                          <span
-                            v-else
-                            :style="{ color: prov.color, fontSize: '13px' }"
-                          >{{ prov.shortText }}</span>
-                        </VAvatar>
-                        <div>
-                          <div class="text-body-1 font-weight-medium">
-                            {{ prov.name }}
-                          </div>
-                          <div class="d-flex align-center gap-1">
-                            <span
-                              class="status-dot"
-                              :style="{ backgroundColor: statusDotColor(prov) }"
+                          <VAvatar
+                            :color="prov.bg"
+                            size="36"
+                            rounded="lg"
+                            class="me-3 font-weight-bold"
+                          >
+                            <VIcon
+                              v-if="prov.icon"
+                              :color="prov.color"
+                              size="20"
+                              :icon="prov.icon"
                             />
                             <span
-                              class="text-caption"
-                              :class="statusColorClass(prov)"
-                            >
-                              {{ prov.statusText }}
-                            </span>
+                              v-else
+                              :style="{ color: prov.color, fontSize: '13px' }"
+                            >{{ prov.shortText }}</span>
+                          </VAvatar>
+                          <div>
+                            <div class="text-body-1 font-weight-medium">
+                              {{ prov.name }}
+                            </div>
+                            <div class="d-flex align-center gap-1">
+                              <span
+                                class="status-dot"
+                                :style="{ backgroundColor: statusDotColor(prov) }"
+                              />
+                              <span
+                                class="text-caption"
+                                :class="statusColorClass(prov)"
+                              >
+                                {{ prov.statusText }}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div class="d-none d-sm-block text-left">
-                        <div class="text-body-2 font-weight-medium">
-                          {{ prov.modelCount }}
+                        <div class="d-none d-sm-block text-left">
+                          <div class="text-body-2 font-weight-medium">
+                            {{ prov.modelCount }}
+                          </div>
+                          <div class="text-caption text-disabled">
+                            {{ prov.pricing }}
+                          </div>
                         </div>
-                        <div class="text-caption text-disabled">
-                          {{ prov.pricing }}
+                        <div
+                          class="d-flex align-center gap-1"
+                          @click.stop
+                        >
+                          <IconBtn
+                            size="small"
+                            color="primary"
+                            :loading="prov.pinging"
+                            :title="'Test ping ' + prov.name"
+                            @click="testPing(prov)"
+                          >
+                            <VIcon icon="tabler-plug-connected" />
+                          </IconBtn>
+                          <IconBtn
+                            size="small"
+                            color="info"
+                            :loading="prov.syncing"
+                            :title="'Sync model ' + prov.name"
+                            @click="syncProviderModels(prov)"
+                          >
+                            <VIcon icon="tabler-refresh" />
+                          </IconBtn>
+                          <VBtn
+                            variant="tonal"
+                            size="small"
+                            @click="configureProvider(prov)"
+                          >
+                            Cấu hình
+                          </VBtn>
+                          <IconBtn size="small">
+                            <VIcon icon="tabler-dots-vertical" />
+                          </IconBtn>
                         </div>
-                      </div>
-                      <div
-                        class="d-flex align-center gap-1"
-                        @click.stop
-                      >
-                        <IconBtn
-                          size="small"
-                          color="primary"
-                          :loading="prov.pinging"
-                          :title="'Test ping ' + prov.name"
-                          @click="testPing(prov)"
-                        >
-                          <VIcon icon="tabler-plug-connected" />
-                        </IconBtn>
-                        <IconBtn
-                          size="small"
-                          color="info"
-                          :loading="prov.syncing"
-                          :title="'Sync model ' + prov.name"
-                          @click="syncProviderModels(prov)"
-                        >
-                          <VIcon icon="tabler-refresh" />
-                        </IconBtn>
-                        <VBtn
-                          variant="tonal"
-                          size="small"
-                          @click="configureProvider(prov)"
-                        >
-                          Cấu hình
-                        </VBtn>
-                        <IconBtn size="small">
-                          <VIcon icon="tabler-dots-vertical" />
-                        </IconBtn>
                       </div>
                     </div>
-                  </div>
+                  </AppCardLoader>
                 </VCardText>
               </VCard>
             </VCol>
@@ -696,174 +701,179 @@ onMounted(() => {
                   </VBtn>
                 </template>
                 <VCardText class="flex-grow-1 overflow-y-auto panel-fixed-h">
-                  <!-- Header provider đang chọn -->
-                  <div class="d-flex align-center justify-space-between">
-                    <div class="d-flex align-center">
-                      <VAvatar
-                        :color="selectedProvider.bg"
-                        size="40"
-                        rounded="lg"
-                        class="me-3 font-weight-bold"
-                      >
-                        <VIcon
-                          v-if="selectedProvider.icon"
-                          :color="selectedProvider.color"
-                          size="22"
-                          :icon="selectedProvider.icon"
-                        />
-                        <span
-                          v-else
-                          :style="{ color: selectedProvider.color, fontSize: '13px' }"
-                        >{{ selectedProvider.shortText }}</span>
-                      </VAvatar>
-                      <div>
-                        <div class="text-body-1 font-weight-medium">
-                          {{ selectedProvider.name }}
-                        </div>
-                        <div class="d-flex align-center gap-1">
-                          <span
-                            class="status-dot"
-                            :style="{ backgroundColor: statusDotColor(selectedProvider) }"
+                  <AppCardLoader
+                    :loading="ai.loadingModels"
+                    :has-data="(selectedProvider.models?.length ?? 0) > 0"
+                  >
+                    <!-- Header provider đang chọn -->
+                    <div class="d-flex align-center justify-space-between">
+                      <div class="d-flex align-center">
+                        <VAvatar
+                          :color="selectedProvider.bg"
+                          size="40"
+                          rounded="lg"
+                          class="me-3 font-weight-bold"
+                        >
+                          <VIcon
+                            v-if="selectedProvider.icon"
+                            :color="selectedProvider.color"
+                            size="22"
+                            :icon="selectedProvider.icon"
                           />
                           <span
-                            class="text-caption"
-                            :class="statusColorClass(selectedProvider)"
-                          >
-                            {{ selectedProvider.statusText }}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="text-end">
-                      <div
-                        class="text-caption"
-                        :class="selectedProvider._syncError ? 'text-error font-weight-medium' : 'text-disabled'"
-                      >
-                        {{ selectedProvider._syncError ?? selectedProvider.modelCount }}
-                      </div>
-                      <div class="text-caption text-disabled font-mono">
-                        {{ selectedProvider.latencyText }}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="d-flex gap-2 mt-4">
-                    <VBtn
-                      size="small"
-                      variant="tonal"
-                      color="primary"
-                      prepend-icon="tabler-plug-connected"
-                      :loading="selectedProvider.pinging"
-                      class="flex-grow-1"
-                      @click="testPing(selectedProvider)"
-                    >
-                      Test ping
-                    </VBtn>
-                    <VBtn
-                      size="small"
-                      variant="tonal"
-                      color="info"
-                      prepend-icon="tabler-refresh"
-                      :loading="selectedProvider.syncing"
-                      class="flex-grow-1"
-                      @click="syncProviderModels(selectedProvider)"
-                    >
-                      Sync models
-                    </VBtn>
-                  </div>
-
-                  <!-- Danh sách model của provider đang chọn (scroll khi dài) -->
-                  <div class="mt-4">
-                    <div class="text-caption text-disabled mb-2">
-                      {{ selectedProvider.models.length }} mô hình của {{ selectedProvider.name }}
-                    </div>
-                    <div
-                      class="d-flex flex-column model-list-scroll"
-                      style="overflow-y: auto;"
-                    >
-                      <div
-                        v-for="(m, i) in selectedProvider.models"
-                        :key="m.name"
-                        class="d-flex align-center justify-space-between py-2"
-                        :class="{ 'border-b': i < selectedProvider.models.length - 1 }"
-                      >
-                        <div class="d-flex align-center">
-                          <VAvatar
-                            size="28"
-                            rounded="lg"
-                            color="primary"
-                            variant="tonal"
-                            class="me-3"
-                          >
-                            <VIcon
-                              size="15"
-                              color="primary"
-                              icon="tabler-cpu"
+                            v-else
+                            :style="{ color: selectedProvider.color, fontSize: '13px' }"
+                          >{{ selectedProvider.shortText }}</span>
+                        </VAvatar>
+                        <div>
+                          <div class="text-body-1 font-weight-medium">
+                            {{ selectedProvider.name }}
+                          </div>
+                          <div class="d-flex align-center gap-1">
+                            <span
+                              class="status-dot"
+                              :style="{ backgroundColor: statusDotColor(selectedProvider) }"
                             />
-                          </VAvatar>
-                          <div>
-                            <div class="text-body-2 font-weight-medium">
-                              {{ m.name }}
-                            </div>
-                            <div class="d-flex align-center gap-1">
-                              <!-- Icon capabilities đã chọn; rỗng -> text Không có capabilities -->
-                              <template v-if="m.capabilities?.length">
-                                <VTooltip
-                                  v-for="cap in m.capabilities"
-                                  :key="cap"
-                                  :text="capMeta(cap)?.label ?? cap"
-                                  location="top"
-                                >
-                                  <template #activator="{ props }">
-                                    <VIcon
-                                      v-bind="props"
-                                      :icon="capMeta(cap)?.icon ?? 'tabler-cpu'"
-                                      :color="capMeta(cap)?.color ?? 'primary'"
-                                      size="15"
-                                    />
-                                  </template>
-                                </VTooltip>
-                              </template>
-                              <span
-                                v-else
-                                class="text-caption text-disabled"
-                              >Chưa có capabilities</span>
-                              <span
-                                v-if="m.latencyText !== '—'"
-                                class="text-caption font-mono ms-1"
-                                :class="m.ok === false ? 'text-error' : 'text-success'"
-                              >
-                                {{ m.latencyText }}
-                              </span>
-                            </div>
+                            <span
+                              class="text-caption"
+                              :class="statusColorClass(selectedProvider)"
+                            >
+                              {{ selectedProvider.statusText }}
+                            </span>
                           </div>
                         </div>
-                        <div class="d-flex align-center gap-1">
-                          <IconBtn
-                            size="small"
-                            color="primary"
-                            title="Chỉnh capabilities"
-                            @click="openCapabilitiesDialog(m)"
-                          >
-                            <VIcon
-                              size="16"
-                              icon="tabler-adjustments"
-                            />
-                          </IconBtn>
-                          <VBtn
-                            size="x-small"
-                            variant="tonal"
-                            color="primary"
-                            prepend-icon="tabler-plug-connected"
-                            :loading="m.pinging"
-                            @click="testModelPing(m)"
-                          >
-                            Test ping
-                          </VBtn>
+                      </div>
+                      <div class="text-end">
+                        <div
+                          class="text-caption"
+                          :class="selectedProvider._syncError ? 'text-error font-weight-medium' : 'text-disabled'"
+                        >
+                          {{ selectedProvider._syncError ?? selectedProvider.modelCount }}
+                        </div>
+                        <div class="text-caption text-disabled font-mono">
+                          {{ selectedProvider.latencyText }}
                         </div>
                       </div>
                     </div>
-                  </div>
+
+                    <div class="d-flex gap-2 mt-4">
+                      <VBtn
+                        size="small"
+                        variant="tonal"
+                        color="primary"
+                        prepend-icon="tabler-plug-connected"
+                        :loading="selectedProvider.pinging"
+                        class="flex-grow-1"
+                        @click="testPing(selectedProvider)"
+                      >
+                        Test ping
+                      </VBtn>
+                      <VBtn
+                        size="small"
+                        variant="tonal"
+                        color="info"
+                        prepend-icon="tabler-refresh"
+                        :loading="selectedProvider.syncing"
+                        class="flex-grow-1"
+                        @click="syncProviderModels(selectedProvider)"
+                      >
+                        Sync models
+                      </VBtn>
+                    </div>
+
+                    <!-- Danh sách model của provider đang chọn (scroll khi dài) -->
+                    <div class="mt-4">
+                      <div class="text-caption text-disabled mb-2">
+                        {{ selectedProvider.models.length }} mô hình của {{ selectedProvider.name }}
+                      </div>
+                      <div
+                        class="d-flex flex-column model-list-scroll"
+                        style="overflow-y: auto;"
+                      >
+                        <div
+                          v-for="(m, i) in selectedProvider.models"
+                          :key="m.name"
+                          class="d-flex align-center justify-space-between py-2"
+                          :class="{ 'border-b': i < selectedProvider.models.length - 1 }"
+                        >
+                          <div class="d-flex align-center">
+                            <VAvatar
+                              size="28"
+                              rounded="lg"
+                              color="primary"
+                              variant="tonal"
+                              class="me-3"
+                            >
+                              <VIcon
+                                size="15"
+                                color="primary"
+                                icon="tabler-cpu"
+                              />
+                            </VAvatar>
+                            <div>
+                              <div class="text-body-2 font-weight-medium">
+                                {{ m.name }}
+                              </div>
+                              <div class="d-flex align-center gap-1">
+                                <!-- Icon capabilities đã chọn; rỗng -> text Không có capabilities -->
+                                <template v-if="m.capabilities?.length">
+                                  <VTooltip
+                                    v-for="cap in m.capabilities"
+                                    :key="cap"
+                                    :text="capMeta(cap)?.label ?? cap"
+                                    location="top"
+                                  >
+                                    <template #activator="{ props }">
+                                      <VIcon
+                                        v-bind="props"
+                                        :icon="capMeta(cap)?.icon ?? 'tabler-cpu'"
+                                        :color="capMeta(cap)?.color ?? 'primary'"
+                                        size="15"
+                                      />
+                                    </template>
+                                  </VTooltip>
+                                </template>
+                                <span
+                                  v-else
+                                  class="text-caption text-disabled"
+                                >Chưa có capabilities</span>
+                                <span
+                                  v-if="m.latencyText !== '—'"
+                                  class="text-caption font-mono ms-1"
+                                  :class="m.ok === false ? 'text-error' : 'text-success'"
+                                >
+                                  {{ m.latencyText }}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="d-flex align-center gap-1">
+                            <IconBtn
+                              size="small"
+                              color="primary"
+                              title="Chỉnh capabilities"
+                              @click="openCapabilitiesDialog(m)"
+                            >
+                              <VIcon
+                                size="16"
+                                icon="tabler-adjustments"
+                              />
+                            </IconBtn>
+                            <VBtn
+                              size="x-small"
+                              variant="tonal"
+                              color="primary"
+                              prepend-icon="tabler-plug-connected"
+                              :loading="m.pinging"
+                              @click="testModelPing(m)"
+                            >
+                              Test ping
+                            </VBtn>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </AppCardLoader>
                 </VCardText>
               </VCard>
             </VCol>

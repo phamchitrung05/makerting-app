@@ -19,6 +19,7 @@ declare module 'vue' {
     AppBarSearch: typeof import('./resources/js/@core/components/AppBarSearch.vue')['default']
     AppCardActions: typeof import('./resources/js/@core/components/cards/AppCardActions.vue')['default']
     AppCardCode: typeof import('./resources/js/@core/components/cards/AppCardCode.vue')['default']
+    AppCardLoader: typeof import('./resources/js/components/AppCardLoader.vue')['default']
     AppCombobox: typeof import('./resources/js/@core/components/app-form-elements/AppCombobox.vue')['default']
     AppDateTimePicker: typeof import('./resources/js/@core/components/app-form-elements/AppDateTimePicker.vue')['default']
     AppDialogLayout: typeof import('./resources/js/components/dialogs/AppDialogLayout.vue')['default']
@@ -388,6 +389,7 @@ declare module 'vue' {
     PaymentProvidersDialog: typeof import('./resources/js/components/dialogs/PaymentProvidersDialog.vue')['default']
     PricingPlanDialog: typeof import('./resources/js/components/dialogs/PricingPlanDialog.vue')['default']
     ProductDescriptionEditor: typeof import('./resources/js/@core/components/ProductDescriptionEditor.vue')['default']
+    ProfileReverseEngineerDialog: typeof import('./Modules/WritingStyle/resources/js/components/ProfileReverseEngineerDialog.vue')['default']
     ReferAndEarnDialog: typeof import('./resources/js/components/dialogs/ReferAndEarnDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
@@ -413,5 +415,8 @@ declare module 'vue' {
     UsersRolesTab: typeof import('./Modules/Settings/resources/js/components/tabs/UsersRolesTab.vue')['default']
     UserUpgradePlanDialog: typeof import('./resources/js/components/dialogs/UserUpgradePlanDialog.vue')['default']
     VueApexCharts: typeof import('vue3-apexcharts')['default']
+    WritingProfileEdit: typeof import('./Modules/WritingStyle/resources/js/components/WritingProfileEdit.vue')['default']
+    WritingProfileList: typeof import('./Modules/WritingStyle/resources/js/components/WritingProfileList.vue')['default']
+    WritingSandboxCard: typeof import('./Modules/WritingStyle/resources/js/components/WritingSandboxCard.vue')['default']
   }
 }
