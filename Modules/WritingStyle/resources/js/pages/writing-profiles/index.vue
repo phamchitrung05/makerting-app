@@ -94,13 +94,9 @@
       </VCol>
     </VRow>
 
-    <!-- ================= 3. KHUNG CHÍNH: BỘ LỌC & LƯỚI WRITING PROFILE ================= -->
-    <VCard
-      border
-      class="pa-5"
-    >
-      <!-- Thanh Tabs Trạng thái & Bộ lọc Tìm kiếm -->
-      <div class="d-flex align-center justify-space-between flex-wrap gap-3 pb-3 mb-5 border-b">
+    <!-- ================= 3. CARD BỘ LỌC (tabs + search/channel/sort/view) ================= -->
+    <VCard border>
+      <VCardText class="d-flex align-center justify-space-between flex-wrap gap-3">
         <!-- Tabs lọc theo trạng thái (underline custom, giữ nguyên thiết kế) -->
         <div class="d-flex align-center flex-wrap gap-1">
           <button
@@ -167,8 +163,11 @@
             />
           </VBtnToggle>
         </div>
-      </div>
+      </VCardText>
+    </VCard>
 
+    <!-- ================= ITEMS (không card bao) ================= -->
+    <div>
       <!-- ================= LƯỚI PROFILE (5 ITEM/HÀNG, RESPONSIVE) ================= -->
       <div
         v-if="viewMode === 'grid'"
@@ -402,9 +401,11 @@
           </tr>
         </tbody>
       </VTable>
+    </div>
 
-      <!-- ================= 4. PHÂN TRANG (PAGINATION FOOTER) ================= -->
-      <div class="d-flex justify-space-between align-center flex-wrap gap-3 pt-4 mt-2 text-caption text-medium-emphasis">
+    <!-- ================= 4. CARD PHÂN TRANG ================= -->
+    <VCard border>
+      <VCardText class="d-flex justify-space-between align-center flex-wrap gap-3">
         <div>Hiển thị {{ filteredProfiles.length }} trên {{ writingProfiles.length }} kết quả</div>
 
         <div class="d-flex align-center gap-3">
@@ -426,7 +427,7 @@
             next-icon="tabler-chevron-right"
           />
         </div>
-      </div>
+      </VCardText>
     </VCard>
   </div>
 </template>
