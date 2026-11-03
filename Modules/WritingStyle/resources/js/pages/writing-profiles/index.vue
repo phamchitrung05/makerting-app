@@ -97,24 +97,27 @@
     <!-- ================= 3. CARD BỘ LỌC (tabs + search/channel/sort/view) ================= -->
     <VCard border>
       <VCardText class="d-flex align-center justify-space-between flex-wrap gap-3">
-        <!-- Tabs lọc theo trạng thái (underline custom, giữ nguyên thiết kế) -->
-        <div class="d-flex align-center flex-wrap gap-1">
-          <button
+        <!-- Tabs lọc theo trạng thái — chuẩn VTabs/VTab như menu tab Settings -->
+        <VTabs
+          v-model="activeStatusTab"
+          color="primary"
+          density="comfortable"
+        >
+          <VTab
             v-for="tab in statusTabs"
             :key="tab.value"
-            type="button"
-            class="status-tab-btn px-3 py-2 text-caption d-flex align-center cursor-pointer"
-            :class="{ 'status-tab-active': activeStatusTab === tab.value }"
-            @click="activeStatusTab = tab.value"
+            :value="tab.value"
+            class="text-none font-weight-medium text-caption"
           >
-            <span
-              v-if="tab.dotColor"
-              class="tab-dot me-2"
-              :style="{ backgroundColor: `rgb(var(--v-theme-${tab.dotColor}))` }"
-            ></span>
-            <span>{{ tab.label }} ({{ tab.count }})</span>
-          </button>
-        </div>
+            <VIcon
+              v-if="tab.icon"
+              size="18"
+              class="me-2"
+              :icon="tab.icon"
+            />
+            {{ tab.label }} ({{ tab.count }})
+          </VTab>
+        </VTabs>
 
         <!-- Cụm Tìm kiếm, Lọc kênh, Sắp xếp & Chuyển đổi chế độ xem -->
         <div class="d-flex align-center flex-wrap gap-2 flex-grow-1 justify-md-end">
@@ -229,11 +232,12 @@
 
               <!-- Tiêu đề & Nhãn phiên bản -->
               <div class="d-flex align-center flex-wrap gap-1 mb-2">
-                <span class="text-subtitle-2 font-weight-medium">{{ profile.title }}</span>
+                <span class="text-h6 font-weight-bold">{{ profile.title }}</span>
                 <VChip
                   size="x-small"
                   color="primary"
                   variant="tonal"
+                  class="font-weight-bold"
                 >
                   {{ profile.version }}
                 </VChip>
@@ -338,7 +342,7 @@
                   />
                 </VAvatar>
                 <div>
-                  <div class="text-body-2 font-weight-medium">
+                  <div class="text-h6 font-weight-bold">
                     {{ profile.title }}
                   </div>
                   <div class="text-caption text-disabled">
@@ -352,6 +356,7 @@
                 size="x-small"
                 color="primary"
                 variant="tonal"
+                class="font-weight-bold"
               >
                 {{ profile.version }}
               </VChip>
@@ -438,12 +443,12 @@ const kpiCards = [
   { label: 'Đã lưu trữ', value: '1', icon: 'tabler-archive', color: 'secondary' },
 ]
 
-// 4 Tabs lọc trạng thái
+// 4 Tabs lọc trạng thái (chuẩn VTab, icon Tabler)
 const statusTabs = [
-  { value: 'all', label: 'Tất cả', count: 12, dotColor: '' },
-  { value: 'active', label: 'Đang sử dụng', count: 8, dotColor: 'success' },
-  { value: 'draft', label: 'Nháp', count: 3, dotColor: 'warning' },
-  { value: 'archived', label: 'Đã lưu trữ', count: 1, dotColor: 'primary' },
+  { value: 'all', label: 'Tất cả', count: 12, icon: 'tabler-list' },
+  { value: 'active', label: 'Đang sử dụng', count: 8, icon: 'tabler-circle-check' },
+  { value: 'draft', label: 'Nháp', count: 3, icon: 'tabler-file-pencil' },
+  { value: 'archived', label: 'Đã lưu trữ', count: 1, icon: 'tabler-archive' },
 ]
 
 // Màu thanh tiến độ — theo màu hệ thống (primary), không theo ngưỡng điểm.
@@ -566,32 +571,6 @@ const filteredProfiles = computed(() => {
 </script>
 
 <style scoped>
-/* Thanh Tabs Trạng thái — giữ thiết kế gạch chân, màu lấy từ theme. */
-.status-tab-btn {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
-  font-weight: 500;
-  transition: color 0.15s ease, border-color 0.15s ease;
-  margin-bottom: -13px;
-  padding-bottom: 12px !important;
-}
-.status-tab-btn:hover {
-  color: rgb(var(--v-theme-primary));
-}
-.status-tab-active {
-  color: rgb(var(--v-theme-primary)) !important;
-  font-weight: 600 !important;
-  border-bottom: 2px solid rgb(var(--v-theme-primary)) !important;
-}
-
-.tab-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
 .status-mini-dot {
   width: 6px;
   height: 6px;
