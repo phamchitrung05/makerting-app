@@ -179,7 +179,7 @@
           :key="profile.id"
         >
           <VCard
-            class="profile-grid-card pa-4 h-100 d-flex flex-column justify-space-between position-relative overflow-hidden cursor-pointer"
+            class="profile-grid-card pa-4 d-flex flex-column justify-space-between position-relative overflow-hidden cursor-pointer"
           >
             <!-- Quầng màu tonal trang trí góc trên bên trái (màu theme) -->
             <div
