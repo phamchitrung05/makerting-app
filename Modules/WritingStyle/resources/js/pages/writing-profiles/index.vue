@@ -403,31 +403,16 @@
       </VTable>
     </div>
 
-    <!-- ================= 4. CARD PHÂN TRANG ================= -->
-    <VCard border>
-      <VCardText class="d-flex justify-space-between align-center flex-wrap gap-3">
-        <div>Hiển thị {{ filteredProfiles.length }} trên {{ writingProfiles.length }} kết quả</div>
-
-        <div class="d-flex align-center gap-3">
-          <AppSelect
-            v-model="perPage"
-            :items="['8 / trang', '12 / trang', '24 / trang']"
-            density="compact"
-            hide-details
-            style="width: 105px;"
-          />
-
-          <VPagination
-            :length="2"
-            :model-value="1"
-            density="compact"
-            rounded="lg"
-            total-visible="3"
-            prev-icon="tabler-chevron-left"
-            next-icon="tabler-chevron-right"
-          />
-        </div>
-      </VCardText>
+    <!-- ================= 4. CARD PHÂN TRANG (chuẩn TablePagination) ================= -->
+    <VCard
+      border
+      class="pa-0 overflow-hidden"
+    >
+      <TablePagination
+        v-model:page="page"
+        :items-per-page="itemsPerPage"
+        :total-items="filteredProfiles.length"
+      />
     </VCard>
   </div>
 </template>
@@ -440,7 +425,10 @@ const searchQuery = ref('')
 const selectedChannel = ref('Tất cả kênh')
 const sortBy = ref('Sắp xếp: Mới nhất')
 const viewMode = ref('grid')
-const perPage = ref('8 / trang')
+
+// Phân trang (chuẩn TablePagination của project)
+const page = ref(1)
+const itemsPerPage = ref(10)
 
 // 4 Thẻ thống kê KPI trên đầu trang
 const kpiCards = [
@@ -630,9 +618,9 @@ const filteredProfiles = computed(() => {
   .profile-grid { grid-template-columns: 1fr; }
 }
 
-/* Card Writing Profile — không border (tránh card lồng card), hover nổi nhẹ. */
+/* Card Writing Profile — nền surface (trắng/Dark tự đổi), hover nổi nhẹ. */
 .profile-grid-card {
-  background-color: rgba(var(--v-theme-on-surface), 0.03);
+  background-color: rgb(var(--v-theme-surface));
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .profile-grid-card:hover {
