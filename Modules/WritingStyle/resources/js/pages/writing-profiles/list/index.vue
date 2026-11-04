@@ -14,7 +14,7 @@
   - Spacing class Vuetify chuẩn (gap-2, pa-4, mb-3...).
 
   CÁC HÀM/METHOD TRONG FILE: chỉ filter computed (demo).
-  INPUT/OUTPUT: route /admin/writing-style/writing-profiles.
+  INPUT/OUTPUT: route /admin/writing-style/writing-profiles/list.
   SIDE EFFECT: không.
   =====================================================================
 -->
@@ -192,7 +192,7 @@
         >
           <VCard
             class="profile-grid-card pa-4 d-flex flex-column justify-space-between position-relative overflow-hidden cursor-pointer"
-            :to="{ name: 'admin-writing-style-writing-profiles-id', params: { id: profile.id } }"
+            :to="{ name: 'admin-writing-style-writing-profiles-edit-id', params: { id: profile.id } }"
           >
             <!-- Quầng màu tonal trang trí góc trên bên trái (màu theme) -->
             <div
@@ -329,11 +329,13 @@
 </template>
 
 <script setup>
+import { useRouter } from 'vue-router'
 import { computed, onMounted, ref } from 'vue'
-import { useWritingStyleStore } from '../../stores/writingStyle'
-import ProfileReverseEngineerDialog from '../../components/ProfileReverseEngineerDialog.vue'
+import { useWritingStyleStore } from '../../../stores/writingStyle'
+import ProfileReverseEngineerDialog from '../../../components/ProfileReverseEngineerDialog.vue'
 
 const store = useWritingStyleStore()
+const router = useRouter()
 
 const activeStatusTab = ref('all')
 const searchQuery = ref('')

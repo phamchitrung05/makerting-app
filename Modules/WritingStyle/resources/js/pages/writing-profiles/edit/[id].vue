@@ -2,8 +2,8 @@
   =====================================================================
   CHỨC NĂNG FILE: Trang Chỉnh sửa Writing Profile (route edit).
   =====================================================================
-  Route: /admin/writing-style/writing-profiles/:id
-  Tự nạp qua file-based routing — tên 'admin-writing-style-writing-profiles-id'.
+  Route: /admin/writing-style/writing-profiles/edit/:id
+  Tự nạp qua file-based routing — tên 'admin-writing-style-writing-profiles-edit-id'.
 
   Chuẩn hoá theo docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §3.5
   (trang Add/Edit theo mẫu product/add): PascalCase V*/App*, icon tabler-*,
