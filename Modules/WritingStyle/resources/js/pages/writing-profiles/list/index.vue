@@ -517,8 +517,7 @@ async function onAnalyze(payload) {
 function openReverseDialog() { reverseDialog.value = true }
 
 function openCreateDialog() {
-  // Bạn sẽ tách form tạo tay sau — hiện nối cùng dialog giải mã.
-  reverseDialog.value = true
+  router.push({ name: 'admin-writing-style-writing-profiles-create' })
 }
 
 const scoreColor = () => 'primary'
