@@ -20,6 +20,6 @@ export default [
   {
     title: 'Writing Profiles',
     icon: { icon: 'tabler-dna' },
-    to: 'admin-writing-style-writing-profiles',
+    to: 'admin-writing-style-writing-profiles-list',
   },
 ]
