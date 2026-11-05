@@ -17,9 +17,10 @@
   =====================================================================
 -->
 <script setup>
-import { computed, onMounted, reactive, ref, useId } from 'vue'
+import { computed, onMounted, reactive, ref, useId, watch } from 'vue'
 import { useAiConfigStore } from '@modules/CoreAi/resources/js/stores/aiConfig'
 import AddAiModelDialog from '../dialogs/AddAiModelDialog.vue'
+import { isConflictError, firstErrorMessage } from '@/utils/api'
 
 // Store cấu hình AI (providers/models) — nguồn data thật cho panel Nhà cung cấp.
 const ai = useAiConfigStore()
@@ -126,7 +127,224 @@ const quickTools = [
   { title: 'Xóa cache mô hình', desc: 'Xóa dữ liệu tạm, làm mới cấu hình', icon: 'tabler-refresh', color: 'warning', targetTab: 'advanced' },
 ]
 
-const defaults = reactive({ textModel: 'GPT-4o', imageModel: 'DALL-E 3', videoModel: 'Runway Gen-3', language: 'Tiếng Việt' })
+/*
+ * Form "Cài đặt mặc định" — bind model ID (không phải tên) để khớp
+ * validationRule exists:ai_models,id của AiSettings backend.
+ * Options lấy từ getter lọc theo capability — không hardcode.
+ */
+const defaults = reactive({
+  textModel: null,
+  imageModel: null,
+  videoModel: null,
+  language: 'vi',
+})
+
+const defaultsSaving = ref(false)
+const defaultsConflict = ref(false)
+
+/*
+ * Cờ "đã có dữ liệu model để dựng nhãn": providers nạp KÈM models xong.
+ * fetchAiSettings() (1 GET) luôn về trước ensureLoaded({withModels:true})
+ * (1 + N request) nên trong khoảng đó providers còn rỗng — không được
+ * hiện id thô "Mô hình #13" mà phải báo đang tải.
+ */
+const modelsReady = computed(() => ai.providersModelsAttempted && !ai.loadingProviders)
+
+/*
+ * Tra nhãn model theo id trong MỌI provider — không lọc capability hay
+ * is_enabled, để giá trị đang chọn luôn hiện đúng tên dù bị filter khỏi
+ * danh sách option (model đã tắt, driver ngoài whitelist...).
+ * INPUT: id (number). OUTPUT: {value,title} | null.
+ */
+function findModelOption(id) {
+  for (const p of ai.providers) {
+    const m = (p.models ?? []).find(x => x.id === id)
+    if (m)
+      return { value: m.id, title: `${m.label ?? m.remote_model_id} · ${p.name}` }
+  }
+
+  return null
+}
+
+/*
+ * Option giữ chỗ cho id đã lưu nhưng chưa tra được nhãn:
+ * - providers chưa nạp xong -> "Đang tải…" (hết nháy "Mô hình #13");
+ * - nạp xong mà vẫn không thấy -> model đã bị xóa, nói rõ cho admin.
+ * INPUT: id (number). OUTPUT: {value,title}.
+ */
+function placeholderOption(id) {
+  return modelsReady.value
+    ? { value: id, title: `Mô hình #${id} (không còn tồn tại)` }
+    : { value: id, title: 'Đang tải…' }
+}
+
+/*
+ * Dựng list option model ĐANG BẬT theo capability — chỉ model đã được gán
+ * đúng capability mới xuất hiện (không đoán theo remote_model_id). Giá trị
+ * đang chọn mà không khớp capability sẽ được unshift với nhãn "(…)" để
+ * admin thấy mà chọn lại.
+ * INPUT: caps string[] (các CAP_* chấp nhận được), selectedId number|null.
+ * OUTPUT: [{value,title}].
+ */
+function buildOptionsByCaps(caps, selectedId) {
+  const options = []
+  const seen = new Set()
+
+  for (const p of ai.providers) {
+    for (const m of p.models ?? []) {
+      if (m.is_enabled === false) continue
+      if ((m.capabilities ?? []).some(c => caps.includes(c))) {
+        seen.add(m.id)
+        options.push({ value: m.id, title: `${m.label ?? m.remote_model_id} · ${p.name}` })
+      }
+    }
+  }
+
+  // Giá trị đang lưu không có capability đúng (hoặc model đã tắt/xóa) ->
+  // vẫn hiện để admin biết và chọn lại, gắn nhãn để không lẫn.
+  if (selectedId != null && !seen.has(selectedId)) {
+    const found = findModelOption(selectedId)
+    if (found)
+      options.unshift({ value: found.value, title: `${found.title} (không khớp capability)` })
+    else
+      options.unshift(placeholderOption(selectedId))
+  }
+
+  return options
+}
+
+/* Văn bản: model có capability sinh text hoặc xuất có cấu trúc. */
+const textModelOptions = computed(() =>
+  buildOptionsByCaps(['text_generation', 'structured_output'], defaults.textModel),
+)
+
+/* Hình ảnh: model có capability sinh ảnh. (vision = hiểu ảnh, không sinh) */
+const imageModelOptions = computed(() =>
+  buildOptionsByCaps(['image_generation'], defaults.imageModel),
+)
+
+/*
+ * Video: backend CHƯA có capability 'video_generation' (AiModel::CAPABILITIES
+ * chỉ có text/structured/vision/image/tts/stt) nên không thể lọc theo
+ * capability như 2 field trên. Tạm nhận diện theo remote_model_id
+ * (veo/seedance/kling/runway...) — khi backend thêm capability video thì
+ * đổi sang buildOptionsByCaps(['video_generation'], ...).
+ */
+const VIDEO_HINTS = ['video', 'veo', 'seedance', 'pixverse', 'kling', 'runway', 'ltx', 'wan']
+
+const videoModelOptions = computed(() => {
+  const options = []
+  const seen = new Set()
+
+  for (const p of ai.providers) {
+    for (const m of p.models ?? []) {
+      if (m.is_enabled === false) continue
+
+      const idLower = (m.remote_model_id || '').toLowerCase()
+      if (!VIDEO_HINTS.some(h => idLower.includes(h))) continue
+
+      seen.add(m.id)
+      options.push({ value: m.id, title: `${m.label ?? m.remote_model_id} · ${p.name}` })
+    }
+  }
+
+  if (defaults.videoModel != null && !seen.has(defaults.videoModel))
+    options.unshift(findModelOption(defaults.videoModel) ?? placeholderOption(defaults.videoModel))
+
+  return options
+})
+
+const languageOptions = [
+  { value: 'vi', title: 'Tiếng Việt' },
+  { value: 'en', title: 'English' },
+  { value: 'ja', title: '日本語' },
+]
+
+/*
+ * Đổ cấu hình 'ai' đã nạp vào form — gọi sau fetchAiSettings() và mỗi lần
+ * load lại (force sau save/409). Dùng values.* làm nguồn; giữ nguyên
+ * khi backend trả null cho field chưa chọn.
+ */
+function applyAiSettings() {
+  const v = ai.aiSettings.values || {}
+
+  defaults.textModel = v.default_text_model_id != null && v.default_text_model_id !== '' ? Number(v.default_text_model_id) : null
+  defaults.imageModel = v.default_image_model_id != null && v.default_image_model_id !== '' ? Number(v.default_image_model_id) : null
+  defaults.videoModel = v.default_video_model_id != null && v.default_video_model_id !== '' ? Number(v.default_video_model_id) : null
+  defaults.language = v.default_language || 'vi'
+}
+
+/*
+ * Các id mặc định đã lưu nhưng không còn trong danh sách model — chỉ xét
+ * SAU khi providers nạp xong models, tránh báo động nhầm lúc đang tải.
+ * OUTPUT: string[] nhãn trường bị mồ côi (rỗng = không có vấn đề).
+ */
+const staleDefaultLabels = computed(() => {
+  if (!modelsReady.value)
+    return []
+
+  const checks = [
+    ['Văn bản', defaults.textModel],
+    ['Hình ảnh', defaults.imageModel],
+    ['Video', defaults.videoModel],
+  ]
+
+  return checks
+    .filter(([, id]) => id != null && findModelOption(id) === null)
+    .map(([label]) => label)
+})
+
+/*
+ * Lưu card Cài đặt mặc định qua PUT /settings/ai (khóa version).
+ * 409 -> cờ conflict + hỏi tải lại; 422 -> snackbar thông báo.
+ */
+async function saveDefaults() {
+  defaultsSaving.value = true
+  defaultsConflict.value = false
+  try {
+    /*
+     * Dọn id mặc định đã trỏ tới model không còn tồn tại -> gửi null để
+     * backend xóa, tránh giữ id mồ côi và cho phép nút Lưu tự sửa lỗi.
+     * Chỉ dọn sau khi models nạp xong, không thì xóa nhầm lúc đang tải.
+     */
+    const clean = id => {
+      if (id == null || id === '')
+        return null
+
+      // Model đã bị xóa khỏi hệ thống -> không gửi id mồ côi lên backend
+      // (sẽ fail rule exists:ai_models,id và chặn cả lần lưu).
+      if (modelsReady.value && findModelOption(Number(id)) === null)
+        return null
+
+      return Number(id)
+    }
+
+    await ai.saveAiSettings({
+      'default_text_model_id': clean(defaults.textModel),
+      'default_image_model_id': clean(defaults.imageModel),
+      'default_video_model_id': clean(defaults.videoModel),
+      'default_language': defaults.language || 'vi',
+    })
+    notify('Đã lưu cài đặt mặc định thành công')
+    
+    return true
+  } catch (e) {
+    const status = e?.status ?? e?.data?.status ?? e?.response?.status
+
+    if (status === 409 || isConflictError(e)) {
+      defaultsConflict.value = true
+      await ai.fetchAiSettings({ force: true })
+      applyAiSettings()
+      notify('Cấu hình vừa bị người khác sửa — đã tải bản mới nhất.', 'warning')
+    } else {
+      notify(firstErrorMessage(e) || e?.data?.message || e?.message || 'Lưu thất bại', 'error')
+    }
+    
+    return false
+  } finally {
+    defaultsSaving.value = false
+  }
+}
 const limits = reactive({ dailyCostUsd: '10', rpm: '60', costControl: true, alert80: true, autoPause: false, detailedLogs: true })
 
 // ---- Dữ liệu Tab Nhà cung cấp ----
@@ -466,10 +684,33 @@ function goToTab(tab) {
   if (tab) { activeTab.value = tab }
 }
 
-// Nạp providers thật + metadata form (drivers/capabilities) khi tab mount.
-onMounted(() => {
-  ai.ensureLoaded({ withModels: true })
-  ai.fetchFormMeta()
+// Đồng bộ form khi aiSettings thay đổi
+watch(
+  () => ai.aiSettings.values,
+  () => {
+    applyAiSettings()
+  },
+  { deep: true },
+)
+
+// Nạp providers thật + metadata form (drivers/capabilities) + cài đặt AI khi tab mount.
+onMounted(async () => {
+  await Promise.allSettled([
+    ai.ensureLoaded({ withModels: true }),
+    ai.fetchFormMeta(),
+    ai.fetchAiSettings(),
+  ])
+  applyAiSettings()
+})
+
+async function saveSettings() {
+  return await saveDefaults()
+}
+
+// Expose cho page header gọi save
+defineExpose({
+  saveSettings,
+  saving: defaultsSaving,
 })
 </script>
 
@@ -891,13 +1132,52 @@ onMounted(() => {
                 border
               >
                 <VCardText>
+                  <VAlert
+                    v-if="defaultsConflict"
+                    type="warning"
+                    variant="tonal"
+                    density="compact"
+                    class="mb-4"
+                    closable
+                    @click:close="defaultsConflict = false"
+                  >
+                    Cấu hình vừa được cập nhật từ phiên bản mới nhất trên hệ thống.
+                  </VAlert>
+
+                  <VAlert
+                    v-if="staleDefaultLabels.length"
+                    type="error"
+                    variant="tonal"
+                    density="compact"
+                    class="mb-4"
+                  >
+                    Mô hình mặc định {{ staleDefaultLabels.join(', ') }} không còn tồn tại — vui lòng chọn lại rồi lưu.
+                  </VAlert>
+
+                  <VAlert
+                    v-if="modelsReady && !textModelOptions.length && !imageModelOptions.length"
+                    type="info"
+                    variant="tonal"
+                    density="compact"
+                    class="mb-4"
+                  >
+                    Chưa có mô hình nào được gán capability. Vào tab
+                    <strong>Mô hình AI</strong> để gán capability (Sinh văn bản,
+                    Sinh ảnh…) cho từng mô hình trước khi chọn mặc định.
+                  </VAlert>
+
                   <div class="mb-4">
                     <div class="text-body-2 font-weight-medium mb-2">
                       Mô hình mặc định (Văn bản)
                     </div>
                     <AppSelect
                       v-model="defaults.textModel"
-                      :items="['GPT-4o', 'Claude 3.5 Sonnet', 'Gemini 1.5 Pro']"
+                      :items="textModelOptions"
+                      item-title="title"
+                      item-value="value"
+                      clearable
+                      placeholder="Chọn mô hình văn bản mặc định"
+                      :loading="ai.loadingProviders || ai.loadingAiSettings"
                       prepend-inner-icon="tabler-sparkles"
                       hide-details
                     />
@@ -908,7 +1188,12 @@ onMounted(() => {
                     </div>
                     <AppSelect
                       v-model="defaults.imageModel"
-                      :items="['DALL-E 3', 'Midjourney v6', 'Stable Diffusion XL']"
+                      :items="imageModelOptions"
+                      item-title="title"
+                      item-value="value"
+                      clearable
+                      placeholder="Chọn mô hình hình ảnh mặc định"
+                      :loading="ai.loadingProviders || ai.loadingAiSettings"
                       prepend-inner-icon="tabler-photo"
                       hide-details
                     />
@@ -919,7 +1204,12 @@ onMounted(() => {
                     </div>
                     <AppSelect
                       v-model="defaults.videoModel"
-                      :items="['Runway Gen-3', 'Luma Dream Machine', 'Kling AI']"
+                      :items="videoModelOptions"
+                      item-title="title"
+                      item-value="value"
+                      clearable
+                      placeholder="Chọn mô hình video mặc định"
+                      :loading="ai.loadingProviders || ai.loadingAiSettings"
                       prepend-inner-icon="tabler-video"
                       hide-details
                     />
@@ -930,12 +1220,24 @@ onMounted(() => {
                     </div>
                     <AppSelect
                       v-model="defaults.language"
-                      :items="['Tiếng Việt', 'English', '日本語']"
+                      :items="languageOptions"
+                      item-title="title"
+                      item-value="value"
                       prepend-inner-icon="tabler-language"
                       hide-details
                     />
                   </div>
                 </VCardText>
+                <VCardActions class="px-4 pb-4 pt-0 justify-end">
+                  <VBtn
+                    size="small"
+                    prepend-icon="tabler-device-floppy"
+                    :loading="defaultsSaving"
+                    @click="saveDefaults"
+                  >
+                    Lưu mặc định
+                  </VBtn>
+                </VCardActions>
               </VCard>
             </VCol>
 

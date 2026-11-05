@@ -56,8 +56,25 @@ function onSelect(id) {
 
 // Hai action của tab "Thông tin chung" đưa lên page header (chỉ hiển thị
 // khi đang ở tab general); gọi vào defineExpose của GeneralTab.
-function onSave() {
-  tabRef.value?.saveSettings?.()
+const isSaving = ref(false)
+
+const canSave = computed(() => {
+  return ['general', 'ai-models'].includes(activeTab.value) || typeof tabRef.value?.saveSettings === 'function'
+})
+
+const canReset = computed(() => {
+  return activeTab.value === 'general' && typeof tabRef.value?.resetDefaults === 'function'
+})
+
+async function onSave() {
+  if (tabRef.value?.saveSettings) {
+    isSaving.value = true
+    try {
+      await tabRef.value.saveSettings()
+    } finally {
+      isSaving.value = false
+    }
+  }
 }
 
 function onReset() {
@@ -79,18 +96,20 @@ function onReset() {
       </div>
       <!-- Nút hành động của tab "Thông tin chung" trên page header. -->
       <div
-        v-if="activeTab === 'general'"
+        v-if="canSave"
         class="d-flex gap-3 align-center"
       >
         <VBtn
           variant="tonal"
           color="secondary"
+          v-if="canReset"
           prepend-icon="tabler-refresh"
           @click="onReset"
         >
           Khôi phục mặc định
         </VBtn>
         <VBtn
+          :loading="isSaving"
           prepend-icon="tabler-device-floppy"
           @click="onSave"
         >

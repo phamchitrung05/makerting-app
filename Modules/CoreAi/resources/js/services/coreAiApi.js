@@ -11,11 +11,16 @@
  * - GET    /v1/admin/core-ai/models/options         -> modelOptions()
  * - GET    /v1/admin/core-ai/models/capabilities    -> capabilities()
  * - CRUD   /v1/admin/core-ai/models                 -> create/update/delete
+ * - GET    /v1/admin/settings/ai                    -> getAiSettings()
+ * - PUT    /v1/admin/settings/ai                    -> updateAiSettings()
  * =====================================================================
  */
 import { $api } from '@/utils/api'
 
 const BASE = '/v1/admin/core-ai'
+
+/* Endpoint chung của module Settings — nhóm 'ai' dùng chính route này. */
+const SETTINGS_BASE = '/v1/admin/settings'
 
 export const coreAiApi = {
   /* ============================ PROVIDERS ============================ */
@@ -100,5 +105,26 @@ export const coreAiApi = {
   /* Ping 1 model cụ thể -> {ok,latency_ms,message,is_available}. */
   testModel(id) {
     return $api(`${BASE}/models/${id}/test`, { method: 'POST' })
+  },
+
+  /* ============================ SETTINGS ============================ */
+
+  /*
+   * Nhóm cài đặt 'ai' đi qua endpoint CHUNG của module Settings
+   * (/v1/admin/settings/ai) — CoreAi chỉ register AiSettings vào
+   * SettingsRegistry, không tự mở route riêng.
+   */
+
+  /* Đọc nhóm 'ai' (mô hình mặc định + ngôn ngữ) -> {group,version,values}. */
+  getAiSettings() {
+    return $api(`${SETTINGS_BASE}/ai`)
+  },
+
+  /* Cập nhật nhóm 'ai' kèm expected_version -> {group,version,values} mới. */
+  updateAiSettings(values, expectedVersion) {
+    return $api(`${SETTINGS_BASE}/ai`, {
+      method: 'PUT',
+      body: { 'expected_version': expectedVersion, values }, // eslint-disable-line camelcase
+    })
   },
 }

@@ -11,6 +11,7 @@ return [
         Modules\Settings\Settings\SecuritySettings::class,
         Modules\Settings\Settings\MailSettings::class,
         Modules\Seo\Settings\SeoSettings::class,
+        Modules\CoreAi\Settings\AiSettings::class,
     ],
 
     /*

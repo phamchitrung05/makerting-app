@@ -128,7 +128,44 @@ class ModelResolver
         ?string $providerKey,
         ?string $modelId,
     ): ?AiModel {
+        if ($providerKey === null && $modelId === null) {
+            $defaultModel = $this->resolveDefaultModel($capability);
+            if ($defaultModel !== null) {
+                return $defaultModel;
+            }
+        }
+
         return $this->candidates($capability, $providerKey, $modelId)->first();
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Thử lấy model mặc định từ AiSettings khi caller không chỉ định.
+     * =====================================================================
+     * INPUT: capability. OUTPUT: ?AiModel (nếu đã cấu hình và usable).
+     * =====================================================================
+     */
+    protected function resolveDefaultModel(string $capability): ?AiModel
+    {
+        try {
+            $settings = app(\Modules\CoreAi\Settings\AiSettings::class);
+            $defaultId = match ($capability) {
+                AiModel::CAP_TEXT_GENERATION, AiModel::CAP_STRUCTURED_OUTPUT => $settings->default_text_model_id,
+                AiModel::CAP_IMAGE_GENERATION => $settings->default_image_model_id,
+                default => null,
+            };
+
+            if ($defaultId !== null) {
+                $model = AiModel::query()->usable()->with('provider')->find($defaultId);
+                if ($model !== null) {
+                    return $model;
+                }
+            }
+        } catch (\Throwable) {
+            // Chưa migrate settings hoặc fallback an toàn
+        }
+
+        return null;
     }
 
     /**

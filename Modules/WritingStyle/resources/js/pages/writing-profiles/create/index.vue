@@ -79,7 +79,7 @@ const promptMode = ref('dna')
 const snack = reactive({ show: false, text: '', color: 'success' })
 
 const SOURCE_TABS = [
-  { value: 'url', label: 'Từ URL', icon: 'tabler-world-www' },
+  { value: 'url', label: 'Từ URL', icon: 'tabler-link' },
   { value: 'paste', label: 'Dán nội dung', icon: 'tabler-clipboard-text' },
   { value: 'file', label: 'Từ file', icon: 'tabler-file-upload' },
 ]

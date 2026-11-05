@@ -53,9 +53,32 @@ export const useAiConfigStore = defineStore('aiConfig', {
     lastError: null,
     providersInitialized: false,  // đã nạp providers (ít nhất 1 lần) chưa
     providersModelsLoaded: false, // đã nạp providers kèm models chưa
+    /*
+     * Đã THỬ nạp providers kèm models xong (kể cả thất bại) — khác với
+     * providersModelsLoaded (chỉ true khi thành công). UI cần cờ này để
+     * biết khi nào ngừng hiện "Đang tải…" mà chuyển sang trạng thái lỗi,
+     * thay vì treo spinner vĩnh viễn khi request fail.
+     */
+    providersModelsAttempted: false,
     formMetaInitialized: false,   // đã nạp drivers+capabilities chưa
+    aiSettings: {                 // payload nhóm 'ai' từ /settings/ai
+      version: 0,
+      /* eslint-disable camelcase -- key phải khớp property của AiSettings backend */
+      values: {                   // khớp key của AiSettings backend
+        default_text_model_id: null,
+        default_image_model_id: null,
+        default_video_model_id: null,
+        default_language: 'vi',
+      },
+      /* eslint-enable camelcase */
+    },
+    aiSettingsLoaded: false,      // đã nạp settings 'ai' chưa
+    loadingAiSettings: false,     // đang tải settings 'ai'
+    savingAiSettings: false,
     _providersPromise: null,      // in-flight promise dedup nạp providers
+    _providersPromiseWithModels: false, // promise đang bay có kèm models không
     _formMetaPromise: null,       // in-flight promise dedup nạp form meta
+    _aiSettingsPromise: null,     // in-flight promise dedup nạp settings
   }),
 
   getters: {
@@ -68,6 +91,38 @@ export const useAiConfigStore = defineStore('aiConfig', {
     /* Provider đang chọn (cho panel phải Tổng quan). */
     selectedProvider: state =>
       state.providers.find(p => p.id === state.selectedProviderId) ?? state.providers[0] ?? null,
+
+    /*
+     * Toàn bộ model của mọi provider, phẳng hóa kèm tên provider.
+     * Dùng làm nguồn cho các getter options theo capability bên dưới.
+     */
+    allModels: state =>
+      state.providers.flatMap(p =>
+        (p.models ?? []).map(m => ({
+          id: m.id,
+          label: m.label ?? m.remote_model_id,
+          remoteModelId: m.remote_model_id,
+          providerName: p.name,
+          providerId: p.id,
+          capabilities: m.capabilities ?? [],
+          isEnabled: m.is_enabled !== false,
+        })),
+      ),
+
+    /*
+     * Options dropdown model theo capability — {value,title,subtitle}.
+     * Chỉ lấy model đang bật (is_enabled); title gắn tên provider để admin
+     * phân biệt khi 2 provider có cùng remote_model_id.
+     */
+    modelOptionsByCapability: state => capability =>
+      state.providers.flatMap(p =>
+        (p.models ?? [])
+          .filter(m => m.is_enabled !== false && (m.capabilities ?? []).includes(capability))
+          .map(m => ({
+            value: m.id,
+            title: `${m.label ?? m.remote_model_id} · ${p.name}`,
+          })),
+      ),
 
     /* Provider kèm style avatar + flag UI (cho panel trái Tổng quan). */
     providersForUI: state =>
@@ -109,8 +164,14 @@ export const useAiConfigStore = defineStore('aiConfig', {
       if (this.providersInitialized && !force && (!withModels || this.providersModelsLoaded))
         return this.providers
 
-      // Đang có request dở -> chờ chung, tránh gọi trùng.
-      if (this._providersPromise)
+      /*
+       * Đang có request dở -> chờ chung, tránh gọi trùng. NHƯNG chỉ khi
+       * promise đó nạp ĐỦ thứ ta cần: caller xin withModels mà promise
+       * đang bay lại là bản không models thì phải chạy request riêng,
+       * nếu không providersModelsLoaded vĩnh viễn false và các dropdown
+       * phụ thuộc models sẽ treo ở trạng thái "Đang tải…".
+       */
+      if (this._providersPromise && (!withModels || this._providersPromiseWithModels))
         return this._providersPromise
 
       this.loadingProviders = true
@@ -144,10 +205,15 @@ export const useAiConfigStore = defineStore('aiConfig', {
         } finally {
           this.loadingProviders = false
           this._providersPromise = null
+          this._providersPromiseWithModels = false
+
+          // Đánh dấu đã thử (dù thành công hay lỗi) để UI thoát "Đang tải…".
+          if (withModels) this.providersModelsAttempted = true
         }
       })()
 
       this._providersPromise = run
+      this._providersPromiseWithModels = withModels
 
       return run
     },
@@ -378,6 +444,83 @@ export const useAiConfigStore = defineStore('aiConfig', {
       }
 
       return data
+    },
+
+    /*
+     * CHỨC NĂNG: Nạp nhóm cài đặt 'ai' — CHỈ 1 LẦN (dedup in-flight).
+     * INPUT: {force:boolean} — force=true để refetch sau khi lưu/conflict.
+     * OUTPUT: aiSettings {version, values}.
+     * SIDE EFFECT: GET /settings/ai + ghi aiSettings + cờ aiSettingsLoaded.
+     *
+     * Lỗi 403 (thiếu quyền settings.ai.view) không throw — giữ giá trị mặc
+     * định để card vẫn render read-only thay vì vỡ cả tab.
+     */
+    async fetchAiSettings({ force = false } = {}) {
+      if (this.aiSettingsLoaded && !force) return this.aiSettings
+      if (this._aiSettingsPromise) return this._aiSettingsPromise
+
+      this.loadingAiSettings = true
+
+      const run = (async () => {
+        try {
+          const res = await coreAiApi.getAiSettings()
+
+          this.aiSettings = {
+            version: res?.version ?? 0,
+            values: { ...this.aiSettings.values, ...(res?.values ?? {}) },
+          }
+          this.aiSettingsLoaded = true
+
+          return this.aiSettings
+        } catch (e) {
+          // Thiếu quyền/chưa seed -> giữ defaults, không chặn render tab.
+          this.lastError = e?.data?.message ?? e?.message ?? null
+
+          return this.aiSettings
+        } finally {
+          this.loadingAiSettings = false
+          this._aiSettingsPromise = null
+        }
+      })()
+
+      this._aiSettingsPromise = run
+
+      return run
+    },
+
+    /*
+     * CHỨC NĂNG: Lưu nhóm cài đặt 'ai' với khóa lạc quan version.
+     * INPUT: values — map partial {default_text_model_id, default_language,...}.
+     * OUTPUT: {version, values} sau khi ghi.
+     * SIDE EFFECT: PUT /settings/ai + cập nhật aiSettings tại chỗ.
+     * EXCEPTION: ném lỗi 409 (version lệch) / 422 để component hiển thị;
+     *            caller nên gọi fetchAiSettings({force:true}) khi 409.
+     */
+    async saveAiSettings(values) {
+      this.savingAiSettings = true
+      try {
+        // Đảm bảo đã có version mới nhất trước khi lưu để tránh 409
+        if (!this.aiSettingsLoaded || !this.aiSettings.version) {
+          await this.fetchAiSettings({ force: true })
+        }
+
+        const payload = { ...this.aiSettings.values, ...values }
+
+        // Bỏ key version khỏi values vì version được gửi qua expected_version
+        delete payload.version
+
+        const res = await coreAiApi.updateAiSettings(payload, this.aiSettings.version)
+
+        this.aiSettings = {
+          version: res?.version ?? (this.aiSettings.version + 1),
+          values: { ...this.aiSettings.values, ...(res?.values ?? payload) },
+        }
+        this.aiSettingsLoaded = true
+
+        return this.aiSettings
+      } finally {
+        this.savingAiSettings = false
+      }
     },
 
     /*

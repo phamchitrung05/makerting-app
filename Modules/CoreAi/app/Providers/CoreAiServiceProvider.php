@@ -15,7 +15,9 @@ use Modules\CoreAi\Registries\AiDriverRegistry;
 use Modules\CoreAi\Services\AiProviderClient;
 use Modules\CoreAi\Services\CoreAiGateway;
 use Modules\CoreAi\Services\ModelResolver;
+use Modules\CoreAi\Settings\AiSettings;
 use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Settings\Registries\SettingsRegistry;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
 /**
@@ -101,7 +103,10 @@ class CoreAiServiceProvider extends ModuleServiceProvider
      * - AiDriverRegistry nhận 5 driver nền (openai, anthropic, gemini,
      *   openai-compatible, anthropic-compatible). ElevenLabs chưa đăng ký
      *   (P4-03) — resolve sẽ ném unsupported cho đến khi có driver.
-     * - PermissionRegistry thêm 'coreai.view'/'coreai.manage'/'coreai.execute'.
+     * - SettingsRegistry nhận AiSettings (group 'ai') — mô hình mặc định
+     *   theo loại tác vụ + ngôn ngữ nội dung.
+     * - PermissionRegistry thêm 'coreai.view'/'coreai.manage'/'coreai.execute'
+     *   và 'settings.ai.view'/'settings.ai.manage' cho nhóm cài đặt AI.
      * =====================================================================
      */
     public function boot(): void
@@ -117,6 +122,12 @@ class CoreAiServiceProvider extends ModuleServiceProvider
         $drivers->register(AiProvider::DRIVER_ANTHROPIC_COMPATIBLE, AnthropicCompatibleDriver::class);
         $drivers->register(AiProvider::DRIVER_XPIKI, XpikiDriver::class);
 
+        // Nhóm cài đặt 'ai' — trang Settings › AI & Mô hình đọc/ghi qua
+        // endpoint chung /api/v1/admin/settings/ai (không cần route riêng).
+        /** @var SettingsRegistry $settings */
+        $settings = $this->app->make(SettingsRegistry::class);
+        $settings->register(AiSettings::class);
+
         /** @var PermissionRegistry $permissions */
         $permissions = $this->app->make(PermissionRegistry::class);
         $permissions->registerModule('coreai', [
@@ -125,6 +136,8 @@ class CoreAiServiceProvider extends ModuleServiceProvider
                 'coreai.view' => 'Xem cấu hình AI providers/models/runs',
                 'coreai.manage' => 'Thêm/sửa/xóa AI providers/models',
                 'coreai.execute' => 'Chạy tác vụ AI (sinh nội dung/ảnh/audio)',
+                'settings.ai.view' => 'Xem cài đặt mặc định AI',
+                'settings.ai.manage' => 'Sửa cài đặt mặc định AI',
             ],
         ]);
     }
