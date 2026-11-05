@@ -1,8 +1,8 @@
 # Kế hoạch Nối API: Trang `writing-profiles/create`
 
-> **File đích:** `Modules/WritingStyle/resources/js/pages/writing-profiles/create/index.vue` (2823 dòng)
-> **Trạng thái hiện tại:** DEMO TĨNH 100% — grep toàn file không có một lệnh gọi API nào, không import `writingStyleApi` cũng không dùng `useWritingStyleStore`.
-> **Tiến độ nối API:** 0 / 6 giai đoạn.
+> **File đích:** `Modules/WritingStyle/resources/js/pages/writing-profiles/create/index.vue` (2875 dòng)
+> **Trạng thái hiện tại:** GĐ1 (options) + GĐ2 (endpoint đọc analysis) + GĐ3 (giải mã paste) + GĐ4 (lưu profile & sandbox) **đã nối API**.
+> **Tiến độ nối API:** 4 / 6 giai đoạn.
 
 ---
 

@@ -9,13 +9,97 @@ use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Models\WritingProfileAnalysis;
 use Modules\TaskCenter\Contracts\TaskTrackerContract;
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Service phân tích, giải mã DNA văn phong qua AI và quản lý tác vụ ngầm.
+ * =====================================================================
+ *
+ * Thực hiện 2 nhiệm vụ cốt lõi trong hệ thống WritingStyle:
+ * 1. dispatchAnalysis(): Tiếp nhận văn bản mẫu, dedupe theo source_hash, tạo bản
+ *    ghi WritingProfileAnalysis (pending), đăng ký SystemTaskRun và dispatch
+ *    AnalyzeWritingProfileJob vào queue để xử lý bất đồng bộ (trả 202 cho FE).
+ * 2. analyze(): Thực thi giải mã DNA bằng AI (chạy trong Queue Worker hoặc gọi đồng bộ):
+ *    - Tự động nhận diện phân tầng độ dài (Tier: micro | short | medium | long).
+ *    - Biên dịch prompt trắc nghiệm bộ quy tắc tương ứng qua WritingProfileDefinition.
+ *    - Gọi CoreAiGatewayContract::executeStructured với JSON Schema nghiêm ngặt.
+ *    - Lọc kiểm chứng bằng chứng nguyên văn (evidence_json) có thật trong bài mẫu.
+ *    - Đóng gói DTO, tự động tạo WritingProfile nháp (status: draft, origin: reference).
+ *    - Đánh dấu succeeded và lưu kết quả vào writing_profile_analyses.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - __construct(CoreAiGatewayContract $ai, TaskTrackerContract $tracker): Khởi tạo service
+ * - analyze(...): Giải mã DNA văn phong qua AI và lưu WritingProfile bản nháp
+ * - buildPrompt(string $referenceText, string $tier): Ghép prompt phân tích kèm câu hỏi quy tắc
+ * - outputSchema(string $tier): Tạo JSON Schema nghiêm ngặt cho phản hồi AI
+ * - createDraft(...): Tạo bản ghi WritingProfile nháp từ kết quả phân tích
+ * - dispatchAnalysis(...): Khởi tạo bản ghi phân tích, SystemTaskRun và đẩy job vào hàng đợi
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : reference_text (văn bản mẫu), source_type, source_url, name, created_by
+ * - OUTPUT: WritingProfileAnalysis (kèm draft_profile_id và result_json) hoặc array{analysis, taskRun}
+ * =====================================================================
+ */
 class WritingStyleAnalyzerService
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo service phân tích văn phong với AI Gateway và Task Tracker
+     * =====================================================================
+     *
+     * INPUT:
+     * - CoreAiGatewayContract $ai: Gateway điều phối các mô hình AI (OpenAI, Gemini, Anthropic)
+     * - TaskTrackerContract $tracker: Quản trị vòng đời tác vụ hệ thống (SystemTaskRun)
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Tiêm phụ thuộc CoreAiGatewayContract và TaskTrackerContract
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không có
+     * =====================================================================
+     */
     public function __construct(
         protected readonly CoreAiGatewayContract $ai,
         protected readonly TaskTrackerContract $tracker,
     ) {}
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Thực thi giải mã DNA văn phong đồng bộ qua CoreAiGateway và lưu bản nháp WritingProfile
+     * =====================================================================
+     *
+     * Luồng xử lý chi tiết:
+     * 1. Khởi tạo/nhận bản ghi WritingProfileAnalysis và chuyển trạng thái sang running.
+     * 2. Phát hiện phân tầng độ dài bài viết mẫu (detected_tier).
+     * 3. Ghép prompt và JSON Schema nghiêm ngặt theo các quy tắc áp dụng cho tier đó.
+     * 4. Gọi AI Gateway xử lý trích xuất có cấu trúc (structured JSON).
+     * 5. Xác thực evidence_json nguyên văn từ văn bản mẫu để chống ảo giác (hallucination).
+     * 6. Tạo WritingProfile bản nháp (status: draft, origin: reference) và gắn ID vào analysis.
+     * 7. Chuyển trạng thái analysis sang succeeded kèm toàn bộ payload result_json.
+     *
+     * INPUT:
+     * - string $referenceText: Toàn bộ văn bản mẫu cần bóc tách văn phong
+     * - string $sourceType: Loại nguồn (paste | url | file)
+     * - ?string $sourceUrl: Đường dẫn nguồn nếu phân tích từ trang web
+     * - ?int $createdBy: ID người dùng yêu cầu phân tích
+     * - ?WritingProfileAnalysis $analysis: Bản ghi phân tích đã tạo trước (từ queue job)
+     *
+     * OUTPUT:
+     * - WritingProfileAnalysis: Bản ghi phân tích sau khi đã xử lý xong (kèm result_json và draft_profile_id)
+     *
+     * SIDE EFFECT:
+     * - Cập nhật trạng thái và kết quả bảng writing_profile_analyses
+     * - Thêm 1 bản ghi mới vào bảng writing_profiles (bản nháp)
+     * - Ghi nhận aiRunId cho tác vụ AI trong CoreAi
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Throwable: Bắt mọi lỗi; với các lỗi tạm thời (network, timeout, rate_limit, provider_error),
+     *   đánh dấu failed tạm và ném lại (rethrow) để Queue Job retry tự động
+     * - Không mở DB transaction để bảo toàn trạng thái lỗi khi có sự cố
+     * =====================================================================
+     */
     public function analyze(
         string $referenceText,
         string $sourceType = WritingProfileAnalysis::SOURCE_PASTE,
@@ -96,6 +180,28 @@ class WritingStyleAnalyzerService
         }
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghép nối câu lệnh prompt phân tích văn phong theo các quy tắc áp dụng cho tier độ dài
+     * =====================================================================
+     *
+     * Duyệt qua các khóa quy tắc phù hợp với tier của bài mẫu từ WritingProfileDefinition,
+     * yêu cầu AI trả lời ngắn gọn từng câu hỏi và trích xuất câu văn nguyên văn làm bằng chứng.
+     *
+     * INPUT:
+     * - string $referenceText: Văn bản mẫu cần phân tích
+     * - string $tier: Phân tầng độ dài (micro | short | medium | long)
+     *
+     * OUTPUT:
+     * - string: Toàn bộ chuỗi prompt hoàn chỉnh gửi tới AI Gateway
+     *
+     * SIDE EFFECT:
+     * - Không có (hàm thuần túy)
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không ném exception, không mở transaction
+     * =====================================================================
+     */
     protected function buildPrompt(string $referenceText, string $tier): string
     {
         $lines = [
@@ -114,6 +220,27 @@ class WritingStyleAnalyzerService
         return implode(PHP_EOL, $lines);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo cấu trúc JSON Schema nghiêm ngặt cho kết quả phản hồi của AI
+     * =====================================================================
+     *
+     * Tuân thủ chuẩn OpenAI strict json_schema: mọi object bắt buộc có
+     * additionalProperties: false và required phải khai báo đủ 100% properties.
+     *
+     * INPUT:
+     * - string $tier: Phân tầng độ dài để lấy danh sách rule_keys áp dụng
+     *
+     * OUTPUT:
+     * - array: Cấu trúc JSON Schema dùng cho AiStructuredRequest
+     *
+     * SIDE EFFECT:
+     * - Không có (hàm thuần túy)
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không ném exception, không mở transaction
+     * =====================================================================
+     */
     protected function outputSchema(string $tier): array
     {
         $rulesProps = [];
@@ -157,6 +284,30 @@ class WritingStyleAnalyzerService
         ];
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tạo bản ghi hồ sơ văn phong nháp (Draft WritingProfile) từ kết quả giải mã
+     * =====================================================================
+     *
+     * Lưu kết quả giải mã vào bảng writing_profiles với status 'draft' và origin 'reference'
+     * để người dùng có thể xem lại, chỉnh sửa hoặc dùng ngay trên giao diện mà không bị mất dữ liệu.
+     *
+     * INPUT:
+     * - WritingProfileAnalysis $analysis: Bản ghi phiên phân tích liên quan
+     * - WritingAnalysisResultDto $result: DTO chứa kết quả giải mã (rules, evidence, style instructions, metadata)
+     * - string $referenceText: Văn bản mẫu dùng để tính source_hash
+     * - ?int $createdBy: ID người dùng sở hữu hồ sơ
+     *
+     * OUTPUT:
+     * - WritingProfile: Bản ghi hồ sơ văn phong nháp vừa tạo
+     *
+     * SIDE EFFECT:
+     * - Thêm 1 dòng mới vào bảng writing_profiles
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction
+     * =====================================================================
+     */
     protected function createDraft(
         WritingProfileAnalysis $analysis,
         WritingAnalysisResultDto $result,
@@ -177,21 +328,34 @@ class WritingStyleAnalyzerService
             'created_by'       => $createdBy,
         ]);
     }
+
     /**
      * =====================================================================
-     * CHỨC NĂNG: Tạo analysis pending + SystemTaskRun + dispatch job.
+     * CHỨC NĂNG: Tiếp nhận yêu cầu giải mã, xử lý chống trùng lặp (dedupe), tạo task tracking và dispatch job
      * =====================================================================
-     * Dùng bởi controller (Task 9) và mọi nơi cần phân tích bất đồng bộ:
-     * tạo WritingProfileAnalysis (pending) -> TaskTrackerService::create
-     * (task_type='writing_profile.analyze') -> dispatch AnalyzeWritingProfileJob.
-     * Trả [analysis, taskRun] để caller lấy id cho response 202.
      *
-     * Dedupe 2 tầng: analysis cùng source_hash đang pending/running -> trả
-     * bản ghi + taskRun hiện có (không tạo trùng). Lần trước failed/succeeded
-     * -> tạo analysis + taskRun MỚI (dedupe_key kèm analysis->id) để retry.
+     * Dùng bởi WritingAnalyzeController@store (Giai đoạn 3) và các dịch vụ gọi bất đồng bộ:
+     * - Dedupe 2 tầng: Nếu cùng source_hash đang pending/running thì trả về bản ghi hiện tại, tránh tạo job trùng.
+     * - Nếu chưa có hoặc lần trước đã kết thúc (succeeded/failed): Tạo WritingProfileAnalysis mới,
+     *   đăng ký SystemTaskRun và dispatch AnalyzeWritingProfileJob vào queue.
      *
-     * INPUT: referenceText + sourceType + ?sourceUrl + ?name + ?createdBy.
-     * OUTPUT: array{analysis: WritingProfileAnalysis, taskRun: SystemTaskRun}.
+     * INPUT:
+     * - string $referenceText: Nội dung bài viết mẫu
+     * - string $sourceType: Loại nguồn (paste | url | file), mặc định là paste
+     * - ?string $sourceUrl: URL bài viết (nếu có)
+     * - ?string $name: Tên gợi nhớ của hồ sơ
+     * - ?int $createdBy: ID người dùng gửi yêu cầu
+     *
+     * OUTPUT:
+     * - array{analysis: WritingProfileAnalysis, taskRun: ?SystemTaskRun}: Cặp model phân tích và tác vụ hệ thống
+     *   (taskRun có thể null ở nhánh dedupe khi dữ liệu taskRun cũ không khớp)
+     *
+     * SIDE EFFECT:
+     * - Tạo bản ghi mới trong writing_profile_analyses và system_task_runs
+     * - Đẩy AnalyzeWritingProfileJob vào hàng đợi xử lý ngầm
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không ném exception, không mở transaction
      * =====================================================================
      */
     public function dispatchAnalysis(
@@ -248,5 +412,4 @@ class WritingStyleAnalyzerService
 
         return ['analysis' => $analysis, 'taskRun' => $taskRun];
     }
-
 }

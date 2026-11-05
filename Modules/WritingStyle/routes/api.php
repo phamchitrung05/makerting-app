@@ -11,6 +11,7 @@ use Modules\WritingStyle\Http\Controllers\WritingSandboxController;
  * =====================================================================
  * - GET/POST/PUT/DELETE /writing-profiles   CRUD + /options
  * - POST /writing-profiles/analyze          giải mã DNA (202 + dispatch job)
+ * - GET  /writing-profiles/analyses/{id}    đọc trạng thái + kết quả giải mã
  * - POST /writing-profiles/{id}/sandbox     DNA Sandbox viết thử
  *
  * 'writing.profile.view' đọc; 'writing.profile.create' tạo/sửa;
@@ -26,6 +27,8 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/writing-style')->name('wri
         ->middleware('permission:writing.profile.view')->name('writing-profiles.options');
     Route::post('writing-profiles/analyze', [WritingAnalyzeController::class, 'store'])
         ->middleware('permission:writing.evaluate')->name('writing-profiles.analyze');
+    Route::get('writing-profiles/analyses/{analysis}', [WritingAnalyzeController::class, 'show'])
+        ->middleware('permission:writing.profile.view')->name('writing-profiles.analyses.show');
 
     Route::apiResource('writing-profiles', WritingProfileController::class)
         ->parameters(['writing-profiles' => 'writing_profile'])

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
 use Modules\WritingStyle\Jobs\AnalyzeWritingProfileJob;
 use Modules\WritingStyle\Models\WritingProfile;
+use Modules\WritingStyle\Models\WritingProfileAnalysis;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
@@ -141,5 +142,131 @@ class WritingStyleApiTest extends TestCase
 
         $res = $this->getJson("/api/v1/admin/writing-style/writing-profiles/{$p->id}", $t);
         $res->assertOk()->assertJsonStructure(['data' => ['version', 'updated_at', 'created_at']]);
+    }
+
+    /* =====================================================================
+     * GET /writing-profiles/analyses/{id} — endpoint FE poll sau 202.
+     * ===================================================================== */
+
+    private function makeAnalysis(string $status): WritingProfileAnalysis
+    {
+        return WritingProfileAnalysis::create([
+            'name'           => 'Mẫu poll',
+            'source_type'    => 'paste',
+            'reference_text' => str_repeat('Câu mẫu giải mã. ', 20),
+            'status'         => $status,
+        ]);
+    }
+
+    public function test_show_analysis_pending(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $a = $this->makeAnalysis('pending');
+
+        $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u))
+            ->assertOk()
+            ->assertJsonPath('data.id', $a->id)
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.result_json', null)
+            ->assertJsonPath('data.draft_profile_id', null);
+    }
+
+    public function test_show_analysis_succeeded_tra_result_va_draft_profile(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $a = $this->makeAnalysis('pending');
+
+        $draft = WritingProfile::create([
+            'name' => 'Draft X', 'dominant_tier' => 'long', 'origin' => 'reference',
+            'status' => 'draft', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'trang trọng'], 'evidence_json' => [],
+        ]);
+
+        $rules = array_fill_keys(WritingProfile::RULE_KEYS, 'x');
+        $rules['uncertainties'] = ['chưa có dữ liệu headings'];
+        $a->markSucceeded(
+            [
+                'detected_tier'      => 'long',
+                'rules_json'         => $rules,
+                'evidence_json'      => [['rule_key' => 'tone', 'excerpt' => 'Câu mẫu', 'note' => 'n']],
+                'style_instructions' => 'Viết trang trọng.',
+                'metadata'           => ['word_count' => 100, 'sentence_count' => 40, 'detected_tier' => 'long'],
+                'ai_run_id'          => null,
+            ],
+            detectedTier: 'long',
+            draftProfileId: $draft->id,
+        );
+
+        $res = $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u));
+
+        $res->assertOk()
+            ->assertJsonPath('data.status', 'succeeded')
+            ->assertJsonPath('data.detected_tier', 'long')
+            ->assertJsonPath('data.draft_profile_id', $draft->id)
+            ->assertJsonPath('data.draft_profile.id', $draft->id)
+            ->assertJsonPath('data.result_json.rules_json.tone', 'x')
+            ->assertJsonCount(16, 'data.result_json.rules_json')
+            ->assertJsonCount(1, 'data.result_json.evidence_json')
+            ->assertJsonPath('data.result_json.style_instructions', 'Viết trang trọng.')
+            ->assertJsonPath('data.result_json.metadata.word_count', 100);
+    }
+
+    public function test_show_analysis_khong_tra_reference_text(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $a = $this->makeAnalysis('pending');
+
+        $res = $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u));
+
+        $res->assertOk();
+        $this->assertArrayNotHasKey('reference_text', $res->json('data'));
+    }
+
+    public function test_show_analysis_khong_ton_tai_404(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+
+        $this->getJson('/api/v1/admin/writing-style/writing-profiles/analyses/does-not-exist', $this->token($u))
+            ->assertNotFound();
+    }
+
+    public function test_show_analysis_thieu_quyen_403(): void
+    {
+        $u = $this->admin([]);
+        $a = $this->makeAnalysis('pending');
+
+        $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u))
+            ->assertForbidden();
+    }
+
+    /* Nhánh failed: FE poll dừng ở status=failed và hiện error_message. */
+    public function test_show_analysis_failed_tra_error_code_va_message(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $a = $this->makeAnalysis('pending');
+
+        $a->markFailed('ai_timeout', 'AI không phản hồi trong 300s');
+
+        $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u))
+            ->assertOk()
+            ->assertJsonPath('data.status', 'failed')
+            ->assertJsonPath('data.error_code', 'ai_timeout')
+            ->assertJsonPath('data.error_message', 'AI không phản hồi trong 300s')
+            ->assertJsonPath('data.result_json', null)
+            ->assertJsonPath('data.draft_profile_id', null);
+    }
+
+    /* Khóa draft_profile LUÔN có mặt (giá trị null khi chưa có draft) —
+     * ghim hành vi whenLoaded để FE đọc res.draft_profile không vỡ. */
+    public function test_show_analysis_draft_profile_null_khi_chua_co_draft(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $a = $this->makeAnalysis('pending');
+
+        $res = $this->getJson("/api/v1/admin/writing-style/writing-profiles/analyses/{$a->id}", $this->token($u));
+
+        $res->assertOk();
+        $this->assertArrayHasKey('draft_profile', $res->json('data'));
+        $this->assertNull($res->json('data.draft_profile'));
     }
 }

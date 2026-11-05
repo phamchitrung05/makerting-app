@@ -22,8 +22,15 @@
   prompt (chuyển đổi giữa Prompt viết lại bài & System Prompt DNA), và
   Card Đóng gói & Lưu thành Writing Profile.
 
-  TRẠNG THÁI: toàn bộ số liệu phân tích là DỮ LIỆU TĨNH khai báo trong
-  <script setup>. Có kết nối điều hướng vue-router sang trang danh sách
+  TRẠNG THÁI: Giai đoạn 1–4 đã nối API:
+  - GĐ1: tiers + 16 câu hỏi giải mã nạp từ GET /writing-profiles/options.
+  - GĐ2–3: runAnalysis() gọi POST /writing-profiles/analyze (paste), poll
+  GET /writing-profiles/analyses/{id} qua store.waitForAnalysis() và đổ
+  rules_json (16 khóa), evidence_json, style_instructions, detected_tier thật.
+  - GĐ4: saveWritingProfile() phân nhánh PUT (khi đã có draft_profile_id) /
+  POST (khi tạo thủ công) và điều hướng theo id thật; runSandboxDemo() gọi
+  POST /writing-profiles/{id}/sandbox + hiển thị snapshot.system_prompt.
+  Có kết nối điều hướng vue-router sang trang danh sách
   (list) và trang chỉnh sửa chi tiết (edit/[id]).
 
   CHUẨN UI (docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §2–3):
@@ -36,40 +43,50 @@
   - Spacing logical me-*/ms-*/pe-*/ps-* (ESLint vue/no-restricted-class).
 
   CÁC HÀM/COMPUTED TRONG FILE:
-  - wordCount             : computed đếm số từ realtime từ HTML của TiptapEditor.
-  - sentenceCount         : computed đếm số câu realtime theo dấu kết câu.
-  - detectedTier          : computed phân tầng micro|short|medium|long (PLAN.md §304).
-  - detectedTierMeta      : computed thông tin hiển thị của tier phát hiện được.
-  - filteredDnaRules      : computed lọc 16 RULE_KEYS theo tier đang xem.
-  - droppedRuleKeys       : computed danh sách khóa đẩy vào uncertainties ở tier ngắn.
-  - activeSandboxSample   : computed văn bản viết thử tương ứng với targetTier.
-  - scoreColor(n)         : màu theo ngưỡng điểm (>=80 success, >=60 warning, <60 error).
-  - severityMeta(level)   : nhãn và màu theme cho mức độ vi phạm quy tắc viết.
-  - resetContent()        : khôi phục nội dung mẫu trong editor.
-  - runAnalysis()         : mô phỏng chạy phân tích bài viết và báo snackbar.
-  - fetchFromUrl()        : mô phỏng lấy nội dung bài viết từ URL đầu vào.
-  - triggerFileInput()    : mở hộp thoại chọn file từ máy tính.
-  - handleFileChange(e)   : đọc nội dung file văn bản (.txt/.md/.html) vào editor.
-  - removeSelectedFile()  : xóa file đang chọn và khôi phục trạng thái mặc định.
-  - runSandboxDemo()      : mô phỏng chạy thử nghiệm viết bài theo DNA (Sandbox).
-  - saveWritingProfile()  : lưu hồ sơ văn phong mới và điều hướng sang list/edit.
-  - copyText(text, msg)   : sao chép văn bản bất kỳ vào clipboard + hiện snackbar.
-  - copyPrompt()          : sao chép prompt đang hiển thị ở Card Prompt.
+  - wordCount               : computed đếm số từ realtime từ HTML của TiptapEditor.
+  - sentenceCount           : computed đếm số câu realtime theo dấu kết câu.
+  - detectedTier            : computed phân tầng micro|short|medium|long (PLAN.md §304).
+  - detectedTierMeta        : computed thông tin hiển thị của tier phát hiện được.
+  - filteredDnaRules        : computed lọc 16 RULE_KEYS theo tier đang xem kèm question.
+  - droppedRuleKeys         : computed danh sách khóa đẩy vào uncertainties ở tier ngắn.
+  - activeSandboxSample     : computed văn bản viết thử sinh từ Sandbox API hoặc mẫu.
+  - displayedDnaPrompt      : computed System Prompt DNA ưu tiên snapshot đã strip evidence.
+  - scoreColor(n)           : màu theo ngưỡng điểm (>=80 success, >=60 warning, <60 error).
+  - severityMeta(level)     : nhãn và màu theme cho mức độ vi phạm quy tắc viết.
+  - resetContent()          : khôi phục nội dung mẫu trong editor.
+  - formatRuleDesc()        : chuẩn hóa giá trị chuỗi hoặc mảng uncertainties trong rules_json.
+  - applyAnalysisResult()   : đổ kết quả giải mã từ API vào 16 rule card, evidence và tier.
+  - buildRulesJsonPayload() : đóng gói mảng quy tắc đúng schema trước khi gửi lưu.
+  - buildEvidenceJsonPayload(): đóng gói mảng bằng chứng {rule_key,excerpt,note} khi lưu.
+  - runAnalysis()           : gửi bài viết lên API giải mã và poll kết quả trong nền (GĐ3).
+  - fetchFromUrl()          : trích xuất nội dung bài viết từ URL đầu vào.
+  - triggerFileInput()      : mở hộp thoại chọn file từ máy tính.
+  - handleFileChange(e)     : đọc nội dung file văn bản (.txt/.md/.html) vào editor.
+  - removeSelectedFile()    : xóa file đang chọn và khôi phục trạng thái mặc định.
+  - runSandboxDemo()        : gọi API viết thử nghiệm chủ đề mới theo DNA (GĐ4).
+  - saveWritingProfile()    : lưu hồ sơ mới qua PUT (nếu đã analyze) hoặc POST (GĐ4).
+  - copyText(text, msg)     : sao chép văn bản bất kỳ vào clipboard + hiện snackbar.
+  - copyPrompt()            : sao chép prompt đang hiển thị ở Card Prompt.
 
   INPUT/OUTPUT CỦA COMPONENT (tổng thể):
-  - INPUT : không có props / route params; nội dung bài viết giữ trong
-  articleContent (v-model của TiptapEditor), số liệu phân tích là hằng số.
-  - OUTPUT: render giao diện phân tích đầy đủ các tab & lưu thành WritingProfile.
+  - INPUT : route params (không có), dữ liệu bài viết qua articleContent (v-model),
+  options từ writingStyleApi.options() và kết quả giải mã từ writingStyleApi.analysis().
+  - OUTPUT: render giao diện phân tích đầy đủ các tab, đồng bộ state với store
+  và lưu bản ghi vào database bảng writing_profiles.
   =====================================================================
 -->
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+/* eslint-disable camelcase */
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import TiptapEditor from '@core/components/TiptapEditor.vue'
+import { firstErrorMessage } from '@/utils/api'
+import { useWritingStyleStore } from '../../../stores/writingStyle'
 
 definePage({ meta: { layout: 'default' } })
 
 const router = useRouter()
+const store = useWritingStyleStore()
 
 /* Tab đang chọn của 2 khối tabs (nguồn bài viết & phân tích chi tiết). */
 const sourceTab = ref('paste')
@@ -79,7 +96,7 @@ const promptMode = ref('dna')
 const snack = reactive({ show: false, text: '', color: 'success' })
 
 const SOURCE_TABS = [
-  { value: 'url', label: 'Từ URL', icon: 'tabler-link' },
+  { value: 'url', label: 'Từ URL', icon: 'tabler-link', disabled: true, isExperiment: true },
   { value: 'paste', label: 'Dán nội dung', icon: 'tabler-clipboard-text' },
   { value: 'file', label: 'Từ file', icon: 'tabler-file-upload' },
 ]
@@ -93,12 +110,37 @@ const DETAIL_TABS = [
   { value: 'uniqueness', label: 'Tính độc đáo', icon: 'tabler-fingerprint', isExperiment: true },
 ]
 
-const TIER_OPTIONS = [
+/* ---------------------------------------------------------------------
+ * CẤP ĐỘ ĐỘ DÀI (LengthTier) — nạp từ GET /writing-profiles/options.
+ * Hằng số dưới là FALLBACK: giữ UI không trắng khi API chưa trả / lỗi,
+ * đồng thời cấp `title` + `color` mà endpoint options không có.
+ * ------------------------------------------------------------------- */
+const TIER_OPTIONS_FALLBACK = [
   { title: 'Micro — Cực ngắn (1–3 câu, < 60 từ)', value: 'micro', hint: '2–3 câu', color: 'error' },
   { title: 'Short — Ngắn (4–10 câu, 60–180 từ)', value: 'short', hint: '3–4 câu', color: 'warning' },
   { title: 'Medium — Trung bình (11–30 câu, 180–600 từ)', value: 'medium', hint: '20–30 câu', color: 'info' },
   { title: 'Long — Bài dài (> 30 câu, > 600 từ)', value: 'long', hint: 'bài dài (phân đoạn rõ ràng)', color: 'primary' },
 ]
+
+/* Màu + nhãn hiển thị theo tier (API chỉ trả value + sentence_hint). */
+const TIER_META = Object.fromEntries(
+  TIER_OPTIONS_FALLBACK.map(t => [t.value, { title: t.title, color: t.color }]),
+)
+
+/* Danh sách tier dùng cho mọi AppSelect/VBtn: ưu tiên store.tiers (API),
+ * fallback hằng số. `hint` lấy `sentence_hint` của backend làm chuẩn. */
+const tierOptions = computed(() => {
+  const apiTiers = store.tiers
+
+  if (!apiTiers?.length) return TIER_OPTIONS_FALLBACK
+
+  return apiTiers.map(t => ({
+    value: t.value,
+    title: TIER_META[t.value]?.title ?? t.label ?? t.value,
+    hint: t.sentence_hint ?? TIER_META[t.value]?.hint ?? '',
+    color: TIER_META[t.value]?.color ?? 'secondary',
+  }))
+})
 
 /* ---------------------------------------------------------------------
  * DỮ LIỆU NGUỒN BÀI VIẾT (3 TAB: URL / PASTE / FILE)
@@ -177,9 +219,15 @@ const detectedTier = computed(() => {
   return 'long'
 })
 
-const detectedTierMeta = computed(() =>
-  TIER_OPTIONS.find(t => t.value === detectedTier.value) ?? TIER_OPTIONS[2],
-)
+/* Meta của tier đang phát hiện. Fallback tra theo value 'medium' (KHÔNG
+ * dùng chỉ số [2] — thứ tự mảng từ API không đảm bảo). */
+const detectedTierMeta = computed(() => {
+  const list = tierOptions.value
+
+  return list.find(t => t.value === detectedTier.value)
+    ?? list.find(t => t.value === 'medium')
+    ?? list[0]
+})
 
 /* ---------------------------------------------------------------------
  * TAB 1 (PHÂN TÍCH CHI TIẾT): NỘI DUNG
@@ -216,6 +264,14 @@ const IMPROVEMENTS = [
  * ------------------------------------------------------------------- */
 const selectedDnaTierFilter = ref('long')
 
+/* ID hồ sơ nháp do AnalyzeWritingProfileJob tự tạo khi giải mã thành công.
+ * Có giá trị -> saveWritingProfile gọi PUT cập nhật (không tạo trùng) và
+ * mở khóa nút viết thử trong Phòng thử DNA (Sandbox). */
+const draftProfileId = ref(null)
+const lastSubmittedAnalysisId = ref(null)
+const rawRulesJson = ref(null)
+const isAnalyzing = computed(() => store.analyzing || store.analysisPolling)
+
 const STYLE_DNA_METRICS = [
   { label: 'Cấp độ độ dài (Tier)', value: 'Long (> 30 câu)', sub: 'Đủ 16/16 khóa DNA', icon: 'tabler-ruler-measure', color: 'primary' },
   { label: 'Hình mẫu (Archetype)', value: 'Thought Leader', sub: 'Chuyên gia chia sẻ thực chiến', icon: 'tabler-award', color: 'info' },
@@ -223,8 +279,8 @@ const STYLE_DNA_METRICS = [
   { label: 'Thể chủ động (Active)', value: '88%', sub: 'Đạt chuẩn >= 85% câu chủ động', icon: 'tabler-bolt', color: 'success' },
 ]
 
-/* Đầy đủ 16 khóa thuộc tính DNA văn phong theo đúng thứ tự config('writingstyle.rule_keys'). */
-const DNA_RULE_EXTRACTIONS = [
+/* Giá trị khởi tạo 16 khóa thuộc tính DNA văn phong (giữ UI không trống trước khi phân tích). */
+const DNA_RULE_EXTRACTIONS_DEFAULT = [
   {
     key: 'tone',
     title: '1. Giọng điệu chung (Tone)',
@@ -319,14 +375,41 @@ const droppedRuleKeys = computed(() => {
   return []
 })
 
-const filteredDnaRules = computed(() =>
-  DNA_RULE_EXTRACTIONS.map(rule => ({
-    ...rule,
-    isDroppedInTier: droppedRuleKeys.value.includes(rule.key),
-  })),
+/* Câu hỏi giải mã của 16 khóa, nạp từ options API: key -> question.
+ * Rỗng khi API chưa trả -> UI dùng `title` hằng số làm fallback. */
+const ruleQuestionByKey = computed(() =>
+  Object.fromEntries((store.ruleKeys ?? []).map(r => [r.key, r.question])),
 )
 
-const DNA_EVIDENCES = [
+const RULE_TITLE_BY_KEY = Object.fromEntries(
+  DNA_RULE_EXTRACTIONS_DEFAULT.map(item => [item.key, item.title]),
+)
+
+const dnaRuleExtractions = ref(
+  DNA_RULE_EXTRACTIONS_DEFAULT.map(item => ({ ...item })),
+)
+
+/* Thứ tự 16 khóa: ưu tiên thứ tự chuẩn từ API (config rule_keys), fallback
+ * thứ tự hằng số. Mỗi card: title hiển thị + question (tooltip giải mã). */
+const filteredDnaRules = computed(() => {
+  const byKey = Object.fromEntries(dnaRuleExtractions.value.map(r => [r.key, r]))
+
+  const ordered = store.ruleKeys?.length
+    ? store.ruleKeys.map(r => byKey[r.key] ?? {
+      key: r.key,
+      title: RULE_TITLE_BY_KEY[r.key] ?? r.key,
+      desc: '',
+    })
+    : dnaRuleExtractions.value
+
+  return ordered.map(rule => ({
+    ...rule,
+    question: ruleQuestionByKey.value[rule.key] ?? '',
+    isDroppedInTier: droppedRuleKeys.value.includes(rule.key),
+  }))
+})
+
+const DNA_EVIDENCES_DEFAULT = [
   {
     ruleKey: 'opening',
     excerpt: 'Laravel 11 mang đến những tính năng mới gì? Trong bài viết này, chúng ta sẽ cùng tìm hiểu những tính năng nổi bật nhất của Laravel 11.',
@@ -338,6 +421,8 @@ const DNA_EVIDENCES = [
     note: 'Giữ nguyên thuật ngữ chuyên ngành "class" tự nhiên trong ngữ cảnh câu tiếng Việt.',
   },
 ]
+
+const dnaEvidences = ref(DNA_EVIDENCES_DEFAULT.map(item => ({ ...item })))
 
 const STYLE_RULE_CHECKS = [
   {
@@ -494,8 +579,13 @@ const SANDBOX_SAMPLES_BY_TIER = {
   long: 'Làm thế nào để giữ cho tầng truy vấn Eloquent ORM luôn phản hồi tức thì ngay cả khi bảng dữ liệu vượt mốc hàng triệu dòng? Trong bài viết này, chúng ta sẽ cùng đi qua 3 kỹ thuật thực chiến giúp kiểm soát triệt để hiệu suất cơ sở dữ liệu.\n\n1. Chặn đứng N+1 Query ngay từ môi trường phát triển\nVới cơ chế mặc định, Eloquent cho phép nạp lười (Lazy Loading) các mối quan hệ. Điều này tiện lợi khi viết code nhanh nhưng lại sinh ra hàng trăm câu lệnh SQL lặp lại. Khi kích hoạt Model::preventLazyLoading(! app()->isProduction()), bạn sẽ phát hiện ngay mọi truy vấn thừa trước khi code được đẩy lên máy chủ.\n\n2. Tối ưu bộ nhớ bằng Eager Loading chọn lọc và Chunking\nKhông phải lúc nào nạp sẵn toàn bộ quan hệ cũng là tối ưu. Hãy chỉ lấy đúng các trường khóa ngoại và trường hiển thị cần thiết, đồng thời kết hợp cursor() hoặc chunkById() cho các tác vụ xử lý hàng loạt để giữ mức sử dụng RAM ổn định.',
 }
 
+const sandboxGeneratedText = ref('')
+const sandboxSnapshotPrompt = ref('')
+
 const activeSandboxSample = computed(() =>
-  SANDBOX_SAMPLES_BY_TIER[sandboxForm.targetTier] ?? SANDBOX_SAMPLES_BY_TIER.short,
+  sandboxGeneratedText.value
+    || SANDBOX_SAMPLES_BY_TIER[sandboxForm.targetTier]
+    || SANDBOX_SAMPLES_BY_TIER.short,
 )
 
 /* ---------------------------------------------------------------------
@@ -642,7 +732,7 @@ function resetToneToBaseline() {
   applyTonePreset('default')
 }
 
-const STYLE_INSTRUCTIONS_BASE = `=== HỆ THỐNG QUY TẮC DNA VĂN PHONG (SYSTEM PROMPT DNA SNAPSHOT) ===
+const STYLE_INSTRUCTIONS_BASE_DEFAULT = `=== HỆ THỐNG QUY TẮC DNA VĂN PHONG (SYSTEM PROMPT DNA SNAPSHOT) ===
 [HỒ SƠ ĐỊNH DANH: CHUYÊN GIA KỸ THUẬT – PHP / LARAVEL]
 [PHÂN TẦNG ĐỘ DÀI: TIER LONG (1.000 – 2.500 TỪ)]
 
@@ -671,6 +761,8 @@ const STYLE_INSTRUCTIONS_BASE = `=== HỆ THỐNG QUY TẮC DNA VĂN PHONG (SYST
 5. NGUYÊN TẮC BẢO MẬT & CHỐNG ĐẠO VĂN (ANTI-PLAGIARISM PROTOCOL):
 - Tuyệt đối KHÔNG sao chép nguyên văn bất kỳ câu chữ nào từ các bài viết mẫu. Chỉ kế thừa quy luật tư duy, cấu trúc luận điểm và nhịp điệu hành văn của hồ sơ DNA này để sáng tạo nội dung mới 100%.`
 
+const styleInstructionsBase = ref(STYLE_INSTRUCTIONS_BASE_DEFAULT)
+
 const computedStyleInstructions = computed(() => {
   const toneStatusLines = toneSliders.map(t => {
     const diff = t.value - t.baseline
@@ -681,8 +773,15 @@ const computedStyleInstructions = computed(() => {
 
   const toneSection = `\n\n6. HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):\n${toneStatusLines.join('\n')}`
 
-  return `${STYLE_INSTRUCTIONS_BASE}${toneSection}`
+  return `${styleInstructionsBase.value}${toneSection}`
 })
+
+/* Nội dung hiển thị ở Card Gợi ý Prompt chế độ "dna":
+ * Khi đã chạy Sandbox và nhận snapshot.system_prompt từ backend (bản đã strip
+ * hoàn toàn evidence_json) thì ưu tiên hiển thị để chứng minh chống đạo văn. */
+const displayedDnaPrompt = computed(() =>
+  sandboxSnapshotPrompt.value || computedStyleInstructions.value,
+)
 
 const STYLE_ANALYSIS = [
   {
@@ -819,18 +918,253 @@ function resetContent() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Mô phỏng chạy phân tích bài viết bằng AI (demo tĩnh).
+ * CHỨC NĂNG: Chuẩn hóa giá trị 1 khóa trong rules_json thành chuỗi hiển thị
  * =====================================================================
- * INPUT : không.
- * OUTPUT: void.
- * SIDE EFFECT: đồng bộ cấp độ phát hiện sang bộ lọc DNA và báo snackbar.
+ *
+ * INPUT:
+ * - key (string): Tên khóa thuộc tính DNA (tone, pronouns, uncertainties...)
+ * - rawValue (string | string[] | null): Giá trị trả về từ AI
+ *
+ * OUTPUT:
+ * - string: Chuỗi mô tả đã chuẩn hóa, an toàn để hiển thị trên thẻ UI
+ *
+ * SIDE EFFECT:
+ * - Nối mảng chuỗi bằng dấu ' • ' đối với khóa uncertainties
+ *
+ * EXCEPTION:
+ * - Không có (xử lý null-safe cho mọi kiểu dữ liệu)
  * =====================================================================
  */
-function runAnalysis() {
-  selectedDnaTierFilter.value = detectedTier.value
-  snack.text = `Đã phân tích bài viết (${wordCount.value} từ • cấp độ ${detectedTier.value.toUpperCase()})`
-  snack.color = 'success'
-  snack.show = true
+function formatRuleDesc(key, rawValue) {
+  if (key === 'uncertainties') {
+    if (Array.isArray(rawValue)) {
+      const items = rawValue.map(v => String(v ?? '').trim()).filter(Boolean)
+
+      return items.length
+        ? items.join(' • ')
+        : 'Mẫu đầy đủ dữ liệu — không có yếu tố bất định.'
+    }
+    if (typeof rawValue === 'string' && rawValue.trim())
+      return rawValue.trim()
+
+    return 'Mẫu đầy đủ dữ liệu — không có yếu tố bất định.'
+  }
+
+  if (Array.isArray(rawValue))
+    return rawValue.map(v => String(v ?? '').trim()).filter(Boolean).join(' • ')
+
+  const text = String(rawValue ?? '').trim()
+
+  return text || 'Không áp dụng ở cấp độ độ dài này (đã chuyển vào uncertainties).'
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đổ kết quả giải mã (WritingAnalysisResource) vào state UI
+ * =====================================================================
+ *
+ * INPUT:
+ * - analysis (Object): Resource trả về từ GET /writing-profiles/analyses/{id}
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật dnaRuleExtractions, dnaEvidences, styleInstructionsBase,
+ *   selectedDnaTierFilter, profileForm.dominantTier và draftProfileId
+ *
+ * EXCEPTION:
+ * - Không ném exception (bảo vệ bằng optional chaining)
+ * =====================================================================
+ */
+function applyAnalysisResult(analysis) {
+  const result = analysis?.result_json ?? {}
+
+  const rulesObj = result.rules_json && typeof result.rules_json === 'object'
+    ? result.rules_json
+    : {}
+
+  rawRulesJson.value = rulesObj
+
+  const keysOrder = store.ruleKeys?.length
+    ? store.ruleKeys.map(r => r.key)
+    : DNA_RULE_EXTRACTIONS_DEFAULT.map(r => r.key)
+
+  dnaRuleExtractions.value = keysOrder.map((key, idx) => ({
+    key,
+    title: RULE_TITLE_BY_KEY[key] ?? `${idx + 1}. ${key}`,
+    desc: formatRuleDesc(key, rulesObj[key]),
+  }))
+
+  const evidencesRaw = Array.isArray(result.evidence_json) ? result.evidence_json : []
+
+  dnaEvidences.value = evidencesRaw.map(ev => ({
+    ruleKey: ev.rule_key ?? ev.ruleKey ?? 'unknown',
+    excerpt: String(ev.excerpt ?? '').trim(),
+    note: String(ev.note ?? '').trim(),
+  })).filter(ev => ev.excerpt !== '')
+
+  if (typeof result.style_instructions === 'string' && result.style_instructions.trim())
+    styleInstructionsBase.value = result.style_instructions.trim()
+
+  const backendTier = analysis?.detected_tier || result.detected_tier || detectedTier.value
+  if (backendTier) {
+    selectedDnaTierFilter.value = backendTier
+    profileForm.dominantTier = backendTier
+    sandboxForm.targetTier = backendTier
+  }
+
+  draftProfileId.value = analysis?.draft_profile_id ?? analysis?.draft_profile?.id ?? null
+  sandboxGeneratedText.value = ''
+  sandboxSnapshotPrompt.value = ''
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đóng gói rules_json đúng schema backend khi lưu profile
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có (đọc từ rawRulesJson hoặc dnaRuleExtractions.value)
+ *
+ * OUTPUT:
+ * - Object: 15 khóa chuỗi và khóa uncertainties dạng mảng chuỗi string[]
+ *
+ * SIDE EFFECT:
+ * - Không có (chỉ tạo object payload)
+ *
+ * EXCEPTION:
+ * - Không có
+ * =====================================================================
+ */
+function buildRulesJsonPayload() {
+  if (rawRulesJson.value && typeof rawRulesJson.value === 'object')
+    return { ...rawRulesJson.value }
+
+  const out = {}
+  for (const item of dnaRuleExtractions.value) {
+    if (item.key === 'uncertainties')
+      out.uncertainties = item.desc ? [item.desc] : []
+    else
+      out[item.key] = item.desc ?? ''
+  }
+
+  return out
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đóng gói mảng evidence_json đúng schema backend ({rule_key, excerpt, note})
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có (đọc từ dnaEvidences.value)
+ *
+ * OUTPUT:
+ * - Array<Object>: Danh sách trích dẫn bằng chứng hợp lệ
+ *
+ * SIDE EFFECT:
+ * - Chuẩn hóa trường ruleKey thành rule_key chuẩn snake_case
+ *
+ * EXCEPTION:
+ * - Không có
+ * =====================================================================
+ */
+function buildEvidenceJsonPayload() {
+  return dnaEvidences.value.map(ev => ({
+    rule_key: ev.ruleKey,
+    excerpt: ev.excerpt,
+    note: ev.note ?? '',
+  }))
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Gửi bài viết mẫu lên AI giải mã DNA và poll kết quả (GĐ3)
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có (đọc từ articleContent.value và profileForm.name)
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi POST /analyze, hiển thị snackbar tiến trình, bật cờ isAnalyzing,
+ *   gọi store.waitForAnalysis() và cập nhật toàn bộ thẻ DNA khi hoàn tất
+ *
+ * EXCEPTION:
+ * - ApiError và timeout error được bắt trong try/catch và hiển thị qua snackbar
+ * =====================================================================
+ */
+async function runAnalysis() {
+  if (isAnalyzing.value) return
+
+  const plainText = articleContent.value
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (plainText.length < 50) {
+    snack.text = 'Nội dung bài viết mẫu phải có tối thiểu 50 ký tự để giải mã DNA'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  try {
+    const dispatched = await store.analyze({
+      source_type: 'paste',
+      reference_text: plainText,
+      name: profileForm.name.trim() || undefined,
+    })
+
+    const analysisId = dispatched?.analysis_id
+    if (!analysisId) {
+      snack.text = 'Không nhận được mã phiên phân tích từ máy chủ'
+      snack.color = 'error'
+      snack.show = true
+
+      return
+    }
+
+    if (analysisId === lastSubmittedAnalysisId.value) {
+      snack.text = 'Đang giải mã nội dung này rồi — tiếp tục chờ kết quả...'
+      snack.color = 'info'
+      snack.show = true
+    } else {
+      lastSubmittedAnalysisId.value = analysisId
+      snack.text = 'Đã tiếp nhận — AI đang giải mã 16 khóa DNA văn phong trong nền...'
+      snack.color = 'info'
+      snack.show = true
+    }
+
+    const finalAnalysis = await store.waitForAnalysis(analysisId)
+    if (!finalAnalysis) return
+
+    if (finalAnalysis.status === 'failed') {
+      snack.text = finalAnalysis.error_message || 'Giải mã văn phong thất bại'
+      snack.color = 'error'
+      snack.show = true
+
+      return
+    }
+
+    applyAnalysisResult(finalAnalysis)
+    detailTab.value = 'style'
+
+    const tierLabel = (finalAnalysis.detected_tier || detectedTier.value).toUpperCase()
+
+    snack.text = `Đã giải mã DNA văn phong thành công (${wordCount.value} từ • cấp độ ${tierLabel})`
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  }
 }
 
 /**
@@ -870,10 +1204,20 @@ function fetchFromUrl() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Kích hoạt hộp thoại chọn file của trình duyệt.
+ * CHỨC NĂNG: Kích hoạt hộp thoại chọn file từ máy tính
  * =====================================================================
- * INPUT : không.
- * OUTPUT: void; gọi click() trên phần tử input[type=file] ẩn.
+ *
+ * INPUT:
+ * - Không có
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Kích hoạt sự kiện click() trên thẻ input[type=file] ẩn
+ *
+ * EXCEPTION:
+ * - Không có
  * =====================================================================
  */
 function triggerFileInput() {
@@ -882,12 +1226,21 @@ function triggerFileInput() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Đọc file văn bản người dùng chọn và nạp vào trình soạn thảo.
+ * CHỨC NĂNG: Đọc nội dung file văn bản người dùng chọn và nạp vào editor
  * =====================================================================
- * INPUT : event (Event từ input[type=file]).
- * OUTPUT: void.
- * SIDE EFFECT: cập nhật selectedFile, đọc nội dung text qua FileReader
- *              vào articleContent và hiển thị snackbar.
+ *
+ * INPUT:
+ * - event (Event): Sự kiện change từ thẻ input[type=file]
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật thông tin selectedFile, dùng FileReader đọc text vào articleContent
+ *   và kích hoạt snackbar thông báo thành công
+ *
+ * EXCEPTION:
+ * - Không có
  * =====================================================================
  */
 function handleFileChange(event) {
@@ -923,11 +1276,20 @@ function handleFileChange(event) {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Xóa file đang chọn và đưa về dữ liệu mẫu ban đầu.
+ * CHỨC NĂNG: Xóa file đang chọn và khôi phục dữ liệu mẫu ban đầu
  * =====================================================================
- * INPUT : không.
- * OUTPUT: void.
- * SIDE EFFECT: reset selectedFile về file mẫu và thông báo qua snackbar.
+ *
+ * INPUT:
+ * - Không có
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đặt lại selectedFile về file mẫu, xóa giá trị file input và bật snackbar
+ *
+ * EXCEPTION:
+ * - Không có
  * =====================================================================
  */
 function removeSelectedFile() {
@@ -944,38 +1306,87 @@ function removeSelectedFile() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Mô phỏng chạy Phòng thử nghiệm DNA (Sandbox) theo chủ đề.
+ * CHỨC NĂNG: Chạy Phòng thử nghiệm DNA (Sandbox) qua API thật (GĐ4)
  * =====================================================================
- * INPUT : đọc từ sandboxForm (topic, targetTier).
- * OUTPUT: void.
- * SIDE EFFECT: kiểm tra chủ đề không rỗng và hiển thị snackbar kết quả.
+ *
+ * INPUT:
+ * - Không có (đọc draftProfileId.value, sandboxForm.topic, sandboxForm.targetTier)
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi POST /writing-profiles/{id}/sandbox, cập nhật sandboxGeneratedText,
+ *   nạp snapshot.system_prompt vào sandboxSnapshotPrompt và báo snackbar
+ *
+ * EXCEPTION:
+ * - ApiError khi AI gateway gặp sự cố được bắt và hiển thị qua snackbar
  * =====================================================================
  */
-function runSandboxDemo() {
-  if (!sandboxForm.topic.trim()) {
+async function runSandboxDemo() {
+  if (!draftProfileId.value) {
+    snack.text = 'Hãy phân tích bài mẫu trước để tạo hồ sơ DNA thử nghiệm'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  const topic = sandboxForm.topic.trim()
+  if (!topic) {
     snack.text = 'Vui lòng nhập chủ đề muốn viết thử nghiệm'
     snack.color = 'warning'
     snack.show = true
 
     return
   }
-  snack.text = `Đã sinh văn bản thử nghiệm ở cấp độ "${sandboxForm.targetTier.toUpperCase()}"`
-  snack.color = 'success'
-  snack.show = true
+
+  try {
+    const res = await store.sandbox(draftProfileId.value, {
+      topic,
+      target_tier: sandboxForm.targetTier,
+    })
+
+    sandboxGeneratedText.value = res?.text ?? ''
+    if (res?.snapshot?.system_prompt) {
+      sandboxSnapshotPrompt.value = res.snapshot.system_prompt
+      promptMode.value = 'dna'
+    }
+
+    const tierLabel = (res?.target_tier || sandboxForm.targetTier).toUpperCase()
+
+    snack.text = `Đã sinh văn bản thử nghiệm ở cấp độ "${tierLabel}"`
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  }
 }
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Lưu kết quả giải mã thành Writing Profile mới (demo tĩnh).
+ * CHỨC NĂNG: Lưu kết quả giải mã thành Writing Profile thật (GĐ4)
  * =====================================================================
- * INPUT : openEditor (boolean) — nếu true thì chuyển sang trang edit/[id],
- *         ngược lại chuyển về trang danh sách list.
- * OUTPUT: void.
- * SIDE EFFECT: hiện snackbar xác nhận và điều hướng qua vue-router.
+ *
+ * INPUT:
+ * - openEditor (boolean): true nếu muốn điều hướng sang trang chỉnh sửa chi tiết
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi PUT /writing-profiles/{id} (nếu đã có draftProfileId) hoặc
+ *   POST /writing-profiles (nếu tạo tay), điều hướng bằng router.push
+ *
+ * EXCEPTION:
+ * - ApiError 422 hoặc lỗi mạng được bắt và hiển thị qua snackbar
  * =====================================================================
  */
-function saveWritingProfile(openEditor = false) {
-  if (!profileForm.name.trim()) {
+async function saveWritingProfile(openEditor = false) {
+  const name = profileForm.name.trim()
+  if (!name) {
     snack.text = 'Vui lòng nhập tên Writing Profile trước khi lưu'
     snack.color = 'warning'
     snack.show = true
@@ -983,29 +1394,57 @@ function saveWritingProfile(openEditor = false) {
     return
   }
 
-  snack.text = `Đã lưu hồ sơ "${profileForm.name}" thành công`
-  snack.color = 'success'
-  snack.show = true
+  const payload = {
+    name,
+    description: profileForm.description?.trim() || null,
+    dominant_tier: profileForm.dominantTier,
+    rules_json: buildRulesJsonPayload(),
+    evidence_json: buildEvidenceJsonPayload(),
+    style_instructions: computedStyleInstructions.value,
+    status: profileForm.status,
+    is_enabled: profileForm.isEnabled,
+  }
 
-  setTimeout(() => {
-    if (openEditor) {
-      router.push({ name: 'admin-writing-style-writing-profiles-edit-id', params: { id: 1 } })
-    } else {
+  try {
+    const saved = draftProfileId.value
+      ? await store.updateProfile(draftProfileId.value, payload)
+      : await store.createProfile(payload)
+
+    if (saved?.id)
+      draftProfileId.value = saved.id
+
+    snack.text = `Đã lưu hồ sơ "${saved?.name ?? name}" thành công`
+    snack.color = 'success'
+    snack.show = true
+
+    if (openEditor && saved?.id)
+      router.push({ name: 'admin-writing-style-writing-profiles-edit-id', params: { id: saved.id } })
+    else
       router.push({ name: 'admin-writing-style-writing-profiles-list' })
-    }
-  }, 600)
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  }
 }
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Sao chép chuỗi văn bản bất kỳ vào clipboard của trình duyệt.
+ * CHỨC NĂNG: Sao chép chuỗi văn bản bất kỳ vào clipboard của trình duyệt
  * =====================================================================
- * INPUT :
- * - text (string): nội dung cần sao chép.
- * - successMessage (string): thông báo hiển thị khi sao chép thành công.
- * OUTPUT: Promise<void>.
- * SIDE EFFECT: ghi clipboard hệ thống; hiện snackbar kết quả.
- * EXCEPTION: trình duyệt chặn quyền clipboard -> hiện snackbar lỗi.
+ *
+ * INPUT:
+ * - text (string): Nội dung cần sao chép
+ * - successMessage (string): Thông báo hiển thị khi sao chép thành công
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Ghi clipboard qua navigator.clipboard.writeText và bật snackbar
+ *
+ * EXCEPTION:
+ * - Bắt lỗi khi trình duyệt chặn quyền clipboard và thông báo cho người dùng
  * =====================================================================
  */
 async function copyText(text, successMessage = 'Đã sao chép vào bộ nhớ tạm') {
@@ -1022,14 +1461,24 @@ async function copyText(text, successMessage = 'Đã sao chép vào bộ nhớ t
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Sao chép prompt đang chọn ở Card Gợi ý Prompt.
+ * CHỨC NĂNG: Sao chép prompt đang chọn ở Card Gợi ý Prompt
  * =====================================================================
- * INPUT : không — đọc theo promptMode ('rewrite' | 'dna').
- * OUTPUT: Promise<void>.
+ *
+ * INPUT:
+ * - Không có (đọc theo promptMode: 'rewrite' hoặc 'dna')
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi hàm copyText với nội dung tương ứng
+ *
+ * EXCEPTION:
+ * - Không có
  * =====================================================================
  */
 async function copyPrompt() {
-  const targetText = promptMode.value === 'rewrite' ? PROMPT_TEXT : computedStyleInstructions.value
+  const targetText = promptMode.value === 'rewrite' ? PROMPT_TEXT : displayedDnaPrompt.value
 
   const label = promptMode.value === 'rewrite'
     ? 'Đã sao chép prompt gợi ý viết lại'
@@ -1037,6 +1486,30 @@ async function copyPrompt() {
 
   await copyText(targetText, label)
 }
+
+/**
+ * =====================================================================
+ * GIAI ĐOẠN 1 — nạp options (tiers + 16 câu hỏi giải mã) 1 lần từ API.
+ * =====================================================================
+ * Lỗi (403/500/mất mạng) KHÔNG làm trắng UI: tierOptions tự quay về
+ * TIER_OPTIONS_FALLBACK và rule card dùng `title` hằng số. Vẫn báo
+ * snackbar để người dùng biết đang xem nhãn mặc định, không phải dữ
+ * liệu từ server. Mọi phần giải mã (analyze/save/sandbox) còn demo tĩnh.
+ * =====================================================================
+ */
+onMounted(async () => {
+  try {
+    await store.fetchOptions()
+  } catch (e) {
+    snack.text = `Không nạp được danh mục cấp độ/khóa DNA: ${firstErrorMessage(e)}`
+    snack.color = 'error'
+    snack.show = true
+  }
+})
+
+onBeforeUnmount(() => {
+  store.stopPolling()
+})
 </script>
 
 <template>
@@ -1073,14 +1546,18 @@ async function copyPrompt() {
           variant="tonal"
           color="primary"
           prepend-icon="tabler-sparkles"
+          :loading="isAnalyzing"
+          :disabled="isAnalyzing || store.saving"
           @click="runAnalysis"
         >
-          Phân tích với AI
+          {{ isAnalyzing ? 'Đang giải mã AI...' : 'Phân tích với AI' }}
         </VBtn>
         <VBtn
           variant="flat"
           color="primary"
           prepend-icon="tabler-device-floppy"
+          :loading="store.saving"
+          :disabled="store.saving || isAnalyzing"
           @click="saveWritingProfile(false)"
         >
           Lưu Writing Profile
@@ -1180,13 +1657,23 @@ async function copyPrompt() {
                 v-for="tab in SOURCE_TABS"
                 :key="tab.value"
                 :value="tab.value"
+                :disabled="tab.disabled"
               >
                 <VIcon
                   :icon="tab.icon"
                   size="18"
                   class="me-2"
                 />
-                {{ tab.label }}
+                <span>{{ tab.label }}</span>
+                <VChip
+                  v-if="tab.isExperiment"
+                  size="x-small"
+                  color="secondary"
+                  variant="tonal"
+                  class="ms-2"
+                >
+                  Thử nghiệm
+                </VChip>
               </VTab>
             </VTabs>
 
@@ -1321,6 +1808,8 @@ async function copyPrompt() {
                         variant="flat"
                         color="primary"
                         size="small"
+                        :loading="isAnalyzing"
+                        :disabled="isAnalyzing"
                         @click="runAnalysis"
                       >
                         Phân tích bài viết
@@ -1413,6 +1902,8 @@ async function copyPrompt() {
                       color="primary"
                       size="small"
                       prepend-icon="tabler-sparkles"
+                      :loading="isAnalyzing"
+                      :disabled="isAnalyzing"
                       @click="runAnalysis"
                     >
                       Phân tích tài liệu
@@ -1426,6 +1917,11 @@ async function copyPrompt() {
 
         <!-- 2. Card Giải mã DNA & Phân tích chi tiết (6 Tabs) -->
         <VCard>
+          <VProgressLinear
+            v-if="isAnalyzing"
+            indeterminate
+            color="primary"
+          />
           <VCardItem>
             <template #title>
               <div class="d-flex align-center">
@@ -1446,6 +1942,16 @@ async function copyPrompt() {
           </VCardItem>
 
           <VCardText>
+            <VAlert
+              v-if="isAnalyzing"
+              type="info"
+              variant="tonal"
+              density="compact"
+              class="mb-4 text-caption"
+            >
+              AI đang giải mã 16 khóa DNA văn phong và kiểm chứng trích dẫn nguyên văn từ bài mẫu (có thể mất 10–60 giây)...
+            </VAlert>
+
             <!-- Tabs danh mục phân tích -->
             <VTabs
               v-model="detailTab"
@@ -1534,7 +2040,7 @@ async function copyPrompt() {
                     <!-- Bộ chọn thử nghiệm phân tầng LengthTier -->
                     <div class="d-flex align-center flex-wrap gap-1">
                       <VBtn
-                        v-for="tierOpt in TIER_OPTIONS"
+                        v-for="tierOpt in tierOptions"
                         :key="tierOpt.value"
                         size="x-small"
                         :variant="selectedDnaTierFilter === tierOpt.value ? 'flat' : 'tonal'"
@@ -1580,6 +2086,12 @@ async function copyPrompt() {
                             {{ rule.isDroppedInTier ? '-> uncertainties' : rule.key }}
                           </VChip>
                         </div>
+                        <div
+                          v-if="rule.question"
+                          class="text-caption text-disabled mb-1"
+                        >
+                          {{ rule.question }}
+                        </div>
                         <div class="text-caption text-medium-emphasis">
                           {{ rule.desc }}
                         </div>
@@ -1600,10 +2112,20 @@ async function copyPrompt() {
                     Bằng chứng trích dẫn nguyên văn (Verified Evidence)
                   </div>
 
-                  <div class="d-flex flex-column gap-3">
+                  <div
+                    v-if="!dnaEvidences.length"
+                    class="tonal-panel pa-3 rounded text-caption text-medium-emphasis"
+                  >
+                    Chưa có trích dẫn nguyên văn nào được xác thực từ bài viết mẫu.
+                  </div>
+
+                  <div
+                    v-else
+                    class="d-flex flex-column gap-3"
+                  >
                     <div
-                      v-for="ev in DNA_EVIDENCES"
-                      :key="ev.ruleKey"
+                      v-for="(ev, idx) in dnaEvidences"
+                      :key="`${ev.ruleKey}-${idx}`"
                       class="prompt-box pa-3 rounded"
                     >
                       <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-1">
@@ -1840,22 +2362,57 @@ async function copyPrompt() {
                   >
                     <AppSelect
                       v-model="sandboxForm.targetTier"
-                      :items="TIER_OPTIONS"
+                      :items="tierOptions"
                       label="Cấp độ độ dài mục tiêu (Target Tier)"
                     />
                   </VCol>
                 </VRow>
 
-                <div class="d-flex justify-end mb-4">
-                  <VBtn
-                    variant="flat"
-                    color="primary"
-                    size="small"
-                    prepend-icon="tabler-player-play"
-                    @click="runSandboxDemo"
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-4">
+                  <span
+                    v-if="!draftProfileId"
+                    class="text-caption text-warning d-flex align-center"
                   >
-                    Viết thử với DNA vừa phân tích
-                  </VBtn>
+                    <VIcon
+                      icon="tabler-info-circle"
+                      size="15"
+                      class="me-1"
+                    />
+                    Hãy phân tích bài mẫu trước để mở khóa Phòng thử DNA
+                  </span>
+                  <span
+                    v-else
+                    class="text-caption text-success d-flex align-center"
+                  >
+                    <VIcon
+                      icon="tabler-circle-check"
+                      size="15"
+                      class="me-1"
+                    />
+                    Đang kết nối với hồ sơ nháp #{{ draftProfileId }}
+                  </span>
+
+                  <VTooltip
+                    :disabled="Boolean(draftProfileId)"
+                    location="top"
+                  >
+                    <template #activator="{ props: tooltipProps }">
+                      <span v-bind="tooltipProps">
+                        <VBtn
+                          variant="flat"
+                          color="primary"
+                          size="small"
+                          prepend-icon="tabler-player-play"
+                          :loading="store.sandboxing"
+                          :disabled="!draftProfileId || store.sandboxing || isAnalyzing"
+                          @click="runSandboxDemo"
+                        >
+                          Viết thử với DNA vừa phân tích
+                        </VBtn>
+                      </span>
+                    </template>
+                    <span>Hãy phân tích bài mẫu trước</span>
+                  </VTooltip>
                 </div>
 
                 <!-- Kết quả sinh văn bản thử nghiệm -->
@@ -2585,7 +3142,20 @@ async function copyPrompt() {
               class="prompt-box pa-3 rounded text-body-2 text-high-emphasis sandbox-output"
               style="max-height: 480px; overflow-y: auto;"
             >
-              {{ computedStyleInstructions }}
+              <div
+                v-if="sandboxSnapshotPrompt"
+                class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2"
+              >
+                <VChip
+                  size="x-small"
+                  color="success"
+                  variant="tonal"
+                  label
+                >
+                  Snapshot thực tế từ Backend (đã loại bỏ evidence_json)
+                </VChip>
+              </div>
+              {{ displayedDnaPrompt }}
             </div>
           </VCardText>
         </VCard>
@@ -2614,11 +3184,11 @@ async function copyPrompt() {
             <template #append>
               <VChip
                 size="x-small"
-                color="info"
+                :color="draftProfileId ? 'info' : 'secondary'"
                 variant="tonal"
                 label
               >
-                origin: reference
+                origin: {{ draftProfileId ? 'reference' : 'manual' }}
               </VChip>
             </template>
           </VCardItem>
@@ -2631,7 +3201,7 @@ async function copyPrompt() {
               >
                 <AppSelect
                   v-model="profileForm.dominantTier"
-                  :items="TIER_OPTIONS"
+                  :items="tierOptions"
                   label="Cấp độ chủ đạo (Tier)"
                   class="mb-3"
                 />
@@ -2698,6 +3268,8 @@ async function copyPrompt() {
                 color="secondary"
                 size="small"
                 prepend-icon="tabler-adjustments-horizontal"
+                :loading="store.saving"
+                :disabled="store.saving || isAnalyzing"
                 @click="saveWritingProfile(true)"
               >
                 Lưu &amp; Sửa chi tiết 8 Tab
@@ -2707,6 +3279,8 @@ async function copyPrompt() {
                 color="primary"
                 size="small"
                 prepend-icon="tabler-check"
+                :loading="store.saving"
+                :disabled="store.saving || isAnalyzing"
                 @click="saveWritingProfile(false)"
               >
                 Tạo Writing Profile
