@@ -169,7 +169,13 @@ Mỗi giai đoạn tự chạy được và kiểm chứng được độc lập
 
 **Kiểm chứng**
 - `php artisan route:list --name=writing-style` thấy route mới
-- `php artisan test --filter=WritingAnalysis` xanh
+- `php artisan test Modules/WritingStyle/tests --filter=WritingStyleApiTest` xanh
+  (hoặc hẹp hơn: `--filter=show_analysis` chỉ chạy nhóm test endpoint này)
+
+  > `--filter` khớp **tên class hoặc tên method**, không khớp tên file hay namespace.
+  > Test của module nằm trong class `WritingStyleApiTest`, method `test_show_analysis_*`.
+  > Đặt filter sai (vd `--filter=WritingAnalysis`) sẽ chọn **0 test** mà vẫn báo xanh —
+  > luôn đọc dòng `Tests: N passed` để chắc N > 0.
 - `curl` một analysis_id thật → đúng status, đúng `draft_profile_id`
 
 ---
@@ -265,8 +271,16 @@ Mỗi giai đoạn tự chạy được và kiểm chứng được độc lập
 
 **Việc cần làm**
 
+0. **Dependency phải cài trước:** `composer require symfony/dom-crawler`.
+
+   > `symfony/css-selector` đã có trong `vendor/`, nhưng `symfony/dom-crawler` **chưa** —
+   > nó chỉ xuất hiện trong `composer.lock` như `require-dev` *suggestion* của một package khác,
+   > không phải dependency đã cài. Kiểm tra bằng `test -d vendor/symfony/dom-crawler`.
+   > Nếu không muốn thêm dependency: dùng `DOMDocument` + `DOMXPath` của PHP core
+   > (đã có sẵn qua ext-dom) để bóc nội dung — đủ cho nhu cầu strip tag + lấy `<title>`.
+
 1. `app/Services/ReferenceSourceFetcher.php` (mới):
-   - `fetchFromUrl(string $url): string` — Guzzle/Http với allowlist scheme, kiểm tra IP đích sau khi resolve DNS (chặn cả rebinding), `timeout 15s`, `max_redirects 3`, cắt body ở ~2MB; bóc nội dung chính bằng `symfony/css-selector` + `DomCrawler` (đã có trong `vendor`); strip `script`/`style`/`nav`/`footer`.
+   - `fetchFromUrl(string $url): string` — Guzzle/Http với allowlist scheme, kiểm tra IP đích sau khi resolve DNS (chặn cả rebinding), `timeout 15s`, `max_redirects 3`, cắt body ở ~2MB; bóc nội dung chính bằng `symfony/css-selector` + `DomCrawler` (sau khi đã cài ở bước 0), hoặc `DOMDocument`/`DOMXPath` core; strip `script`/`style`/`nav`/`footer`.
    - `fetchFromFile(UploadedFile $file): string` — nhận `.txt`/`.md`/`.html`, giới hạn 2MB, MIME-check thật (không tin đuôi file), `strip_tags` cho html.
    - Trả lỗi nghiệp vụ rõ ràng: không với được, nội dung quá ngắn (`< 50` ký tự theo `AnalyzeTextRequest`), kiểu file không hỗ trợ.
 
@@ -359,7 +373,7 @@ G11,G12 ──► GĐ6 (dọn khối không backend)   (độc lập, làm lúc 
 | Tier client lệch tier backend | Chip hiện `medium` nhưng DNA giải mã theo `short` | Sau analyze lấy `detected_tier` của backend làm chuẩn |
 | SSRF ở fetcher URL | Đọc được dịch vụ nội bộ, metadata cloud | GĐ5 bắt buộc chặn IP nội bộ sau resolve DNS + giới hạn redirect/size/timeout |
 | Trang 2823 dòng | Sửa trực tiếp dễ vỡ, khó review | Mỗi giai đoạn một commit riêng; cân nhắc tách `useWritingProfileAnalysis()` composable cho logic analyze+poll |
-| Payload `rules_json` lớn | 16 khóa + evidence có thể vài chục KB | Chấp nhận được; `style_instructions` đã giới hạn 10000 ký tự |
+| `style_instructions` vượt `max:10000` | Lưu profile → 422 ngay khi AI trả text gần ngưỡng | `max:10000` ([StoreWritingProfileRequest](Modules/WritingStyle/app/Http/Requests/StoreWritingProfileRequest.php)) chỉ chặn **input lưu**, KHÔNG cap nguồn sinh: AI trả `style_instructions` không cap + FE nối thêm block tone ở `computedStyleInstructions`. Trước khi save, cắt `style_instructions` còn ≤ 10000 (kèm cảnh báo) hoặc nới rule — không tin "đã giới hạn sẵn" |
 
 ---
 

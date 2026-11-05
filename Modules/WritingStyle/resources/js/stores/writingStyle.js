@@ -15,9 +15,10 @@
  * - deleteProfile(id): xóa profile khỏi server và local store
  * - fetchProfile(id): tải chi tiết một profile
  * - analyze(payload): gửi văn bản giải mã DNA (nhận 202)
- * - fetchAnalysis(id): đọc 1 lần kết quả giải mã theo UUID
+ * - fetchAnalysis(id, opts): đọc 1 lần kết quả giải mã theo UUID (nhận AbortSignal)
  * - waitForAnalysis(id, opts): poll kết quả giải mã định kỳ kèm cơ chế hủy sạch
- * - stopPolling(): ngắt chu kỳ poll và giải phóng Promise ngay lập tức
+ *   (deadline timer + AbortController nên request treo vẫn bị cắt đúng hạn)
+ * - stopPolling(): ngắt chu kỳ poll, abort request đang bay, giải phóng Promise
  * - sandbox(id, payload): gọi AI viết thử nghiệm theo DNA
  *
  * INPUT/OUTPUT CỦA STORE (tổng thể):
@@ -46,6 +47,8 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     analysisTimer: null,     // handle setTimeout của vòng poll (để hủy)
     _pollToken: 0,           // định danh phiên poll (tránh race condition giữa các lần gọi)
     _pollWakeup: null,       // hàm đánh thức Promise chờ khi stopPolling() được gọi
+    _pollAbort: null,        // AbortController của request poll đang bay (hủy fetch giữa chừng)
+    _pollDeadlineTimer: null, // setTimeout hết hạn — cắt cả request treo không trả
     sandboxResult: null,     // SandboxResultDto gần nhất
   }),
 
@@ -313,8 +316,8 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * - ApiError khi không tìm thấy phiên giải mã
      * =====================================================================
      */
-    async fetchAnalysis(id) {
-      const res = await writingStyleApi.analysis(id)
+    async fetchAnalysis(id, { signal } = {}) {
+      const res = await writingStyleApi.analysis(id, { signal })
 
       this.analysisResult = res
 
@@ -328,19 +331,29 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      *
      * INPUT:
      * - id (string): UUID phiên giải mã
-     * - opts (Object): { intervalMs = 3000, timeoutMs = 300000 }
+     * - opts (Object): { intervalMs = 3000, timeoutMs = 420000 }
      *
      * OUTPUT:
      * - Promise<Object|null>: Resource khi succeeded/failed; null nếu bị stop sớm
+     *   (stopPolling / unmount / request bị abort)
      *
      * SIDE EFFECT:
-     * - Bật analysisPolling, quản lý timer hẹn giờ và bộ đếm _pollToken
+     * - Bật analysisPolling, quản lý timer hẹn giờ (interval + deadline), bộ
+     *   đếm _pollToken và AbortController của request đang bay
      *
      * EXCEPTION:
      * - Ném Error khi quá thời hạn timeoutMs mà job chưa kết thúc
+     * - Bubble ApiError nếu request lỗi thật và đã hết hạn chờ
+     * - KHÔNG ném AbortError: abort được coi là hủy sạch -> trả null
      * =====================================================================
      */
-    async waitForAnalysis(id, { intervalMs = 3000, timeoutMs = 300000 } = {}) {
+    /*
+     * timeoutMs mặc định 420s: bao trọn trường hợp xấu nhất của job ai-text —
+     * timeout 300s × tries 2 = 600s là trần cứng của worker, nhưng thực tế
+     * attempt 1 gần như luôn xong < 300s; cộng đệm cho đường mạng. Trước đây
+     * 300s ngắn hơn một nhánh retry đang chạy hợp lệ nên FE báo timeout sớm.
+     */
+    async waitForAnalysis(id, { intervalMs = 3000, timeoutMs = 420000 } = {}) {
       this.stopPolling()
 
       const token = ++this._pollToken
@@ -349,21 +362,67 @@ export const useWritingStyleStore = defineStore('writingStyle', {
 
       const deadline = Date.now() + timeoutMs
 
+      // Hết hạn một lần duy nhất — bắt cả trường hợp request fetch bị treo mãi
+      // (server giữ connection không trả lời) mà vòng while không kịp chạy để
+      // tự check `Date.now() >= deadline`. timedOut phân biệt abort-do-hết-hạn
+      // (phải báo lỗi) với abort-do-hủy (unmount/stopPolling -> trả null).
+      let timedOut = false
+
+      this._pollDeadlineTimer = setTimeout(() => {
+        this._pollDeadlineTimer = null
+        if (!this.analysisPolling || this._pollToken !== token) return
+
+        timedOut = true
+        this.analysisPolling = false
+
+        if (this._pollAbort) this._pollAbort.abort()
+
+        if (typeof this._pollWakeup === 'function') {
+          const wake = this._pollWakeup
+
+          this._pollWakeup = null
+          wake()
+        }
+      }, timeoutMs)
+
+      const TIMEOUT_MSG = 'Hết thời gian chờ giải mã (queue worker đang chạy không?)'
+
+      const isAbortErr = e =>
+        e?.name === 'AbortError' ||
+        e?.name === 'DOMException' && e?.code === 20 ||
+        /abort/i.test(e?.message ?? '')
+
       try {
         while (this.analysisPolling && this._pollToken === token) {
-          const res = await this.fetchAnalysis(id)
+          this._pollAbort = new AbortController()
+          try {
+            const res = await this.fetchAnalysis(id, { signal: this._pollAbort.signal })
 
-          // Kiểm tra xem đã bị hủy giữa chừng trong lúc gọi HTTP không
-          if (!this.analysisPolling || this._pollToken !== token)
-            return null
+            if (!this.analysisPolling || this._pollToken !== token)
+              return null
 
-          if (res?.status === 'succeeded' || res?.status === 'failed')
-            return res
+            if (res?.status === 'succeeded' || res?.status === 'failed')
+              return res
+          } catch (err) {
+            if (isAbortErr(err)) {
+              // Abort do hết hạn -> báo lỗi; abort do hủy (unmount/stopPolling)
+              // -> dừng sạch, trả null.
+              if (timedOut) throw new Error(TIMEOUT_MSG)
 
-          if (Date.now() >= deadline)
-            throw new Error('Hết thời gian chờ giải mã (queue worker đang chạy không?)')
+              return null
+            }
 
-          // Ngủ intervalMs nhưng có thể bị stopPolling() đánh thức lập tức
+            // Lỗi thật (mạng, 5xx, 404...): nếu vẫn còn hạn thì ngủ rồi thử lại,
+            // hết hạn thì bubble ra cho caller xử lý thay vì treo vòng lặp.
+            if (timedOut || Date.now() >= deadline) throw err
+          } finally {
+            this._pollAbort = null
+          }
+
+          if (timedOut || Date.now() >= deadline)
+            throw new Error(TIMEOUT_MSG)
+
+          // Ngủ intervalMs nhưng có thể bị stopPolling()/hết hạn đánh thức lập tức
           await new Promise(resolve => {
             this._pollWakeup = resolve
             this.analysisTimer = setTimeout(() => {
@@ -374,12 +433,19 @@ export const useWritingStyleStore = defineStore('writingStyle', {
           })
         }
 
+        // Đến đây khi polling bị tắt từ bên ngoài (unmount/stopPolling) hoặc
+        // deadline timer đã tắt analysisPolling -> chỉ báo lỗi khi do hết hạn.
+        if (timedOut) throw new Error(TIMEOUT_MSG)
+
         return null
       } finally {
         // Chỉ dọn state nếu đây vẫn là phiên poll hiện tại (không ghi đè phiên mới)
         if (this._pollToken === token) {
           this.analysisPolling = false
-          this.analysisTimer = null
+
+          if (this.analysisTimer) { clearTimeout(this.analysisTimer); this.analysisTimer = null }
+          if (this._pollDeadlineTimer) { clearTimeout(this._pollDeadlineTimer); this._pollDeadlineTimer = null }
+          if (this._pollAbort) { this._pollAbort = null }
           this._pollWakeup = null
         }
       }
@@ -397,7 +463,8 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * - void
      *
      * SIDE EFFECT:
-     * - Tăng _pollToken, tắt analysisPolling, clearTimeout và kích hoạt _pollWakeup
+     * - Tăng _pollToken, tắt analysisPolling, clearTimeout, abort request đang
+     *   bay và kích hoạt _pollWakeup
      *
      * EXCEPTION:
      * - Không có
@@ -410,6 +477,17 @@ export const useWritingStyleStore = defineStore('writingStyle', {
       if (this.analysisTimer) {
         clearTimeout(this.analysisTimer)
         this.analysisTimer = null
+      }
+
+      if (this._pollDeadlineTimer) {
+        clearTimeout(this._pollDeadlineTimer)
+        this._pollDeadlineTimer = null
+      }
+
+      // Ngắt request fetch đang bay (nếu có) — bắt lỗi AbortError ở vòng poll.
+      if (this._pollAbort) {
+        try { this._pollAbort.abort() } catch { /* abort đã chạy rồi */ }
+        this._pollAbort = null
       }
 
       // Đánh thức Promise đang ngủ để waitForAnalysis kết thúc ngay lập tức

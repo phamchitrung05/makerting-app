@@ -178,6 +178,8 @@ export const writingStyleApi = {
    *
    * INPUT:
    * - id (string): UUID của bản ghi phân tích
+   * - opts (Object): { signal?: AbortSignal } — truyền xuống ofetch để có thể
+   *   ngắt request giữa chừng (polling bị hủy / server treo không trả lời).
    *
    * OUTPUT:
    * - Promise<Object>: WritingAnalysisResource (kèm status, result_json, draft_profile)
@@ -187,10 +189,11 @@ export const writingStyleApi = {
    *
    * EXCEPTION:
    * - ApiError 404 nếu không tìm thấy phiên giải mã
+   * - DOMException AbortError nếu `opts.signal` bị abort giữa chừng
    * =====================================================================
    */
-  analysis(id) {
-    return $api(`${BASE}/writing-profiles/analyses/${id}`)
+  analysis(id, { signal } = {}) {
+    return $api(`${BASE}/writing-profiles/analyses/${id}`, { signal })
   },
 
   /**
