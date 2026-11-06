@@ -77,6 +77,27 @@ class WritingStyleApiTest extends TestCase
         $this->assertNull(WritingProfile::find($id));
     }
 
+    public function test_profile_slug_tu_sinh_tu_name_va_ghi_de_tuy_bien(): void
+    {
+        $u = $this->admin(['writing.profile.view', 'writing.profile.create']);
+        $t = $this->token($u);
+
+        // Tự sinh từ name khi không gửi slug.
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Giọng Chuyên Gia Việt', 'rules_json' => [],
+        ], $t);
+        $res->assertCreated();
+        $autoSlug = $res->json('data.slug');
+        $this->assertNotEmpty($autoSlug);
+        $this->assertMatchesRegularExpression('/^[a-z0-9-]+$/', $autoSlug);
+
+        // Slug tùy biến hợp lệ được ghi đè.
+        $id = $res->json('data.id');
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$id}", [
+            'slug' => 'giong-custom-01',
+        ], $t)->assertOk()->assertJsonPath('data.slug', 'giong-custom-01');
+    }
+
     public function test_analyze_tra_202_va_dispatch_job(): void
     {
         Queue::fake();
@@ -95,12 +116,100 @@ class WritingStyleApiTest extends TestCase
         Queue::assertPushed(AnalyzeWritingProfileJob::class);
     }
 
+    /*
+     * Bind một SafeRemoteFetcherContract giả: trả body cố định hoặc ném lỗi —
+     * giữ cho test nhánh url không gọi mạng thật.
+     */
+    private function fakeFetcher(?string $html, ?\Modules\Core\Exceptions\RemoteFetchException $e = null, int $status = 200): void
+    {
+        $this->app->instance(
+            \Modules\Core\Contracts\SafeRemoteFetcherContract::class,
+            new class($html, $e, $status) implements \Modules\Core\Contracts\SafeRemoteFetcherContract {
+                public function __construct(private ?string $html, private ?\Modules\Core\Exceptions\RemoteFetchException $e, private int $status) {}
+
+                public function fetch(string $url, array $options = []): \Modules\Core\DTOs\RemoteFetchResultDto
+                {
+                    if ($this->e !== null) {
+                        throw $this->e;
+                    }
+
+                    return new \Modules\Core\DTOs\RemoteFetchResultDto(
+                        status: $this->status,
+                        body: $this->html ?? '',
+                        headers: [],
+                        finalUrl: $url,
+                        contentType: 'text/html; charset=utf-8',
+                    );
+                }
+            },
+        );
+    }
+
     public function test_analyze_thieu_reference_text_422(): void
     {
+        Queue::fake();
         $u = $this->admin(['writing.evaluate']);
+
+        // paste không reference_text -> validate 422 từ FormRequest.
+        $this->postJson('/api/v1/admin/writing-style/writing-profiles/analyze', [
+            'source_type' => 'paste',
+            'reference_text' => '',
+        ], $this->token($u))->assertUnprocessable();
+    }
+
+    public function test_analyze_url_tra_202_va_dispatch_job(): void
+    {
+        Queue::fake();
+        $u = $this->admin(['writing.evaluate']);
+
+        $html = '<html><head><title>Bài viết URL thật</title></head><body><article><p>'
+            . str_repeat('Câu nội dung bài viết đủ dài để trích xuất. ', 4) . '</p></article></body></html>';
+        $this->fakeFetcher($html);
+
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles/analyze', [
+            'source_type' => 'url',
+            'source_url' => 'https://public.blog/bai-viet',
+        ], $this->token($u));
+
+        $res->assertAccepted()
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.meta.domain', 'public.blog')
+            ->assertJsonPath('data.meta.title', 'Bài viết URL thật');
+
+        Queue::assertPushed(AnalyzeWritingProfileJob::class);
+
+        // reference_text được backend bóc từ HTML — không phải FE gửi.
+        $analysis = WritingProfileAnalysis::latest('id')->first();
+        $this->assertStringContainsString('Câu nội dung bài viết', $analysis->reference_text);
+        $this->assertStringNotContainsString('<article>', $analysis->reference_text);
+    }
+
+    public function test_analyze_url_chon_ssrf_422(): void
+    {
+        Queue::fake();
+        $u = $this->admin(['writing.evaluate']);
+
+        // Báo cho fake fetcher ném exception CHẶN — mô phỏng IP nội bộ bị từ
+        // chối trước khi một byte nào ra ngoài (assertUrlAllowed).
+        $this->fakeFetcher(null, \Modules\Core\Exceptions\RemoteFetchException::blocked('http://10.0.0.1', 'IP thuoc dai noi bo'));
+
         $this->postJson('/api/v1/admin/writing-style/writing-profiles/analyze', [
             'source_type' => 'url',
-            'source_url' => 'https://x.com/a',
+            'source_url' => 'http://10.0.0.1/internal',
+        ], $this->token($u))->assertUnprocessable();
+    }
+
+    public function test_analyze_url_tra_loi_http_422(): void
+    {
+        Queue::fake();
+        $u = $this->admin(['writing.evaluate']);
+
+        // Fetcher trả 404 (SafeRemoteFetcher không ném) -> controller bắt 422.
+        $this->fakeFetcher('<html><body>404</body></html>', null, 404);
+
+        $this->postJson('/api/v1/admin/writing-style/writing-profiles/analyze', [
+            'source_type' => 'url',
+            'source_url' => 'https://blog.example/missing',
         ], $this->token($u))->assertUnprocessable();
     }
 

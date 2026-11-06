@@ -35,7 +35,7 @@ class AnalyzeRetryClassificationTest extends TestCase
         });
     }
 
-    public function test_loi_transient_nem_lai_de_queue_retry(): void
+    public function test_loi_transient_nem_lai_de_queue_retry_va_giu_running(): void
     {
         $this->gw(AiGatewayException::rateLimit('429'));
 
@@ -43,8 +43,10 @@ class AnalyzeRetryClassificationTest extends TestCase
         try {
             app(WritingStyleAnalyzerService::class)->analyze('Bài mẫu transient lỗi.');
         } finally {
-            // markFailed đã ghi trước khi ném.
-            $this->assertSame(WritingProfileAnalysis::STATUS_FAILED, WritingProfileAnalysis::first()->status);
+            // Lỗi TẠM THỜI -> GIỮ `running` (KHÔNG markFailed) để FE poll không
+            // báo thất bại sai trong lúc attempt 2 của job còn chạy. error_code
+            // vẫn ghi để chẩn đoán.
+            $this->assertSame(WritingProfileAnalysis::STATUS_RUNNING, WritingProfileAnalysis::first()->status);
             $this->assertSame('rate_limit', WritingProfileAnalysis::first()->error_code);
         }
     }
@@ -57,5 +59,47 @@ class AnalyzeRetryClassificationTest extends TestCase
 
         $this->assertSame(WritingProfileAnalysis::STATUS_FAILED, $a->status);
         $this->assertSame('auth', $a->error_code);
+    }
+
+    public function test_hook_failed_chot_failed_cho_loi_transient_het_luot(): void
+    {
+        // Khi job hết lượt retry, hook failed() phải chốt `failed` — nếu không
+        // bản ghi transient sẽ treo mãi ở `running` và FE poll tới timeout.
+        $this->gw(AiGatewayException::rateLimit('429'));
+
+        $analysis = WritingProfileAnalysis::create([
+            'created_by'     => null,
+            'source_type'    => WritingProfileAnalysis::SOURCE_PASTE,
+            'source_url'     => null,
+            'reference_text' => 'Bài mẫu transient lỗi.',
+            'status'         => WritingProfileAnalysis::STATUS_RUNNING,
+            'expires_at'     => now()->addDays(30),
+        ]);
+        $analysis->markTransientError('rate_limit', 'HTTP 429');
+
+        $job = new \Modules\WritingStyle\Jobs\AnalyzeWritingProfileJob($analysis->id, 'task-x');
+        $job->failed(new \RuntimeException('HTTP 429'));
+
+        $this->assertSame(WritingProfileAnalysis::STATUS_FAILED, $analysis->fresh()->status);
+    }
+
+    public function test_hook_failed_khong_ghi_de_khi_da_succeeded(): void
+    {
+        // Guard: nếu lần chạy trước đã succeeded (edge — job vẫn vào hook),
+        // hook KHÔNG được đè `failed` lên bản ghi thành công.
+        $analysis = WritingProfileAnalysis::create([
+            'created_by'     => null,
+            'source_type'    => WritingProfileAnalysis::SOURCE_PASTE,
+            'source_url'     => null,
+            'reference_text' => 'Bài mẫu đã xong.',
+            'status'         => WritingProfileAnalysis::STATUS_RUNNING,
+            'expires_at'     => now()->addDays(30),
+        ]);
+        $analysis->markSucceeded(['detected_tier' => 'short', 'rules_json' => []], 'short');
+
+        $job = new \Modules\WritingStyle\Jobs\AnalyzeWritingProfileJob($analysis->id, 'task-x');
+        $job->failed(new \RuntimeException('vẫn bị gọi'));
+
+        $this->assertSame(WritingProfileAnalysis::STATUS_SUCCEEDED, $analysis->fresh()->status);
     }
 }

@@ -169,6 +169,37 @@ class WritingProfileAnalysis extends Model
         return $this;
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghi lỗi TẠM THỜI nhưng GIỮ status `running` để queue retry.
+     * =====================================================================
+     * Khác `markFailed()`: không chuyển sang `failed`. Lỗi transient
+     * (network/timeout/rate_limit/provider_error) sẽ được worker chạy lại
+     * theo `$tries` của AnalyzeWritingProfileJob, nên bản ghi CHƯA kết thúc.
+     *
+     * Nếu ghi `failed` ngay tại đây, FE poll (`waitForAnalysis` coi `failed`
+     * là trạng thái cuối) sẽ báo thất bại sai trong lúc attempt sau vẫn
+     * đang chạy và có thể thành công — đồng thời mất `draft_profile_id`.
+     * Chỉ hook `failed()` của job (hết lượt retry) mới được markFailed.
+     *
+     * INPUT:
+     * - string $errorCode    : mã lỗi lần thử vừa rồi (để chẩn đoán).
+     * - string $errorMessage : thông điệp lỗi lần thử vừa rồi.
+     *
+     * OUTPUT: self.
+     * SIDE EFFECT: UPDATE error_code/error_message; status giữ nguyên `running`.
+     * =====================================================================
+     */
+    public function markTransientError(string $errorCode, string $errorMessage): self
+    {
+        $this->status = self::STATUS_RUNNING;
+        $this->error_code = $errorCode;
+        $this->error_message = $errorMessage;
+        $this->save();
+
+        return $this;
+    }
+
     /* =====================================================================
      * HELPERS
      * ===================================================================== */

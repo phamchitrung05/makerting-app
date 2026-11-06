@@ -1,8 +1,8 @@
 # Kế hoạch Nối API: Trang `writing-profiles/create`
 
-> **File đích:** `Modules/WritingStyle/resources/js/pages/writing-profiles/create/index.vue` (2875 dòng)
-> **Trạng thái hiện tại:** GĐ1 (options) + GĐ2 (endpoint đọc analysis) + GĐ3 (giải mã paste) + GĐ4 (lưu profile & sandbox) **đã nối API**.
-> **Tiến độ nối API:** 4 / 6 giai đoạn.
+> **File đích:** `Modules/WritingStyle/resources/js/pages/writing-profiles/create/index.vue` (~3410 dòng)
+> **Trạng thái hiện tại:** GĐ2 + GĐ4 **xong trọn**. GĐ1 + GĐ3 **đã nối API nhưng còn việc dở**. GĐ5 **nhánh URL xong** (fetcher + bóc HTML + FE nối), phần nguồn **file vẫn chờ parser**.
+> **Tiến độ nối API:** phần URL của GĐ5 đã làm; còn lại xem [§Còn lại](#9-phần-còn-lại-sau-gđ5-url).
 
 ---
 
@@ -269,7 +269,9 @@ Mỗi giai đoạn tự chạy được và kiểm chứng được độc lập
 
 > Tách riêng vì cần code backend mới và có mặt an ninh: fetch URL do người dùng nhập là **SSRF**. Phải chặn địa chỉ nội bộ (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, metadata endpoint cloud `169.254.169.254`), chỉ cho `http`/`https`, giới hạn redirect, timeout, và **giới hạn kích thước phản hồi** để không bị bom nội dung.
 
-**Việc cần làm**
+> **Nhánh URL đã làm.** `ReferenceSourceFetcher` (`Modules/WritingStyle/app/Services/ReferenceSourceFetcher.php`) tải qua `SafeRemoteFetcherContract`, theo tối đa 3 redirect (đọc `headers['location']` vì SafeRemoteFetcher không follow), kiểm HTTP 2xx + content-type HTML, bóc nội dung bằng `DOMDocument`/`DOMXPath` core (không cần `dom-crawler`), và trả `{reference_text, meta:{domain,title,word_count}}`. Controller nhánh `url` tại `WritingAnalyzeController::store()`. FE `fetchFromUrl()` gọi `POST /analyze` với `source_type:'url'`, nạp `URL_PREVIEW_META` từ `response.meta`, đổ text vào editor, rồi đi tiếp `awaitAndApply()` (phần poll/đổ DNA tái dùng chung với paste). Nhánh `file` ở controller vẫn trả 422 chờ parser upload. Phần còn lại dưới đây chủ yếu là **file**.
+>
+> ⚠️ Lưu ý đã sửa ở `Modules/Core/app/Services/SafeRemoteFetcher.php`: thêm `CURLOPT_HEADERFUNCTION` gom response header vào `$responseHeaders` — trước đây `headers` trả `[]` rỗng nên fetcher không đọc được `Location` để tự follow redirect.
 
 0. **Dependency phải cài trước:** `composer require symfony/dom-crawler`.
 
@@ -387,3 +389,58 @@ Trang create hiện trộn hai bản spec khác nhau:
 Code backend theo spec mới. UI trang create lại có cả gauge điểm, `STYLE_RULE_CHECKS` với code quy tắc của spec cũ, và `archetype` — đó là nguồn gốc của 19 khối `thieu_backend`. Giai đoạn 6 giải quyết việc này theo hướng **giữ spec mới**, vì đó là spec backend đã triển khai và PLAN.md gọi rõ cách tiếp cận mới là *"Giải mã Yếu tố thay vì chấm điểm cứng nhắc"*.
 
 Nếu muốn giữ phần chấm điểm, đó là một tính năng mới cần spec riêng (bảng `writing_rules`, service chấm điểm, endpoint `evaluate`) — không nằm trong P2-02.
+
+---
+
+## 9. Phần còn lại sau GĐ5-URL
+
+Trạng thái sau khi làm nhánh URL của GĐ5:
+
+- **Đã xong:** GĐ2 + GĐ4; GĐ5-URL (fetcher, bóc HTML, meta, FE, test).
+- **Còn lại của GĐ5 (file):**
+  - `ReferenceSourceFetcher::fetchFromFile(UploadedFile)` — đọc `.txt`/`.md`/`.html`, MIME-check thật, strip tag cho html, giới hạn 2MB.
+  - `AnalyzeTextRequest` — thêm field `file` (`mimes:txt,md,html`, `max:2048`, `required_if:source_type,file`).
+  - `WritingAnalyzeController::store()` — bỏ nhánh `file`→422 hiện tại, gọi `fetchFromFile`.
+  - FE tab file — gửi `FormData` (không FileReader + `source_type:'paste'` như hiện), `accept` thu về `.txt,.md,.html`, xóa file mẫu giả ở `removeSelectedFile`.
+- **Còn lại khác (không thuộc GĐ5):** GĐ1/GĐ3 còn một số việc nhỏ; GĐ6 (ẩn/dọn số liệu giả, nối `taxonomyTags`); `edit/[id].vue` tĩnh; mồi dữ liệu demo ban đầu trên trang create; `style_instructions` chưa cắt theo `max:10000`.
+
+---
+
+## 10. Lỗi cần sửa (phát hiện khi dò luồng, ghi để làm tiếp)
+
+Nhóm lỗi tìm được trong lần dò luồng toàn bộ WritingProfile — từng cái kèm file:line gốc và hướng sửa. Sắp theo thứ tự sửa đề xuất.
+
+### 10.1. Tab URL bị `disabled` → GĐ5-URL là dead code — **CRITICAL**
+- **Hiện trạng:** `SOURCE_TABS` tại `create/index.vue:99` có `{ value: 'url', disabled: true, isExperiment: true }`; `VTab` áp `:disabled="tab.disabled"` ở dòng ~1749.
+- **Hậu quả:** toàn bộ `fetchFromUrl()` + `ReferenceSourceFetcher` + nhánh `url` trong `WritingAnalyzeController::store()` không đến được — GĐ5 vừa làm không chạy.
+- **Sửa:** bỏ `disabled: true, isExperiment: true` khỏi entry `'url'` trong `SOURCE_TABS`. Đồng thời comment header `fetchFromUrl` đã được cập nhật nhưng tab vẫn disable — code và trạng thái UI không khớp.
+
+### 10.2. `itemsPerPage` vs `per_page` → list chỉ lấy 15 profile — **HIGH**
+- **Hiện trạng:** `stores/writingStyle.js:102` gửi `{ itemsPerPage: 100, ...params }`; `WritingProfileController::index()` đọc `$request->query('per_page', 15)` — không đọc `itemsPerPage`.
+- **Hậu quả:** `fetchProfiles` chỉ trả `itemsLength ≤ 15` thay vì `per_page=100`.
+- **Sửa:** gửi `per_page` thay vì `itemsPerPage` (hoặc đổi BE đọc cả hai). Khớp với chuẩn `BaseResponse::dataTable` dùng `itemsPerPage` ở module khác.
+
+### 10.3. Lưu profile chưa analyze ghi demo giả vào DB — **HIGH**
+- **Hiện trạng:** `saveWritingProfile()` gọi `buildRulesJsonPayload()`/`buildEvidenceJsonPayload()` khi chưa analyze — các hàm này trả hằng số mẫu (Laravel 11) thay vì dữ liệu rỗng.
+- **Hậu quả:** người dùng có thể tạo profile thật mang tên demo với 16 rule giả trong DB — gây hiểu sai như đã giải mã.
+- **Sửa:** khi `draftProfileId` chưa có, cần validate bắt buộc `articleContent` đã analyze, hoặc gửi `rules_json`/`evidence_json` rỗng (không mẫu) và cảnh báo UI.
+
+### 10.4. Taxonomy không gửi → `syncTaxonomyWithNew` là code chết — **HIGH**
+- **Hiện trạng:** `profileForm.taxonomyTags` là mảng chuỗi tên cứng (`['Công nghệ','Lập trình PHP',...]`); `saveWritingProfile` không đưa vào payload. Backend `G11` đã sẵn nhận `categories`/`new_categories`/`tags`/`new_tags`.
+- **Hậu quả:** `syncTaxonomyWithNew()` không bao giờ chạy — taxonomy hiển thị như gợi ý AI thật nhưng không lưu.
+- **Sửa:** đổi `taxonomyTags` thành `{categories:[id], new_categories:[name], tags:[id], new_tags:[name]}` hoặc giữ chuỗi tên map sang `new_tags`; thêm vào payload lưu. FE cũng cần autocomplete chọn id từ `/taxonomy/categories/options`.
+
+### 10.5. Xóa profile để slug orphan → chặn tái sử dụng — **HIGH**
+- **Hiện trạng:** `WritingProfile` không `use SoftDeletes` → `destroy()` xóa cứng; `HasSlug` chỉ hạ `is_primary` khi **soft** delete, nên slug giữ lại trong bảng `slugs` mãi.
+- **Hậu quả:** slug bị "chiếm" vĩnh viễn — tạo profile mới trùng name bị suffix/deny dù đã xóa bản cũ.
+- **Sửa:** hoặc (a) `use SoftDeletes` trên `WritingProfile` để `deleted()` chạy đúng (đã `use Illuminate\Database\Eloquent\SoftDeletes` import nhưng chưa `use`), hoặc (b) thêm cleanup slug khi hard-delete (`slugs()->delete()` trong `deleted()` hoặc model observer). Tùy ý đồ nghệ thuật — spec comment nói "xóa mềm" nên (a) đúng spec hơn.
+
+### 10.6. Sandbox trả rỗng → hiện mẫu giả — **HIGH**
+- **Hiện trạng:** `runSandboxDemo()`/`sandboxGeneratedText` dùng `activeSandboxSamples` làm fallback khi `res.text` rỗng — người dùng thấy văn bản mẫu cứng giả làm kết quả AI.
+- **Hậu quả:** gây hiểu sai kết quả sandbox là thật.
+- **Sửa:** khi `res.text` rỗng, hiển thị trạng thái "AI chưa sinh nội dung" hoặc lỗi rõ, không fallback sang mẫu; giữ `SANDBOX_SAMPLES_BY_TIER` chỉ làm placeholder trước khi chạy.
+
+### 10.7. Đổi `name` ghi đè slug tùy biến — **HIGH**
+- **Hiện trạng:** `HasSlug::shouldSyncSlug()` trả `true` khi `name` đổi (`wasChanged($source)`), nên update `name` sẽ `syncForModel` lại — ghi đè slug tùy biến user đã đặt trước (ví dụ `giong-custom-01` thành slug từ name mới).
+- **Hậu quả:** slug tùy biến mất khi sửa tên — ngược kỳ vọng UX.
+- **Sửa:** trait chỉ re-sync khi **chưa có slug primary** HOẶC khi client gửi `slug` rõ ràng (đã có trong `update()`); nếu `name` đổi nhưng đã có slug custom (không phải auto-sinh), giữ nguyên slug cũ. Có thể so `slug == Str::slug(old_name)` để biết slug là auto-sinh (cho phép cập nhật) hay custom (giữ).

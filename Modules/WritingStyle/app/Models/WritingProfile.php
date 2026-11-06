@@ -5,6 +5,7 @@ namespace Modules\WritingStyle\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Modules\Core\Traits\HasSlug;
 use Modules\Taxonomy\Traits\HasTaxonomy;
 
 /**
@@ -34,7 +35,7 @@ use Modules\Taxonomy\Traits\HasTaxonomy;
  */
 class WritingProfile extends Model
 {
-    use HasTaxonomy;
+    use HasTaxonomy, HasSlug;
 
     /* =====================================================================
      * HẰNG SỐ — 16 khóa thuộc tính DNA văn phong (PLAN.md §300).
@@ -87,6 +88,9 @@ class WritingProfile extends Model
 
     /** Scope taxonomy riêng của module. */
     protected $taxonomyScope = 'writing_profile';
+
+    /** Cột nguồn slug = 'name' (trait mặc định 'title' — không có cột đó). */
+    protected string $slugSource = 'name';
 
     protected $fillable = [
         'name',

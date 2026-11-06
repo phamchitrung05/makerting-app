@@ -50,6 +50,7 @@ class WritingAnalyzeController extends Controller
      */
     public function __construct(
         protected readonly WritingStyleAnalyzerService $analyzer,
+        protected readonly \Modules\WritingStyle\Services\ReferenceSourceFetcher $fetcher,
     ) {}
 
     /**
@@ -77,14 +78,38 @@ class WritingAnalyzeController extends Controller
         $data = $request->validated();
         $sourceType = $data['source_type'];
         $sourceUrl = $data['source_url'] ?? null;
+        $meta = [];
 
-        // Với source_type=url/file hiện chỉ hỗ trợ paste trực tiếp — url/file
-        // cần fetcher riêng (fetch qua SafeRemoteFetcher / đọc file upload),
-        // để cho task sau; hiện trả lỗi nghiệp vụ nếu chưa có reference_text.
-        $referenceText = (string) ($data['reference_text'] ?? '');
+        // Nhánh 'url': tải nội dung thật qua ReferenceSourceFetcher (chống
+        // SSRF + strip boilerplate). Nhánh 'file' tạm chưa triển khai — sẽ
+        // bổ sung parser upload ở giai đoạn sau.
+        if ($sourceType === 'url') {
+            try {
+                $fetched = $this->fetcher->fetchFromUrl($sourceUrl);
+                $referenceText = $fetched['reference_text'];
+                $meta = $fetched['meta'];
+            } catch (\Modules\Core\Exceptions\RemoteFetchException $e) {
+                // Lỗi nghiệp vụ rõ ràng: chặn SSRF hay trang không tải/bóc
+                // được đều về 422 để FE hiển thị đúng thông điệp.
+                return BaseResponse::error(
+                    $e->getMessage(),
+                    422,
+                    ['source_url' => [$e->getMessage()]],
+                );
+            }
+        } elseif ($sourceType === 'file') {
+            return BaseResponse::error(
+                'Nguồn file chưa được hỗ trợ — vui lòng dán nội dung trực tiếp hoặc dùng URL.',
+                422,
+                ['source_type' => ['source_type file chưa được hỗ trợ']],
+            );
+        } else {
+            $referenceText = (string) ($data['reference_text'] ?? '');
+        }
+
         if ($referenceText === '') {
             return BaseResponse::error(
-                'Hiện chỉ hỗ trợ phân tích trực tiếp (paste). Nguồn url/file sẽ bổ sung fetcher sau.',
+                'Hiện chỉ hỗ trợ phân tích trực tiếp (paste) và URL. Nguồn file sẽ bổ sung sau.',
                 422,
                 ['reference_text' => ['reference_text bắt buộc cho phân tích nền hiện tại']],
             );
@@ -98,12 +123,16 @@ class WritingAnalyzeController extends Controller
             createdBy: $request->user()?->id,
         );
 
-        return BaseResponse::accepted([
+        return BaseResponse::accepted(array_filter([
             'analysis_id' => $out['analysis']->id,
             'task_run_id' => $out['taskRun']?->id,
             'status'      => $out['analysis']->status,
+            'meta'        => $meta ?: null,
+            // Preview nội dung đã bóc — FE đổ vào editor để người dùng soát
+            // trước khi job chạy xong (đồng bộ với luồng paste).
+            'reference_text' => $sourceType === 'url' ? $referenceText : null,
             'message'     => 'Đã tiếp nhận — đang giải mã văn phong trong nền',
-        ], 'Đã tiếp nhận yêu cầu giải mã văn phong');
+        ], static fn ($v) => $v !== null), 'Đã tiếp nhận yêu cầu giải mã văn phong');
     }
 
     /**

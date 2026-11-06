@@ -70,8 +70,11 @@ class AnalyzeWritingProfileJob implements ShouldQueue
 
         $tracker->start($this->taskRunId);
 
-        // analyzer->analyze tự markRunning + markSucceeded/markFailed trên
-        // bản ghi analysis (chỉ cần gọi, không bắt lỗi — nó đã nuốt Throwable).
+        // analyzer->analyze tự markRunning + markSucceeded (thành công) hoặc
+        // markFailed (lỗi vĩnh viễn). Với lỗi TẠM THỜI nó chỉ ghi error_code
+        // và GIỮ `running` rồi NÉM LẠI -> exception thoát khỏi handle() để
+        // worker retry; khi hết lượt, hook failed() bên dưới chốt `failed`.
+        // Vì vậy KHÔNG bắt lỗi ở đây.
         $done = $analyzer->analyze(
             $analysis->reference_text,
             $analysis->source_type,
@@ -97,17 +100,42 @@ class AnalyzeWritingProfileJob implements ShouldQueue
      * =====================================================================
      * CHỨC NĂNG: Hook khi job hết lượt retry ($tries) mà vẫn lỗi.
      * =====================================================================
-     * Được gọi sau lần chạy cuối — đánh dấu SystemTaskRun failed vĩnh viễn
-     * (analysis đã markFailed trong service trước khi ném).
+     * Được gọi sau lần chạy CUỐI. Đây là nơi DUY NHẤT chốt `failed` cho lỗi
+     * tạm thời: service chỉ `markTransientError()` (giữ `running`) rồi ném
+     * lại để worker retry, nên nếu hook này không chốt thì bản ghi sẽ treo
+     * mãi ở `running` và FE poll tới timeout.
+     *
+     * INPUT: ?Throwable $e — lỗi của lần chạy cuối.
+     * OUTPUT: void.
+     * SIDE EFFECT: markFailed trên WritingProfileAnalysis (nếu chưa kết thúc)
+     * + fail SystemTaskRun.
+     * EXCEPTION: nuốt mọi Throwable — hook không được gây lỗi thêm.
      * =====================================================================
      */
     public function failed(?\Throwable $e = null): void
     {
+        $message = $e?->getMessage() ?? 'Job hết lượt retry';
+
+        try {
+            $analysis = WritingProfileAnalysis::find($this->analysisId);
+
+            // Chỉ chốt khi chưa kết thúc — không ghi đè một lần đã succeeded
+            // (attempt trước thành công nhưng job vẫn vào hook vì lý do khác).
+            if ($analysis !== null && ! $analysis->isSucceeded() && ! $analysis->isFailed()) {
+                $analysis->markFailed(
+                    $analysis->error_code ?: 'job_failed',
+                    $analysis->error_message ?: $message,
+                );
+            }
+        } catch (\Throwable) {
+            // nuốt — vẫn phải cố fail taskRun bên dưới.
+        }
+
         try {
             app(\Modules\TaskCenter\Contracts\TaskTrackerContract::class)->fail(
                 $this->taskRunId,
                 'job_failed',
-                $e?->getMessage() ?? 'Job hết lượt retry',
+                $message,
             );
         } catch (\Throwable) {
             // nuốt — không để hook failed gây thêm lỗi.

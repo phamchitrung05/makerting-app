@@ -160,9 +160,6 @@ class WritingStyleAnalyzerService
 
             return $analysis->fresh();
         } catch (\Throwable $e) {
-            // Lỗi tạm thời (network/timeout/rate_limit/provider_error) ->
-            // NÉM LẠI để queue retry theo $tries; markFailed trước khi ném để
-            // nếu hết lượt vẫn lỗi thì bản ghi phản ánh trạng thái failed.
             $transient = [
                 'network',
                 'timeout',
@@ -170,11 +167,21 @@ class WritingStyleAnalyzerService
                 'provider_error',
             ];
             $code = $e instanceof \Modules\CoreAi\Exceptions\AiGatewayException ? $e->errorCode() : 'analyzer_error';
-            $analysis->markFailed($code, $e->getMessage());
 
             if (in_array($code, $transient, true)) {
-                throw $e; // để worker retry — queue sẽ chạy lại lần 2.
+                // Lỗi TẠM THỜI -> giữ status `running` và ném lại để worker
+                // retry theo $tries. KHÔNG markFailed ở đây: FE poll coi
+                // `failed` là trạng thái cuối nên sẽ báo thất bại sai giữa
+                // lúc attempt sau còn đang chạy. Hook failed() của job (hết
+                // lượt retry) mới là nơi duy nhất được chốt `failed`.
+                $analysis->markTransientError($code, $e->getMessage());
+
+                throw $e;
             }
+
+            // Lỗi VĨNH VIỄN (auth, validation, schema...) -> retry vô nghĩa,
+            // chốt `failed` ngay để FE dừng poll.
+            $analysis->markFailed($code, $e->getMessage());
 
             return $analysis->fresh();
         }

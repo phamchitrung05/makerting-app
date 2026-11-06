@@ -38,6 +38,8 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     profilesLoaded: false,
     optionsLoaded: false,
     loadingProfiles: false,
+    optionsLoading: false,  // đang nạp options (để UI disable/hiện skeleton)
+    _optionsPromise: null,  // in-flight promise dedup nạp options
     saving: false,
     analyzing: false,
     sandboxing: false,
@@ -128,13 +130,28 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * =====================================================================
      */
     async fetchOptions({ force = false } = {}) {
+      // Đã nạp xong + không bắt refetch -> trả cache ngay (load-once).
       if (this.optionsLoaded && !force) return this.options
-      const res = await writingStyleApi.options()
 
-      this.options = res ?? { tiers: [], rules: [] }
-      this.optionsLoaded = true
+      // Đang có request dở -> chờ chung, tránh bắn trùng lên server.
+      if (this._optionsPromise) return this._optionsPromise
 
-      return this.options
+      this.optionsLoading = true
+      this._optionsPromise = (async () => {
+        try {
+          const res = await writingStyleApi.options()
+
+          this.options = res ?? { tiers: [], rules: [] }
+          this.optionsLoaded = true
+
+          return this.options
+        } finally {
+          this.optionsLoading = false
+          this._optionsPromise = null
+        }
+      })()
+
+      return this._optionsPromise
     },
 
     /**
@@ -352,6 +369,12 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * timeout 300s × tries 2 = 600s là trần cứng của worker, nhưng thực tế
      * attempt 1 gần như luôn xong < 300s; cộng đệm cho đường mạng. Trước đây
      * 300s ngắn hơn một nhánh retry đang chạy hợp lệ nên FE báo timeout sớm.
+     *
+     * Hợp đồng với backend (WritingStyleAnalyzerService + AnalyzeWritingProfileJob):
+     * lỗi TẠM THỜI giữ status `running` rồi retry; chỉ lỗi vĩnh viễn hoặc hết
+     * lượt retry mới chốt `failed`. Nhờ vậy vòng poll chạy xuyên qua attempt 2
+     * thay vì dừng sớm — nếu backend đổi lại thành markFailed ngay khi lỗi
+     * tạm thời thì khoảng đệm 420s này mất ý nghĩa.
      */
     async waitForAnalysis(id, { intervalMs = 3000, timeoutMs = 420000 } = {}) {
       this.stopPolling()

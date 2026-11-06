@@ -76,6 +76,7 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         $body = '';
         $received = 0;
         $tooLarge = false;
+        $responseHeaders = [];
 
         $ch = curl_init();
         curl_setopt_array($ch, [
@@ -88,6 +89,16 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
             CURLOPT_USERAGENT => $userAgent,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            // Gom header để caller đọc Location khi tự xử lý redirect
+            // (CURLOPT_FOLLOWLOCATION=false → cURL không theo redirect).
+            CURLOPT_HEADERFUNCTION => function ($ch, string $header) use (&$responseHeaders): int {
+                $line = rtrim($header, "\r\n");
+                if (preg_match('/^([^\s:]+)\s*:\s*(.*)$/', $line, $m)) {
+                    $responseHeaders[strtolower($m[1])] = trim($m[2]);
+                }
+
+                return strlen($header);
+            },
             CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$body, &$received, &$tooLarge, $maxBytes): int {
                 $received += strlen($chunk);
                 if ($received > $maxBytes) {
@@ -133,7 +144,7 @@ class SafeRemoteFetcher implements SafeRemoteFetcherContract
         return new RemoteFetchResultDto(
             status: $status,
             body: $body,
-            headers: [],
+            headers: $responseHeaders,
             finalUrl: $finalUrl,
             contentType: $contentType,
         );

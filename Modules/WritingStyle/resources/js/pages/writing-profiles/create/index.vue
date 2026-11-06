@@ -122,13 +122,15 @@ const TIER_OPTIONS_FALLBACK = [
   { title: 'Long — Bài dài (> 30 câu, > 600 từ)', value: 'long', hint: 'bài dài (phân đoạn rõ ràng)', color: 'primary' },
 ]
 
-/* Màu + nhãn hiển thị theo tier (API chỉ trả value + sentence_hint). */
-const TIER_META = Object.fromEntries(
-  TIER_OPTIONS_FALLBACK.map(t => [t.value, { title: t.title, color: t.color }]),
+/* Màu theo tier — chỉ là phần trang trí UI, backend không quản. Giữ hằng
+ * nhỏ này; title + hint giờ lấy từ API (config label/sentence_hint). */
+const TIER_COLOR = Object.fromEntries(
+  TIER_OPTIONS_FALLBACK.map(t => [t.value, t.color]),
 )
 
 /* Danh sách tier dùng cho mọi AppSelect/VBtn: ưu tiên store.tiers (API),
- * fallback hằng số. `hint` lấy `sentence_hint` của backend làm chuẩn. */
+ * fallback hằng số. `title` = `label` tiếng Việt backend trả; `hint` =
+ * `sentence_hint` backend làm chuẩn — một nguồn metadata duy nhất. */
 const tierOptions = computed(() => {
   const apiTiers = store.tiers
 
@@ -136,9 +138,9 @@ const tierOptions = computed(() => {
 
   return apiTiers.map(t => ({
     value: t.value,
-    title: TIER_META[t.value]?.title ?? t.label ?? t.value,
-    hint: t.sentence_hint ?? TIER_META[t.value]?.hint ?? '',
-    color: TIER_META[t.value]?.color ?? 'secondary',
+    title: t.label ?? t.value,
+    hint: t.sentence_hint ?? '',
+    color: TIER_COLOR[t.value] ?? 'secondary',
   }))
 })
 
@@ -152,8 +154,9 @@ const SAMPLE_ARTICLE_HTML = `
   <p>Laravel 11 tập trung vào việc tối ưu hiệu suất, bao gồm thời gian khởi động nhanh hơn và cải thiện khả năng tự động tải class. Những thay đổi này giúp ứng dụng của bạn chạy mượt mà hơn, đặc biệt là ở quy mô lớn.</p>
 `
 
-/* State cho tab "Từ URL". */
-const sourceUrl = ref('https://laravel-news.com/laravel-11-new-features-guide')
+/* State cho tab "Từ URL" — KHÔNG mồi sẵn dữ liệu giả: ô URL để trống,
+ * meta preview chỉ nạp sau khi backend trích xuất thật qua ReferenceSourceFetcher. */
+const sourceUrl = ref('')
 const urlExtractMode = ref('article')
 
 const URL_EXTRACT_MODES = [
@@ -162,11 +165,11 @@ const URL_EXTRACT_MODES = [
 ]
 
 const URL_PREVIEW_META = reactive({
-  domain: 'laravel-news.com',
-  title: 'Laravel 11 mang đến những tính năng mới gì? — Hướng dẫn chi tiết',
-  wordCount: '1,245 từ',
-  readingTime: '~ 5 phút đọc',
-  fetchedAt: 'Đã trích xuất sẵn dữ liệu mẫu',
+  domain: '',
+  title: 'Nhập URL bài viết để trích xuất nội dung',
+  wordCount: '—',
+  readingTime: '—',
+  fetchedAt: 'Chưa trích xuất',
 })
 
 /* State cho tab "Dán nội dung". */
@@ -390,7 +393,8 @@ const dnaRuleExtractions = ref(
 )
 
 /* Thứ tự 16 khóa: ưu tiên thứ tự chuẩn từ API (config rule_keys), fallback
- * thứ tự hằng số. Mỗi card: title hiển thị + question (tooltip giải mã). */
+ * thứ tự hằng số. title = câu hỏi giải mã backend trả (doc GĐ1); chỉ dùng
+ * RULE_TITLE_BY_KEY hằng số làm fallback khi API chưa trả/lỗi. */
 const filteredDnaRules = computed(() => {
   const byKey = Object.fromEntries(dnaRuleExtractions.value.map(r => [r.key, r]))
 
@@ -402,11 +406,19 @@ const filteredDnaRules = computed(() => {
     })
     : dnaRuleExtractions.value
 
-  return ordered.map(rule => ({
-    ...rule,
-    question: ruleQuestionByKey.value[rule.key] ?? '',
-    isDroppedInTier: droppedRuleKeys.value.includes(rule.key),
-  }))
+  return ordered.map(rule => {
+    const question = ruleQuestionByKey.value[rule.key] ?? ''
+
+    return {
+      ...rule,
+
+      // Ưu tiên question từ backend làm title (đúng spec GĐ1); giữ title cũ
+      // chỉ khi backend chưa trả. Khi question === title thì caption tự ẩn.
+      title: question || rule.title,
+      question,
+      isDroppedInTier: droppedRuleKeys.value.includes(rule.key),
+    }
+  })
 })
 
 const DNA_EVIDENCES_DEFAULT = [
@@ -935,7 +947,7 @@ function resetContent() {
  * - Không có (xử lý null-safe cho mọi kiểu dữ liệu)
  * =====================================================================
  */
-function formatRuleDesc(key, rawValue) {
+function formatRuleDesc(key, rawValue, isDroppedInTier = false) {
   if (key === 'uncertainties') {
     if (Array.isArray(rawValue)) {
       const items = rawValue.map(v => String(v ?? '').trim()).filter(Boolean)
@@ -954,8 +966,15 @@ function formatRuleDesc(key, rawValue) {
     return rawValue.map(v => String(v ?? '').trim()).filter(Boolean).join(' • ')
 
   const text = String(rawValue ?? '').trim()
+  if (text)
+    return text
 
-  return text || 'Không áp dụng ở cấp độ độ dài này (đã chuyển vào uncertainties).'
+  // Chỉ khóa bị đẩy vào uncertainties theo tier mới nói "đã chuyển" — còn
+  // lại là AI trả rỗng (khác hẳn "không áp dụng").
+  if (isDroppedInTier)
+    return 'Không áp dụng ở cấp độ độ dài này (đã chuyển vào uncertainties).'
+
+  return 'Chưa có dữ liệu cho khóa này.'
 }
 
 /**
@@ -993,7 +1012,7 @@ function applyAnalysisResult(analysis) {
   dnaRuleExtractions.value = keysOrder.map((key, idx) => ({
     key,
     title: RULE_TITLE_BY_KEY[key] ?? `${idx + 1}. ${key}`,
-    desc: formatRuleDesc(key, rulesObj[key]),
+    desc: formatRuleDesc(key, rulesObj[key], droppedRuleKeys.value.includes(key)),
   }))
 
   const evidencesRaw = Array.isArray(result.evidence_json) ? result.evidence_json : []
@@ -1097,6 +1116,55 @@ function buildEvidenceJsonPayload() {
  * - ApiError và timeout error được bắt trong try/catch và hiển thị qua snackbar
  * =====================================================================
  */
+/*
+ * Phần chung sau khi dispatch: nhận analysis_id, xử lý dedupe, chờ job xong,
+ * đổ kết quả vào DNA + chuyển tab Văn phong. Trả true khi thành công.
+ * Dùng chung cho cả 3 nguồn (paste/url/file) để không lặp logic poll.
+ */
+async function awaitAndApply(dispatched, okMessage) {
+  const analysisId = dispatched?.analysis_id
+  if (!analysisId) {
+    snack.text = 'Không nhận được mã phiên phân tích từ máy chủ'
+    snack.color = 'error'
+    snack.show = true
+
+    return false
+  }
+
+  if (analysisId === lastSubmittedAnalysisId.value) {
+    snack.text = 'Đang giải mã nội dung này rồi — tiếp tục chờ kết quả...'
+    snack.color = 'info'
+    snack.show = true
+  } else {
+    lastSubmittedAnalysisId.value = analysisId
+    snack.text = 'Đã tiếp nhận — AI đang giải mã 16 khóa DNA văn phong trong nền...'
+    snack.color = 'info'
+    snack.show = true
+  }
+
+  const finalAnalysis = await store.waitForAnalysis(analysisId)
+  if (!finalAnalysis) return false
+
+  if (finalAnalysis.status === 'failed') {
+    snack.text = finalAnalysis.error_message || 'Giải mã văn phong thất bại'
+    snack.color = 'error'
+    snack.show = true
+
+    return false
+  }
+
+  applyAnalysisResult(finalAnalysis)
+  detailTab.value = 'style'
+
+  const tierLabel = (finalAnalysis.detected_tier || detectedTier.value).toUpperCase()
+
+  snack.text = okMessage ?? `Đã giải mã DNA văn phong thành công (cấp độ ${tierLabel})`
+  snack.color = 'success'
+  snack.show = true
+
+  return true
+}
+
 async function runAnalysis() {
   if (isAnalyzing.value) return
 
@@ -1121,45 +1189,10 @@ async function runAnalysis() {
       name: profileForm.name.trim() || undefined,
     })
 
-    const analysisId = dispatched?.analysis_id
-    if (!analysisId) {
-      snack.text = 'Không nhận được mã phiên phân tích từ máy chủ'
-      snack.color = 'error'
-      snack.show = true
-
-      return
-    }
-
-    if (analysisId === lastSubmittedAnalysisId.value) {
-      snack.text = 'Đang giải mã nội dung này rồi — tiếp tục chờ kết quả...'
-      snack.color = 'info'
-      snack.show = true
-    } else {
-      lastSubmittedAnalysisId.value = analysisId
-      snack.text = 'Đã tiếp nhận — AI đang giải mã 16 khóa DNA văn phong trong nền...'
-      snack.color = 'info'
-      snack.show = true
-    }
-
-    const finalAnalysis = await store.waitForAnalysis(analysisId)
-    if (!finalAnalysis) return
-
-    if (finalAnalysis.status === 'failed') {
-      snack.text = finalAnalysis.error_message || 'Giải mã văn phong thất bại'
-      snack.color = 'error'
-      snack.show = true
-
-      return
-    }
-
-    applyAnalysisResult(finalAnalysis)
-    detailTab.value = 'style'
-
-    const tierLabel = (finalAnalysis.detected_tier || detectedTier.value).toUpperCase()
-
-    snack.text = `Đã giải mã DNA văn phong thành công (${wordCount.value} từ • cấp độ ${tierLabel})`
-    snack.color = 'success'
-    snack.show = true
+    await awaitAndApply(
+      dispatched,
+      `Đã giải mã DNA văn phong thành công (${wordCount.value} từ)`,
+    )
   } catch (e) {
     snack.text = firstErrorMessage(e)
     snack.color = 'error'
@@ -1169,15 +1202,21 @@ async function runAnalysis() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Mô phỏng trích xuất nội dung bài viết từ đường dẫn URL.
+ * CHỨC NĂNG: Trích xuất nội dung bài viết thật từ URL (GĐ5).
  * =====================================================================
+ * Gọi POST /analyze với source_type='url' — backend tải + bóc nội dung
+ * thật qua ReferenceSourceFetcher (chống SSRF). Meta preview nạp từ
+ * response.meta {domain,title,word_count}; không còn nạp HTML mẫu.
+ *
  * INPUT : đọc từ ref sourceUrl.
  * OUTPUT: void.
- * SIDE EFFECT: cập nhật thông tin preview URL, nạp nội dung vào editor và
- *              hiển thị snackbar thông báo.
+ * SIDE EFFECT: fetch URL thật (backend), cập nhật URL_PREVIEW_META +
+ * articleContent (nếu backend trả preview text), dispatch job giải mã.
  * =====================================================================
  */
-function fetchFromUrl() {
+async function fetchFromUrl() {
+  if (isAnalyzing.value) return
+
   const raw = sourceUrl.value.trim()
   if (!raw) {
     snack.text = 'Vui lòng nhập đường dẫn URL hợp lệ trước khi trích xuất'
@@ -1187,19 +1226,61 @@ function fetchFromUrl() {
     return
   }
 
+  // Validate cơ bản phía client — backend vẫn kiểm đầy đủ (url:http,https
+  // + chặn IP nội bộ). Chặn sớm URL không phải http(s) để UX rõ.
+  let parsed = null
   try {
-    const parsed = new URL(raw)
-
-    URL_PREVIEW_META.domain = parsed.hostname
+    parsed = new URL(raw)
   } catch {
-    URL_PREVIEW_META.domain = raw
+    snack.text = 'Đường dẫn URL không hợp lệ — cần dạng http:// hoặc https://'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
   }
 
-  URL_PREVIEW_META.fetchedAt = 'Vừa trích xuất xong'
-  articleContent.value = SAMPLE_ARTICLE_HTML
-  snack.text = 'Đã trích xuất nội dung bài viết từ URL thành công'
-  snack.color = 'success'
-  snack.show = true
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    snack.text = 'Chỉ hỗ trợ URL http:// hoặc https://'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  try {
+    const dispatched = await store.analyze({
+      source_type: 'url',
+      source_url: raw,
+      name: profileForm.name.trim() || undefined,
+    })
+
+    // Nạp meta preview thật từ backend (ReferenceSourceFetcher).
+    const meta = dispatched?.meta
+    if (meta) {
+      URL_PREVIEW_META.domain = meta.domain || parsed.hostname
+      URL_PREVIEW_META.title = meta.title || parsed.hostname
+      URL_PREVIEW_META.wordCount = meta.word_count != null ? `${meta.word_count} từ` : '—'
+      URL_PREVIEW_META.readingTime = meta.word_count != null
+        ? `~ ${Math.max(1, Math.ceil(meta.word_count / 200))} phút đọc`
+        : '—'
+    } else {
+      URL_PREVIEW_META.domain = parsed.hostname
+      URL_PREVIEW_META.title = parsed.hostname
+    }
+    URL_PREVIEW_META.fetchedAt = 'Vừa trích xuất xong'
+
+    // Preview bóc nội dung thật vào editor để người dùng soát trước khi
+    // phân tích xong — đồng bộ với luồng paste.
+    if (dispatched?.reference_text) {
+      articleContent.value = `<p>${String(dispatched.reference_text).replace(/\n+/g, '</p><p>')}</p>`
+    }
+
+    await awaitAndApply(dispatched, 'Đã trích xuất & giải mã DNA từ URL thành công')
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  }
 }
 
 /**
@@ -1396,6 +1477,10 @@ async function saveWritingProfile(openEditor = false) {
 
   const payload = {
     name,
+
+    // Slug: ô cho người dùng tự đặt (đã slugify trên input); để trống thì
+    // backend tự sinh từ name — KHÔNG gửi slug rỗng lên khi user không nhập.
+    ...(profileForm.slug?.trim() ? { slug: profileForm.slug.trim() } : {}),
     description: profileForm.description?.trim() || null,
     dominant_tier: profileForm.dominantTier,
     rules_json: buildRulesJsonPayload(),
@@ -1412,6 +1497,10 @@ async function saveWritingProfile(openEditor = false) {
 
     if (saved?.id)
       draftProfileId.value = saved.id
+
+    // Đồng bộ slug thật backend trả (có thể tự sinh/auto-suffix khi trùng).
+    if (saved?.slug)
+      profileForm.slug = saved.slug
 
     snack.text = `Đã lưu hồ sơ "${saved?.name ?? name}" thành công`
     snack.color = 'success'
@@ -1696,10 +1785,17 @@ onBeforeUnmount(() => {
                     cols="12"
                     md="5"
                   >
+                    <!--
+                      Chế độ thu thập chưa có backend (ReferenceSourceFetcher
+                      hiện luôn bóc article body). Vô hiệu để không làm control chết. 
+                    -->
                     <AppSelect
                       v-model="urlExtractMode"
                       :items="URL_EXTRACT_MODES"
                       label="Chế độ thu thập"
+                      disabled
+                      hint="Luôn trích phần thân bài viết (chế độ toàn trang sắp có)"
+                      persistent-hint
                     />
                   </VCol>
                 </VRow>
@@ -1759,6 +1855,8 @@ onBeforeUnmount(() => {
                     color="primary"
                     size="small"
                     prepend-icon="tabler-cloud-download"
+                    :loading="isAnalyzing"
+                    :disabled="isAnalyzing"
                     @click="fetchFromUrl"
                   >
                     Trích xuất &amp; Phân tích

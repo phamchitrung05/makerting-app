@@ -330,7 +330,7 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useWritingStyleStore } from '../../../stores/writingStyle'
 import ProfileReverseEngineerDialog from '../../../components/ProfileReverseEngineerDialog.vue'
 
@@ -500,16 +500,24 @@ const pagedProfiles = computed(() => {
   return sortedProfiles.value.slice(start, start + itemsPerPage.value)
 })
 
-/* Giải mã từ dialog -> store.analyze -> refetch khi xong (job async).
- * Hiện chỉ mở dialog; @analyze xử lý ở đây (bạn sẽ thêm poll task sau). */
+/* Giải mã từ dialog -> store.analyze -> chờ job async xong -> refetch danh
+ * sách. Cùng hành vi với trang create: poll waitForAnalysis thay vì bắn rồi
+ * quên — người dùng thấy profile nháp xuất hiện ngay khi job xong. */
 async function onAnalyze(payload) {
   try {
-    await store.analyze(payload)
+    const dispatched = await store.analyze(payload)
+    const analysisId = dispatched?.analysis_id
 
-    // Job chạy nền (queue ai-text) — profile draft sẽ có sau; refetch sau
-    // vài giây hoặc khi user mở lại. Ở đây để nguyên, có thể nối TaskCenter
-    // poll khi bạn làm phần "Nhập từ mẫu" đầy đủ.
-  } catch (e) {
+    if (!analysisId) return
+
+    // Poll cho tới khi job kết thúc (succeeded/failed); sau đó refetch danh
+    // sách để profile nháp (origin=reference) hiện lên. Store.stopPolling
+    // được gọi trong onBeforeUnmount khi rời trang.
+    const finalAnalysis = await store.waitForAnalysis(analysisId)
+
+    if (finalAnalysis?.status === 'succeeded')
+      await store.fetchProfiles({ force: true })
+  } catch {
     // silent — lỗi đã log qua $api; có thể thêm snackbar sau.
   }
 }
@@ -524,6 +532,11 @@ const scoreColor = () => 'primary'
 
 onMounted(() => {
   store.fetchProfiles()
+})
+
+// Ngắt vòng poll khi rời trang — tránh giữ timer chạy ngầm.
+onBeforeUnmount(() => {
+  store.stopPolling()
 })
 </script>
 

@@ -48,6 +48,7 @@ class WritingProfileResource extends JsonResource
         return [
             'id'                    => $this->id,
             'name'                  => $this->name,
+            'slug'                  => $this->slug_text,
             'description'           => $this->description,
             'dominant_tier'         => $this->dominant_tier,
             'rules_json'            => $this->rules_json,

@@ -66,14 +66,16 @@ return [
 
     /* ---------------------------------------------------------------------
      * 4 cấp độ độ dài (LengthTier) — phân tầng theo số câu/số từ.
-     * tier => [min_sentences, max_sentences, min_words, max_words, sentence_hint]
+     * tier => [min_sentences, max_sentences, min_words, max_words,
+     *          sentence_hint, label]
      * sentence_hint = dùng trong System Prompt ("viết 2–3 câu", "bài dài").
+     * label = tên hiển thị tiếng Việt trả cho FE (bỏ hằng TIER_META phía UI).
      * --------------------------------------------------------------------- */
     'tiers' => [
-        'micro'  => ['min_sentences' => 1,  'max_sentences' => 3,  'min_words' => 0,   'max_words' => 59,   'sentence_hint' => '2–3 câu'],
-        'short'  => ['min_sentences' => 4,  'max_sentences' => 10, 'min_words' => 60,  'max_words' => 180,  'sentence_hint' => '3–4 câu'],
-        'medium' => ['min_sentences' => 11, 'max_sentences' => 30, 'min_words' => 181, 'max_words' => 600,  'sentence_hint' => '20–30 câu'],
-        'long'   => ['min_sentences' => 31, 'max_sentences' => PHP_INT_MAX, 'min_words' => 601, 'max_words' => PHP_INT_MAX, 'sentence_hint' => 'bài dài (phân đoạn rõ ràng)'],
+        'micro'  => ['min_sentences' => 1,  'max_sentences' => 3,  'min_words' => 0,   'max_words' => 59,   'sentence_hint' => '2–3 câu',   'label' => 'Micro — Cực ngắn'],
+        'short'  => ['min_sentences' => 4,  'max_sentences' => 10, 'min_words' => 60,  'max_words' => 180,  'sentence_hint' => '3–4 câu',   'label' => 'Short — Ngắn'],
+        'medium' => ['min_sentences' => 11, 'max_sentences' => 30, 'min_words' => 181, 'max_words' => 600,  'sentence_hint' => '20–30 câu', 'label' => 'Medium — Trung bình'],
+        'long'   => ['min_sentences' => 31, 'max_sentences' => PHP_INT_MAX, 'min_words' => 601, 'max_words' => PHP_INT_MAX, 'sentence_hint' => 'bài dài (phân đoạn rõ ràng)', 'label' => 'Long — Dài'],
     ],
 
     /* ---------------------------------------------------------------------

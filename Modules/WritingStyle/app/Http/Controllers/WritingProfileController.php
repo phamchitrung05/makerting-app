@@ -97,7 +97,8 @@ class WritingProfileController extends Controller
         foreach (WritingProfile::TIERS as $t) {
             $tiers[] = [
                 'value'         => $t,
-                'label'         => $t,
+                // label = nhãn tiếng Việt từ config (bỏ TIER_META hằng ở FE).
+                'label'         => config("writingstyle.tiers.{$t}.label", $t),
                 'sentence_hint' => WritingProfileDefinition::tierLabel($t),
             ];
         }
@@ -146,6 +147,12 @@ class WritingProfileController extends Controller
             'is_enabled'         => $data['is_enabled'] ?? true,
             'created_by'         => $request->user()?->id,
         ]);
+
+        // Slug tùy biến: trait đã tự sinh từ name khi create; chỉ ghi đè khi
+        // client gửi slug rõ ràng (đã qua regex kebab-case).
+        if (! empty($data['slug'])) {
+            $profile->syncSlugNow($data['slug']);
+        }
 
         $taxonomyKeys = ['categories', 'new_categories', 'tags', 'new_tags'];
         if ($request->hasAny($taxonomyKeys)) {
@@ -207,6 +214,12 @@ class WritingProfileController extends Controller
         }
         $writingProfile->version = ($writingProfile->version ?? 1) + 1;
         $writingProfile->save();
+
+        // Slug: trait đã đồng bộ nếu name vừa đổi; chỉ ghi đè khi client
+        // gửi slug rõ ràng (khác slug hiện hành mới đáng sync lại).
+        if (array_key_exists('slug', $data) && filled($data['slug'])) {
+            $writingProfile->syncSlugNow($data['slug']);
+        }
 
         $taxonomyKeys = ['categories', 'new_categories', 'tags', 'new_tags'];
         if ($request->hasAny($taxonomyKeys)) {

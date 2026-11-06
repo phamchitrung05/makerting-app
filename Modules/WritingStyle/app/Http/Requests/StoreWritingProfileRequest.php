@@ -80,6 +80,10 @@ class StoreWritingProfileRequest extends FormRequest
             'status'                => ['nullable', 'in:draft,active'],
             'is_enabled'            => ['nullable', 'boolean'],
 
+            // Slug tùy biến — tự sinh từ name nếu để trống; khớp chuẩn
+            // HasSlug toàn cục. unique bảng slugs cột slug.
+            'slug'                  => ['nullable', 'string', 'max:250', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/'],
+
             // Taxonomy (Categories & Tags) hỗ trợ trait HasTaxonomy (Gap G11)
             'categories'            => ['nullable', 'array'],
             'categories.*'          => [
