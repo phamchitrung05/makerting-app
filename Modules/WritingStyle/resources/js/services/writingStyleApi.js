@@ -22,7 +22,7 @@ export const writingStyleApi = {
    * =====================================================================
    *
    * INPUT:
-   * - params (Object): { search, tier, origin, status, page, itemsPerPage }
+   * - params (Object): { search, tier, origin, status, page, per_page }
    *
    * OUTPUT:
    * - Promise<Object>: DataTable response { items: WritingProfileResource[], itemsLength: number }

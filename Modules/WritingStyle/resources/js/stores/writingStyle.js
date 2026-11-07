@@ -29,6 +29,7 @@
 /* eslint-disable camelcase */
 import { defineStore } from 'pinia'
 import { writingStyleApi } from '@modules/WritingStyle/resources/js/services/writingStyleApi'
+import { slugApi } from '@modules/Core/resources/js/services/slugApi'
 
 export const useWritingStyleStore = defineStore('writingStyle', {
   state: () => ({
@@ -52,6 +53,9 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     _pollAbort: null,        // AbortController của request poll đang bay (hủy fetch giữa chừng)
     _pollDeadlineTimer: null, // setTimeout hết hạn — cắt cả request treo không trả
     sandboxResult: null,     // SandboxResultDto gần nhất
+    slugSuggesting: false,   // đang gọi API gợi ý slug (để SlugField hiện spinner)
+    _slugSuggestSeq: 0,      // seq tăng dần — chỉ nhận kết quả request mới nhất
+    _slugSuggestKey: null,   // key request đang bay (dedup đúng: chỉ trùng khi cùng input)
   }),
 
   getters: {
@@ -99,7 +103,10 @@ export const useWritingStyleStore = defineStore('writingStyle', {
       if (this.profilesLoaded && !force && !Object.keys(params).length) return this.profiles
       this.loadingProfiles = true
       try {
-        const res = await writingStyleApi.profiles({ itemsPerPage: 100, ...params })
+        // per_page — tên param BE WritingProfileController::index() đọc.
+        // (Ghi chú: sau này chuẩn hóa phân trang toàn hệ thống sẽ thống nhất
+        // sang itemsPerPage cho cả FE+BE — xem docs/writing-profile-create-api.md §10.2.)
+        const res = await writingStyleApi.profiles({ per_page: 100, ...params })
 
         this.profiles = res?.items ?? (Array.isArray(res) ? res : [])
         this.total = res?.itemsLength ?? this.profiles.length
@@ -205,6 +212,65 @@ export const useWritingStyleStore = defineStore('writingStyle', {
       } finally {
         this.saving = false
       }
+    },
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Gợi ý slug khả dụng cho trường tên/slug đang gõ (realtime).
+     * =====================================================================
+     *
+     * INPUT:
+     * - payload (Object): { source, sluggable_type='writing_profile',
+     *   sluggable_id (optional ID đang sửa) }
+     *
+     * OUTPUT:
+     * - Promise<Object|null>: {slug, available, taken_by} hoặc null khi lỗi/đang bay
+     *
+     * SIDE EFFECT:
+     * - POST /v1/admin/core/slug-suggest (không ghi DB), bật/tắt slugSuggesting
+     * - Latest-wins: request cũ hơn bị bỏ kết quả khi có request mới hơn cùng
+     *   "ngữ cảnh" (khác key). Chỉ dedup khi input giống hệt (trùng blur nhanh).
+     *
+     * EXCEPTION:
+     * - Lỗi HTTP được ném lại cho caller xử lý (component chỉ đọc trạng thái).
+     * =====================================================================
+     */
+    async suggestSlug(payload) {
+      const key = JSON.stringify(payload)
+
+      // Cùng input đang bay -> trả promise cũ (tránh spam blur liên tiếp).
+      if (this._slugSuggestKey === key) {
+        return this._slugSuggestInflight
+      }
+
+      const seq = ++this._slugSuggestSeq
+
+      this.slugSuggesting = true
+      this._slugSuggestKey = key
+
+      const inflight = (async () => {
+        try {
+          const res = await slugApi.suggest(payload)
+
+          // Chỉ trả kết quả cho request mới nhất — bỏ qua response cũ đã bị
+          // thay thế (user blur name -> blur slug trong lúc request name chưa xong).
+          if (seq === this._slugSuggestSeq) {
+            return res
+          }
+          
+          return null // stale — caller bỏ qua
+        } finally {
+          if (seq === this._slugSuggestSeq) {
+            this.slugSuggesting = false
+            this._slugSuggestKey = null
+            this._slugSuggestInflight = null
+          }
+        }
+      })()
+
+      this._slugSuggestInflight = inflight
+      
+      return inflight
     },
 
     /**

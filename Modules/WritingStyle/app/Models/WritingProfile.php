@@ -4,7 +4,6 @@ namespace Modules\WritingStyle\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Modules\Core\Traits\HasSlug;
 use Modules\Taxonomy\Traits\HasTaxonomy;
 
@@ -36,6 +35,26 @@ use Modules\Taxonomy\Traits\HasTaxonomy;
 class WritingProfile extends Model
 {
     use HasTaxonomy, HasSlug;
+
+    /**
+     * =====================================================================
+     * XÓA CỨNG THẬT — giải phóng slug ngay khi xóa profile.
+     * =====================================================================
+     * Yêu cầu nghiệp vụ (doc §10.5): KHÔNG giữ lịch sử slug — khi profile
+     * bị xóa, slug phải được giải phóng để tái sử dụng. Hook deleted() mặc
+     * định của HasSlug chỉ hạ is_primary (thiết kế cho redirect 301 của nội
+     * dung public), trái yêu cầu này — nên đăng ký thêm listener DELETE HẾT
+     * row slugs. Listener của trait chạy trước (hạ primary), listener này
+     * chạy sau (xóa sạch) — kết quả cuối: bảng slugs không còn row nào.
+     * =====================================================================
+     */
+    protected static function booted(): void
+    {
+        static::deleted(function (WritingProfile $model): void {
+            // Mass-delete qua builder — không bắn model event cho từng Slug.
+            $model->slugs()->delete();
+        });
+    }
 
     /* =====================================================================
      * HẰNG SỐ — 16 khóa thuộc tính DNA văn phong (PLAN.md §300).

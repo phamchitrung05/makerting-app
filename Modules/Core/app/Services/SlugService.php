@@ -159,6 +159,46 @@ class SlugService implements SlugServiceContract
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Gợi ý slug khi gợi ý trên UI (chưa lưu DB) — trả đủ trạng thái.
+     * =====================================================================
+     *
+     * INPUT :
+     *   - string $source — tiêu đề/tên làm nguồn.
+     *   - string $sluggableType — alias morph ('post','writing_profile',...).
+     *   - ?int $sluggableId — ID bản ghi đang sửa; nếu != null, loại trừ slug
+     *     của chính nó khi check trùng (tránh báo "đã có" với slug đang giữ).
+     *   - ?string $locale — mặc định 'vi'.
+     *
+     * OUTPUT: array {slug, available, taken_by} —
+     *   slug      = chuỗi sẽ dùng (đã suffix -1,-2 nếu trùng).
+     *   available = base (slugify(source)) có trống không (chưa tính bản thân).
+     *   taken_by  = slug base đang chiếm bởi record khác (khi available=false).
+     *
+     * SIDE EFFECT: chỉ SELECT; không ghi DB.
+     * =====================================================================
+     */
+    public function suggest(string $source, string $sluggableType, ?int $sluggableId = null, ?string $locale = null): array
+    {
+        $locale = $locale ?? 'vi';
+        $base = $this->baseSlug($source);
+
+        $q = Slug::where('sluggable_type', $sluggableType)
+            ->where('slug', $base)
+            ->where('locale', $locale);
+        if ($sluggableId) {
+            $q->where('sluggable_id', '!=', $sluggableId);
+        }
+        $taken = $q->exists();
+
+        return [
+            'slug'      => $taken ? $this->makeUnique($base, $sluggableType, $locale) : $base,
+            'available' => ! $taken,
+            'taken_by'  => $taken ? $base : null,
+        ];
+    }
+
+    /**
+     * =====================================================================
      * CHỨC NĂNG: Đảm bảo slug duy nhất trong (type, locale) bằng hậu tố số.
      * =====================================================================
      *

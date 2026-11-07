@@ -9,6 +9,8 @@ use Modules\WritingStyle\Services\WritingProfileSnapshotService;
 use Modules\WritingStyle\TaskCenter\WritingProfileAnalyzeAdapter;
 use Modules\TaskCenter\Registries\TaskRunAdapterRegistry;
 use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Core\Registries\SlugRegistry;
+use Modules\WritingStyle\Models\WritingProfile;
 
 /**
  * =====================================================================
@@ -82,6 +84,12 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
         parent::boot();
 
         $this->app->make(TaskRunAdapterRegistry::class)->register(new WritingProfileAnalyzeAdapter());
+
+        // Đăng ký alias morph 'writing_profile' -> WritingProfile::class cho SlugRegistry
+        // (dùng khi SlugService::preview/suggest resolve sluggable_type sang model thật).
+        /** @var SlugRegistry $slugs */
+        $slugs = $this->app->make(SlugRegistry::class);
+        $slugs->register('writing_profile', WritingProfile::class);
 
         // Đăng ký quyền module writing-style (writing.profile.* + writing.evaluate).
         $this->app->make(PermissionRegistry::class)->registerModule('writingstyle', [

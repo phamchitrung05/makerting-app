@@ -49,11 +49,13 @@
   - detectedTierMeta        : computed thông tin hiển thị của tier phát hiện được.
   - filteredDnaRules        : computed lọc 16 RULE_KEYS theo tier đang xem kèm question.
   - droppedRuleKeys         : computed danh sách khóa đẩy vào uncertainties ở tier ngắn.
-  - activeSandboxSample     : computed văn bản viết thử sinh từ Sandbox API hoặc mẫu.
+  - styleDnaMetrics         : computed 4 chỉ số DNA dẫn xuất từ tier/wordCount/sentenceCount/evidences thật.
+  - activeSandboxSample     : computed văn bản viết thử sinh từ Sandbox API (không còn mẫu cứng).
   - displayedDnaPrompt      : computed System Prompt DNA ưu tiên snapshot đã strip evidence.
+  - hasAnalysisResult       : computed đã có rules_json thật hay chưa (chốt điều kiện Lưu Profile).
   - scoreColor(n)           : màu theo ngưỡng điểm (>=80 success, >=60 warning, <60 error).
   - severityMeta(level)     : nhãn và màu theme cho mức độ vi phạm quy tắc viết.
-  - resetContent()          : khôi phục nội dung mẫu trong editor.
+  - clearContent()          : xóa sạch nội dung bài viết đã dán trong editor.
   - formatRuleDesc()        : chuẩn hóa giá trị chuỗi hoặc mảng uncertainties trong rules_json.
   - applyAnalysisResult()   : đổ kết quả giải mã từ API vào 16 rule card, evidence và tier.
   - buildRulesJsonPayload() : đóng gói mảng quy tắc đúng schema trước khi gửi lưu.
@@ -65,6 +67,9 @@
   - removeSelectedFile()    : xóa file đang chọn và khôi phục trạng thái mặc định.
   - runSandboxDemo()        : gọi API viết thử nghiệm chủ đề mới theo DNA (GĐ4).
   - saveWritingProfile()    : lưu hồ sơ mới qua PUT (nếu đã analyze) hoặc POST (GĐ4).
+  - runSlugSuggest(src)     : gọi API gợi ý slug từ chuỗi nguồn, ghi lại ô slug.
+  - onNameBlur()            : blur ô Tên  → gợi ý từ name, ghi vào ô slug.
+  - onSlugBlur()            : blur ô Slug → gợi ý từ slug đang gõ, ghi lại ô slug.
   - copyText(text, msg)     : sao chép văn bản bất kỳ vào clipboard + hiện snackbar.
   - copyPrompt()            : sao chép prompt đang hiển thị ở Card Prompt.
 
@@ -77,9 +82,10 @@
 -->
 <script setup>
 /* eslint-disable camelcase */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import TiptapEditor from '@core/components/TiptapEditor.vue'
+import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
 import { firstErrorMessage } from '@/utils/api'
 import { useWritingStyleStore } from '../../../stores/writingStyle'
 
@@ -147,12 +153,6 @@ const tierOptions = computed(() => {
 /* ---------------------------------------------------------------------
  * DỮ LIỆU NGUỒN BÀI VIẾT (3 TAB: URL / PASTE / FILE)
  * ------------------------------------------------------------------- */
-const SAMPLE_ARTICLE_HTML = `
-  <h4>Laravel 11 mang đến những tính năng mới gì?</h4>
-  <p>Laravel 11 là phiên bản mới nhất của framework PHP phổ biến, mang đến nhiều cải tiến đáng chú ý giúp lập trình viên xây dựng ứng dụng nhanh hơn, hiệu quả hơn và bảo mật hơn. Trong bài viết này, chúng ta sẽ cùng tìm hiểu những tính năng nổi bật nhất của Laravel 11.</p>
-  <p><strong>1. Hiệu suất được cải thiện</strong></p>
-  <p>Laravel 11 tập trung vào việc tối ưu hiệu suất, bao gồm thời gian khởi động nhanh hơn và cải thiện khả năng tự động tải class. Những thay đổi này giúp ứng dụng của bạn chạy mượt mà hơn, đặc biệt là ở quy mô lớn.</p>
-`
 
 /* State cho tab "Từ URL" — KHÔNG mồi sẵn dữ liệu giả: ô URL để trống,
  * meta preview chỉ nạp sau khi backend trích xuất thật qua ReferenceSourceFetcher. */
@@ -172,35 +172,51 @@ const URL_PREVIEW_META = reactive({
   fetchedAt: 'Chưa trích xuất',
 })
 
-/* State cho tab "Dán nội dung". */
-const articleContent = ref(SAMPLE_ARTICLE_HTML)
+/* State cho tab "Dán nội dung" — khởi tạo rỗng (không mồi bài mẫu giả). */
+const articleContent = ref('')
 
-/* State cho tab "Từ file". */
+/* State cho tab "Từ file" — chỉ hiển thị khi user đã chọn file thật. */
 const fileInputRef = ref(null)
 
 const selectedFile = reactive({
-  name: 'laravel-11-release-analysis.md',
-  sizeLabel: '18.4 KB',
-  typeLabel: 'Markdown (.md)',
-  words: '1,245 từ',
-  status: 'Đã nạp nội dung mẫu',
+  name: '',
+  sizeLabel: '',
+  typeLabel: '',
+  words: '',
+  status: '',
 })
 
-/* Đếm từ realtime từ HTML của editor (bỏ tag, tách khoảng trắng). */
-const wordCount = computed(() =>
-  articleContent.value
-    .replace(/<[^>]+>/g, ' ')
+/* Chuẩn hóa HTML Tiptap -> text: giữ \n giữa các block để đếm câu đúng
+ * (replace tag thô làm </p><p> dính thành 1 cục, \n{2,} không bao giờ match). */
+function htmlToText(html) {
+  const BLOCK_TAGS = 'p|li|h[1-6]|div|blockquote|pre|tr|table|ul|ol'
+
+  return String(html ?? '')
+    .replace(new RegExp(`</(?:${BLOCK_TAGS})>`, 'gi'), '\n\n')
+    .replace(/<(?:br|hr)[^>]*>/gi, '\n')
+    .replace(new RegExp(`<(?:${BLOCK_TAGS})[^>]*>`, 'gi'), '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
     .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .length,
-)
+}
+
+/* Đếm từ realtime từ HTML của editor (bỏ tag, tách khoảng trắng). */
+const wordCount = computed(() => {
+  const t = htmlToText(articleContent.value)
+  if (!t) return 0
+
+  return t.split(/\s+/).filter(Boolean).length
+})
 
 /* Đếm số câu realtime theo quy tắc WritingProfileDefinition::countSentences. */
 const sentenceCount = computed(() => {
-  const plain = articleContent.value.replace(/<[^>]+>/g, ' ').trim()
+  const plain = htmlToText(articleContent.value)
   if (!plain) return 0
-  const parts = plain.split(/[.!?…]+|\n{2,}/u).map(s => s.trim()).filter(Boolean)
+  const parts = plain.split(/[.!?…]+|\n{2,}|—\s*/u).map(s => s.trim()).filter(Boolean)
 
   return Math.max(1, parts.length)
 })
@@ -234,33 +250,10 @@ const detectedTierMeta = computed(() => {
 
 /* ---------------------------------------------------------------------
  * TAB 1 (PHÂN TÍCH CHI TIẾT): NỘI DUNG
- * ------------------------------------------------------------------- */
-const ANALYSIS_SUMMARY = 'Bài viết giới thiệu các tính năng mới trong Laravel 11, tập trung vào hiệu suất, công cụ phát triển, bảo mật và trải nghiệm lập trình viên. Nội dung phù hợp với đối tượng lập trình viên PHP/Laravel, cung cấp thông tin hữu ích và thực tế.'
-
-const TOPICS = [
-  'Laravel 11',
-  'Hiệu suất',
-  'Tính năng mới',
-  'Bảo mật',
-  'Công cụ phát triển',
-  'Lập trình PHP',
-]
-
-const STRENGTHS = [
-  'Nội dung rõ ràng, mạch lạc',
-  'Cung cấp ví dụ cụ thể',
-  'Phù hợp với đối tượng mục tiêu',
-  'Cập nhật các tính năng mới',
-  'Có cấu trúc tốt (H2, H3)',
-]
-
-const IMPROVEMENTS = [
-  'Có thể thêm số liệu thực tế để tăng độ tin cậy',
-  'Nên bổ sung hình ảnh minh họa',
-  'Thêm liên kết tham khảo chính thức',
-  'Tăng tính độc đáo, tránh trùng lặp nội dung',
-  'Có thể mở rộng phần so sánh với phiên bản cũ',
-]
+ * -------------------------------------------------------------------
+ * Backend hiện CHƯA cung cấp summary/topics/strengths/improvements trong
+ * result_json (lộ trình giai đoạn sau) — các khối này hiển thị empty state
+ * cho tới khi có dữ liệu thật. KHÔNG mồi dữ liệu giả (doc §10.3). */
 
 /* ---------------------------------------------------------------------
  * TAB 2 (PHÂN TÍCH CHI TIẾT): VĂN PHONG (ĐỦ 16 RULE_KEYS & DNA EVIDENCE)
@@ -275,96 +268,44 @@ const lastSubmittedAnalysisId = ref(null)
 const rawRulesJson = ref(null)
 const isAnalyzing = computed(() => store.analyzing || store.analysisPolling)
 
-const STYLE_DNA_METRICS = [
-  { label: 'Cấp độ độ dài (Tier)', value: 'Long (> 30 câu)', sub: 'Đủ 16/16 khóa DNA', icon: 'tabler-ruler-measure', color: 'primary' },
-  { label: 'Hình mẫu (Archetype)', value: 'Thought Leader', sub: 'Chuyên gia chia sẻ thực chiến', icon: 'tabler-award', color: 'info' },
-  { label: 'Ngôi xưng (Pronouns)', value: 'Chúng ta – Bạn', sub: 'Nhất quán 100% toàn bài', icon: 'tabler-users', color: 'success' },
-  { label: 'Thể chủ động (Active)', value: '88%', sub: 'Đạt chuẩn >= 85% câu chủ động', icon: 'tabler-bolt', color: 'success' },
-]
+/* Đã có kết quả giải mã thật chưa — chốt điều kiện hiển thị dữ liệu Tab 2
+ * và điều kiện LƯU HỒ SƠ (không cho lưu rules trống vào DB — doc §10.3). */
+const hasAnalysisResult = computed(() => !!rawRulesJson.value)
 
-/* Giá trị khởi tạo 16 khóa thuộc tính DNA văn phong (giữ UI không trống trước khi phân tích). */
-const DNA_RULE_EXTRACTIONS_DEFAULT = [
+/* 4 thẻ chỉ số DNA — tính từ dữ liệu THẬT: tier phát hiện, đếm từ/câu của
+ * bài mẫu, số khóa kích hoạt theo tier và số trích dẫn đã xác thực. */
+const styleDnaMetrics = computed(() => [
   {
-    key: 'tone',
-    title: '1. Giọng điệu chung (Tone)',
-    desc: 'Chuyên nghiệp, điềm tĩnh và mang tính hướng dẫn kỹ thuật rõ ràng, không dùng từ ngữ phóng đại.',
+    label: 'Cấp độ độ dài (Tier)',
+    value: detectedTierMeta.value?.title ?? '—',
+    sub: 'Phát hiện theo độ dài bài mẫu',
+    icon: 'tabler-ruler-measure',
+    color: 'primary',
   },
   {
-    key: 'pronouns',
-    title: '2. Cách xưng hô (Pronouns)',
-    desc: 'Xưng "chúng ta" khi dẫn dắt vấn đề và gọi độc giả là "bạn", tạo cảm giác đồng hành cùng lập trình viên.',
+    label: 'Kích thước bài mẫu',
+    value: `${wordCount.value} từ • ${sentenceCount.value} câu`,
+    sub: 'Đếm realtime từ nội dung đang soạn',
+    icon: 'tabler-file-text',
+    color: 'info',
   },
   {
-    key: 'emotion',
-    title: '3. Cung bậc cảm xúc (Emotion)',
-    desc: 'Tự tin, khách quan và hào hứng vừa phải trước các cải tiến công nghệ mới.',
+    label: 'Khóa DNA kích hoạt',
+    value: `${16 - droppedRuleKeys.value.length}/16`,
+    sub: droppedRuleKeys.value.length
+      ? `${droppedRuleKeys.value.length} khóa đẩy vào uncertainties`
+      : 'Đủ 16/16 khóa áp dụng',
+    icon: 'tabler-dna',
+    color: 'success',
   },
   {
-    key: 'opening',
-    title: '4. Cách mở bài (Opening)',
-    desc: 'Mở đầu bằng câu hỏi trực diện vào nhu cầu tìm hiểu phiên bản mới, sau đó tóm tắt 3 lợi ích cốt lõi.',
+    label: 'Trích dẫn xác thực',
+    value: String(dnaEvidences.value.length),
+    sub: 'Bằng chứng nguyên văn khớp bài mẫu',
+    icon: 'tabler-discount-check',
+    color: 'warning',
   },
-  {
-    key: 'sentence_rhythm',
-    title: '5. Nhịp câu (Sentence Rhythm)',
-    desc: 'Độ dài trung bình 16.4 từ/câu; xen kẽ câu định nghĩa ngắn với câu giải thích cơ chế hoạt động.',
-  },
-  {
-    key: 'paragraph_rhythm',
-    title: '6. Nhịp đoạn văn (Paragraph Rhythm)',
-    desc: 'Mỗi đoạn gồm 2–4 câu (khoảng 45–70 từ), dãn cách thoáng mắt trên cả màn hình máy tính và điện thoại.',
-  },
-  {
-    key: 'transitions',
-    title: '7. Cách chuyển đoạn (Transitions)',
-    desc: 'Chuyển mục bằng đánh số thứ tự rõ ràng; liên kết các đoạn bằng quan hệ nguyên nhân – hệ quả tự nhiên.',
-  },
-  {
-    key: 'vocabulary',
-    title: '8. Vốn từ đặc trưng (Vocabulary)',
-    desc: 'Sử dụng từ vựng công nghệ chuẩn mực ("tối ưu hiệu suất", "quy mô lớn", "khởi động"), không dùng tiếng lóng.',
-  },
-  {
-    key: 'technical_terms',
-    title: '9. Thuật ngữ kỹ thuật (Technical Terms)',
-    desc: 'Giữ nguyên thuật ngữ tiếng Anh quen thuộc (framework, class, middleware, WebSocket) kèm giải thích ngữ cảnh.',
-  },
-  {
-    key: 'structure_patterns',
-    title: '10. Cấu trúc tổng thể (Structure Patterns)',
-    desc: 'Mô hình Listicle kỹ thuật: Câu hỏi mở đầu → Tổng quan → Danh sách tính năng đánh số → Khuyến nghị nâng cấp.',
-  },
-  {
-    key: 'headings',
-    title: '11. Tiêu đề con (Headings H2/H3)',
-    desc: 'Tiêu đề H2 đánh số thứ tự kèm lợi ích trực tiếp; H3 đi sâu vào từng thành phần cấu hình bên trong.',
-  },
-  {
-    key: 'bullets',
-    title: '12. Gạch đầu dòng (Bullets)',
-    desc: 'Dùng danh sách liệt kê cho các thông số thay đổi và các bước kiểm tra tương thích trước khi nâng cấp.',
-  },
-  {
-    key: 'examples',
-    title: '13. Dẫn chứng & Ví dụ (Examples)',
-    desc: 'Minh họa bằng tình huống thực tế khi ứng dụng chạy ở quy mô lớn và so sánh trực tiếp với Laravel 10.',
-  },
-  {
-    key: 'ending',
-    title: '14. Cách kết bài (Ending)',
-    desc: 'Khép lại câu hỏi ở mở bài bằng nhận định tổng kết và lời khuyên nâng cấp có lộ trình.',
-  },
-  {
-    key: 'avoid',
-    title: '15. Yếu tố tuyệt đối tránh (Avoid)',
-    desc: 'Không dùng văn phong quảng cáo giật gân, không dịch máy từng từ, không lạm dụng câu bị động dài dòng.',
-  },
-  {
-    key: 'uncertainties',
-    title: '16. Yếu tố chưa đủ dữ liệu (Uncertainties)',
-    desc: 'Mẫu hiện tại chưa có đoạn hội thoại trực tiếp hoặc kịch bản xử lý phản biện gay gắt.',
-  },
-]
+])
 
 /* Các khóa bị đẩy vào uncertainties khi chọn tier ngắn (theo WritingProfile::applicableRules). */
 const droppedRuleKeys = computed(() => {
@@ -379,29 +320,25 @@ const droppedRuleKeys = computed(() => {
 })
 
 /* Câu hỏi giải mã của 16 khóa, nạp từ options API: key -> question.
- * Rỗng khi API chưa trả -> UI dùng `title` hằng số làm fallback. */
+ * Rỗng khi API chưa trả -> rule.title dùng key tự chuẩn hóa làm nhãn. */
 const ruleQuestionByKey = computed(() =>
   Object.fromEntries((store.ruleKeys ?? []).map(r => [r.key, r.question])),
 )
 
-const RULE_TITLE_BY_KEY = Object.fromEntries(
-  DNA_RULE_EXTRACTIONS_DEFAULT.map(item => [item.key, item.title]),
-)
+/* 16 khóa DNA — CHỈ đổ dữ liệu THẬT từ applyAnalysisResult(); khởi tạo rỗng,
+ * không mồi demo (doc §10.3). Khi chưa phân tích, khối render empty state. */
+const dnaRuleExtractions = ref([])
 
-const dnaRuleExtractions = ref(
-  DNA_RULE_EXTRACTIONS_DEFAULT.map(item => ({ ...item })),
-)
-
-/* Thứ tự 16 khóa: ưu tiên thứ tự chuẩn từ API (config rule_keys), fallback
- * thứ tự hằng số. title = câu hỏi giải mã backend trả (doc GĐ1); chỉ dùng
- * RULE_TITLE_BY_KEY hằng số làm fallback khi API chưa trả/lỗi. */
+/* Thứ tự 16 khóa: ưu tiên thứ tự chuẩn từ API (config rule_keys). title =
+ * câu hỏi giải mã backend trả (doc GĐ1); chỉ khi backend chưa trả mới rơi
+ * về title/key tự chuẩn hóa. */
 const filteredDnaRules = computed(() => {
   const byKey = Object.fromEntries(dnaRuleExtractions.value.map(r => [r.key, r]))
 
   const ordered = store.ruleKeys?.length
     ? store.ruleKeys.map(r => byKey[r.key] ?? {
       key: r.key,
-      title: RULE_TITLE_BY_KEY[r.key] ?? r.key,
+      title: r.key,
       desc: '',
     })
     : dnaRuleExtractions.value
@@ -414,191 +351,58 @@ const filteredDnaRules = computed(() => {
 
       // Ưu tiên question từ backend làm title (đúng spec GĐ1); giữ title cũ
       // chỉ khi backend chưa trả. Khi question === title thì caption tự ẩn.
-      title: question || rule.title,
+      title: question || rule.title || rule.key,
       question,
       isDroppedInTier: droppedRuleKeys.value.includes(rule.key),
     }
   })
 })
 
-const DNA_EVIDENCES_DEFAULT = [
-  {
-    ruleKey: 'opening',
-    excerpt: 'Laravel 11 mang đến những tính năng mới gì? Trong bài viết này, chúng ta sẽ cùng tìm hiểu những tính năng nổi bật nhất của Laravel 11.',
-    note: 'Mở bài bằng câu hỏi trực tiếp kèm lời dẫn xác lập phạm vi bài viết cùng độc giả.',
-  },
-  {
-    ruleKey: 'technical_terms',
-    excerpt: 'Laravel 11 tập trung vào việc tối ưu hiệu suất, bao gồm thời gian khởi động nhanh hơn và cải thiện khả năng tự động tải class.',
-    note: 'Giữ nguyên thuật ngữ chuyên ngành "class" tự nhiên trong ngữ cảnh câu tiếng Việt.',
-  },
-]
+/* Bằng chứng trích dẫn — CHỈ đổ dữ liệu THẬT từ applyAnalysisResult();
+ * khởi tạo rỗng, không mồi demo (doc §10.3). */
+const dnaEvidences = ref([])
 
-const dnaEvidences = ref(DNA_EVIDENCES_DEFAULT.map(item => ({ ...item })))
-
-const STYLE_RULE_CHECKS = [
-  {
-    code: 'active_voice_dominance',
-    name: 'Ưu tiên thể chủ động (>= 85%)',
-    detail: '88% câu văn sử dụng chủ ngữ hành động trực tiếp, giúp nhịp đọc dứt khoát và dễ hiểu.',
-    severity: 'passed',
-  },
-  {
-    code: 'consistent_persona_pronouns',
-    name: 'Xưng hô nhất quán tuyệt đối',
-    detail: 'Sử dụng cặp đại từ "chúng ta – bạn" xuyên suốt từ phần giới thiệu đến phần kết luận.',
-    severity: 'passed',
-  },
-  {
-    code: 'concrete_proof_points',
-    name: 'Dẫn chứng bằng con số cụ thể',
-    detail: 'Các cụm "nhanh hơn", "mượt mà hơn" còn định tính; nên bổ sung số liệu benchmark (vd: giảm 25% thời gian boot).',
-    severity: 'warning',
-  },
-  {
-    code: 'no_corporate_cliche',
-    name: 'Tránh cụm từ sáo rỗng chung chung',
-    detail: 'Xuất hiện 2 cụm mang tính khuôn mẫu ("nhiều cải tiến đáng chú ý", "phổ biến"); có thể thay bằng chi tiết kỹ thuật.',
-    severity: 'hint',
-  },
-]
+/* Bộ 16 Quy tắc Viết văn Cốt lõi — hiện CHƯA có đầu vào thật từ backend
+ * (severity/điểm từng quy tắc chưa được tính), nên hiển thị empty state
+ * thay vì danh sách chấm demo (doc §10.3). */
 
 /* ---------------------------------------------------------------------
- * TAB 3 (PHÂN TÍCH CHI TIẾT): CẤU TRÚC
+ * TAB 3 (PHÂN TÍCH CHI TIẾT): CẤU TRÚC — CHƯA có dữ liệu thật từ backend
+ * (thống kê heading/đoạn/câu, dàn ý H1-H3 không được tính trong result_json),
+ * nên hiển thị empty state thay vì số liệu demo (doc §10.3).
  * ------------------------------------------------------------------- */
-const STRUCTURE_METRICS = [
-  { label: 'Hệ thống Heading', value: '1 H1 • 4 H2 • 2 H3', note: 'Phân cấp đúng chuẩn' },
-  { label: 'Độ dài đoạn TB', value: '3.2 câu / đoạn', note: 'Tối ưu đọc trên mobile' },
-  { label: 'Độ dài câu TB', value: '16.4 từ / câu', note: 'Nhịp đọc vừa phải' },
-  { label: 'Định dạng đọc lướt', value: '82 / 100', note: 'Có in đậm & đánh số mục' },
-]
-
-const STRUCTURE_FLOW = [
-  {
-    part: 'Mở bài (Hook & Đặt vấn đề)',
-    ratio: 15,
-    words: '185 từ • 2 đoạn',
-    status: 'Tốt',
-    color: 'success',
-    desc: 'Nêu bật bối cảnh ra mắt Laravel 11 và tóm tắt giá trị cốt lõi cho lập trình viên PHP.',
-  },
-  {
-    part: 'Thân bài (Triển khai 4 tính năng trọng tâm)',
-    ratio: 70,
-    words: '875 từ • 5 đoạn',
-    status: 'Đầy đủ',
-    color: 'primary',
-    desc: 'Chia thành các mục H2 đánh số rõ ràng: Hiệu suất, Cấu trúc thư mục tối giản, Laravel Reverb và Bảo mật.',
-  },
-  {
-    part: 'Kết bài (Tổng kết & Lời khuyên nâng cấp)',
-    ratio: 15,
-    words: '185 từ • 1 đoạn',
-    status: 'Cần thêm CTA',
-    color: 'warning',
-    desc: 'Đã tóm lược được ý chính nhưng thiếu câu hỏi tương tác hoặc liên kết dẫn sang hướng dẫn cài đặt chi tiết.',
-  },
-]
-
-const HEADING_OUTLINE = [
-  { tag: 'H1', title: 'Laravel 11 mang đến những tính năng mới gì?', words: '120 từ', status: 'Chuẩn' },
-  { tag: 'H2', title: '1. Hiệu suất được cải thiện', words: '240 từ', status: 'Chuẩn' },
-  { tag: 'H2', title: '2. Cấu trúc thư mục ứng dụng tối giản hơn', words: '310 từ', status: 'Chuẩn' },
-  { tag: 'H3', title: '2.1. Tinh gọn ServiceProvider và Middleware mặc định', words: '165 từ', status: 'Chuẩn' },
-  { tag: 'H3', title: '2.2. Tệp cấu hình tập trung trong bootstrap/app.php', words: '145 từ', status: 'Chuẩn' },
-  { tag: 'H2', title: '3. Laravel Reverb – WebSocket Server tốc độ cao', words: '215 từ', status: 'Thiếu ví dụ code' },
-  { tag: 'H2', title: '4. Cải tiến Rate Limiting và Bảo mật', words: '195 từ', status: 'Chuẩn' },
-]
 
 /* ---------------------------------------------------------------------
- * TAB 4 (PHÂN TÍCH CHI TIẾT): HÌNH ẢNH
+ * TAB 4 (PHÂN TÍCH CHI TIẾT): HÌNH ẢNH — CHƯA có dữ liệu thật từ backend
+ * (chưa có bộ quét ảnh/gợi ý minh họa trong result_json), nên hiển thị
+ * empty state thay vì số liệu + ảnh demo (doc §10.3).
  * ------------------------------------------------------------------- */
-const IMAGE_STATS = [
-  { label: 'Ảnh hiện có', value: '2 ảnh', sub: 'Trong nội dung bài', color: 'primary' },
-  { label: 'Khuyến nghị', value: '5 – 6 ảnh', sub: '1 ảnh mỗi ~250 từ', color: 'info' },
-  { label: 'Thẻ Alt hợp lệ', value: '1 / 2 ảnh', sub: '1 ảnh đang thiếu Alt', color: 'warning' },
-  { label: 'Định dạng chuẩn', value: 'WebP', sub: 'Tối ưu tốc độ tải trang', color: 'success' },
-]
-
-const DETECTED_IMAGES = [
-  {
-    name: 'laravel-11-banner-overview.webp',
-    section: 'Ngay dưới tiêu đề mở bài (H1)',
-    alt: 'Tổng quan các tính năng mới nổi bật trên Laravel 11',
-    hasAlt: true,
-    note: 'Đã có Alt chứa từ khóa chính, kích thước chuẩn 1200x630px.',
-  },
-  {
-    name: 'screenshot-folder-structure.png',
-    section: 'Mục 2: Cấu trúc thư mục ứng dụng tối giản hơn',
-    alt: '(Trống — chưa khai báo thuộc tính alt)',
-    hasAlt: false,
-    note: 'Nên đổi sang định dạng WebP và bổ sung Alt: "So sánh cấu trúc thư mục Laravel 10 và Laravel 11".',
-  },
-]
-
-const SUGGESTED_IMAGE_SLOTS = [
-  {
-    position: 'Sau mục H2: 1. Hiệu suất được cải thiện',
-    type: 'Biểu đồ Benchmark (Infographic)',
-    suggestedAlt: 'Biểu đồ so sánh thời gian phản hồi request giữa Laravel 10 và Laravel 11',
-    aiPrompt: 'Clean minimalist tech infographic chart comparing Laravel 10 vs Laravel 11 boot time and requests per second, modern flat UI style, red and slate palette, high resolution.',
-  },
-  {
-    position: 'Sau mục H2: 3. Laravel Reverb – WebSocket Server',
-    type: 'Sơ đồ kiến trúc (Architecture Diagram)',
-    suggestedAlt: 'Sơ đồ luồng kết nối thời gian thực giữa Client và Laravel Reverb WebSocket Server',
-    aiPrompt: 'Modern software architecture diagram showing browser clients connecting to Laravel Reverb WebSocket server and broadcasting events in real time, clean isometric vector style.',
-  },
-]
 
 /* ---------------------------------------------------------------------
- * TAB 6 (PHÂN TÍCH CHI TIẾT): TÍNH ĐỘC ĐÁO
+ * TAB 6 (PHÂN TÍCH CHI TIẾT): TÍNH ĐỘC ĐÁO — CHƯA có dữ liệu thật từ backend
+ * (chưa chấm độ độc đáo/information gain/human-like, chưa so sánh đoạn
+ * khuôn mẫu), nên hiển thị empty state thay vì số liệu demo (doc §10.3).
  * ------------------------------------------------------------------- */
-const UNIQUENESS_METRICS = [
-  { label: 'Độ độc đáo ngôn từ', value: 84, desc: 'Diễn đạt tự nhiên, ít trùng lặp nguyên văn với nguồn khác' },
-  { label: 'Giá trị thông tin mới (Information Gain)', value: 66, desc: 'Cần thêm trải nghiệm thực tế và số liệu thử nghiệm riêng' },
-  { label: 'Độ tự nhiên (Human-like Score)', value: 88, desc: 'Nhịp văn mạch lạc, ít dấu hiệu văn mẫu máy móc' },
-]
-
-const REWRITE_COMPARISONS = [
-  {
-    location: 'Đoạn mở bài — Giới thiệu chung',
-    issue: 'Diễn đạt mang tính khuôn mẫu, xuất hiện ở nhiều bài dịch Release Notes',
-    before: 'Laravel 11 là phiên bản mới nhất của framework PHP phổ biến, mang đến nhiều cải tiến đáng chú ý giúp lập trình viên xây dựng ứng dụng nhanh hơn, hiệu quả hơn và bảo mật hơn.',
-    after: 'Sau khi trực tiếp nâng cấp 3 dự án production lên Laravel 11, thay đổi dễ nhận thấy nhất không chỉ nằm ở tốc độ khởi tạo ứng dụng mà còn ở cách bộ khung thư mục mới cắt giảm tới 60% file cấu hình thừa.',
-  },
-  {
-    location: 'Mục 1 — Hiệu suất được cải thiện',
-    issue: 'Nhận định chung chung, thiếu con số đo lường cụ thể',
-    before: 'Những thay đổi này giúp ứng dụng của bạn chạy mượt mà hơn, đặc biệt là ở quy mô lớn.',
-    after: 'Trong bài test thực tế với 500 route và 40 middleware, thời gian bootstrap request giảm từ 18ms xuống còn 11ms — tạo khác biệt rõ rệt khi hệ thống chịu tải hàng nghìn kết nối đồng thời.',
-  },
-]
 
 /* ---------------------------------------------------------------------
  * TAB 7 (PHÂN TÍCH CHI TIẾT): PHÒNG THỬ NGHIỆM DNA (SANDBOX - PLAN.md §310-311)
  * ------------------------------------------------------------------- */
 const sandboxForm = reactive({
-  topic: 'Cách tối ưu truy vấn Eloquent ORM để tránh lỗi N+1 Query trong dự án lớn',
+  topic: '',
   targetTier: 'short',
 })
-
-const SANDBOX_SAMPLES_BY_TIER = {
-  micro: 'Bạn đã bao giờ thấy trang danh sách đơn hàng chậm đi 5 lần chỉ vì thiếu một hàm with() trong Eloquent chưa? Với các dự án Laravel quy mô lớn, kích hoạt preventLazyLoading() ngay trên môi trường local là chốt chặn đơn giản nhất để loại bỏ triệt để bài toán N+1 Query.',
-  short: 'Khi ứng dụng Laravel của bạn tăng trưởng từ vài trăm lên hàng chục nghìn bản ghi, N+1 Query thường là thủ phạm thầm lặng làm nghẽn kết nối cơ sở dữ liệu. Thay vì đợi đến khi hệ thống chậm mới rà soát từng vòng lặp foreach, chúng ta có thể chủ động kiểm soát ngay từ giai đoạn phát triển. Hãy bật Model::preventLazyLoading() trong AppServiceProvider và kết hợp Eager Loading có chọn lọc cột để giữ thời gian phản hồi luôn dưới 50ms.',
-  medium: 'Tại sao một truy vấn Eloquent chạy rất mượt ở môi trường phát triển nhưng lại làm treo máy chủ khi đưa lên production? Nguyên nhân phổ biến nhất mà chúng ta thường gặp chính là lỗi N+1 Query khi truy cập quan hệ lồng nhau.\n\n1. Nhận diện sớm bằng công cụ có sẵn của Laravel\nThay vì cài đặt thêm nhiều gói phụ thuộc nặng nề, bạn chỉ cần kích hoạt chế độ nghiêm ngặt Model::shouldBeStrict() trong hàm boot. Ngay khi có một thuộc tính quan hệ bị gọi thụ động trong vòng lặp, Laravel sẽ lập tức cảnh báo chính xác dòng code cần tối ưu.\n\n2. Kết hợp Eager Loading và giới hạn cột dữ liệu\nKhi nạp dữ liệu kèm quan hệ bằng with(), hãy chỉ định rõ các cột cần thiết như with(\'author:id,name\') để giảm tới 40% bộ nhớ RAM tiêu thụ trên mỗi request.',
-  long: 'Làm thế nào để giữ cho tầng truy vấn Eloquent ORM luôn phản hồi tức thì ngay cả khi bảng dữ liệu vượt mốc hàng triệu dòng? Trong bài viết này, chúng ta sẽ cùng đi qua 3 kỹ thuật thực chiến giúp kiểm soát triệt để hiệu suất cơ sở dữ liệu.\n\n1. Chặn đứng N+1 Query ngay từ môi trường phát triển\nVới cơ chế mặc định, Eloquent cho phép nạp lười (Lazy Loading) các mối quan hệ. Điều này tiện lợi khi viết code nhanh nhưng lại sinh ra hàng trăm câu lệnh SQL lặp lại. Khi kích hoạt Model::preventLazyLoading(! app()->isProduction()), bạn sẽ phát hiện ngay mọi truy vấn thừa trước khi code được đẩy lên máy chủ.\n\n2. Tối ưu bộ nhớ bằng Eager Loading chọn lọc và Chunking\nKhông phải lúc nào nạp sẵn toàn bộ quan hệ cũng là tối ưu. Hãy chỉ lấy đúng các trường khóa ngoại và trường hiển thị cần thiết, đồng thời kết hợp cursor() hoặc chunkById() cho các tác vụ xử lý hàng loạt để giữ mức sử dụng RAM ổn định.',
-}
 
 const sandboxGeneratedText = ref('')
 const sandboxSnapshotPrompt = ref('')
 
-const activeSandboxSample = computed(() =>
-  sandboxGeneratedText.value
-    || SANDBOX_SAMPLES_BY_TIER[sandboxForm.targetTier]
-    || SANDBOX_SAMPLES_BY_TIER.short,
-)
+/* Chỉ render văn bản THẬT sandbox sinh — KHÔNG còn fallback mẫu cứng.
+ * Khác biệt "chưa chạy" vs "đã chạy mà rỗng" được phân tách bằng cờ
+ * sandboxHasRan bên dưới (doc §10.6). */
+const sandboxHasRan = ref(false)
+
+/* Chỉ render văn bản THẬT sandbox sinh — KHÔNG còn fallback mẫu cứng.
+ * sandboxHasRan phân biệt "chưa chạy" vs "đã chạy mà rỗng" (doc §10.6). */
+const activeSandboxSample = computed(() => sandboxGeneratedText.value)
 
 /* ---------------------------------------------------------------------
  * CỘT PHẢI: HIỆU CHỈNH SẮC THÁI CẢM XÚC (TONE & EMOTION CALIBRATION)
@@ -744,36 +548,10 @@ function resetToneToBaseline() {
   applyTonePreset('default')
 }
 
-const STYLE_INSTRUCTIONS_BASE_DEFAULT = `=== HỆ THỐNG QUY TẮC DNA VĂN PHONG (SYSTEM PROMPT DNA SNAPSHOT) ===
-[HỒ SƠ ĐỊNH DANH: CHUYÊN GIA KỸ THUẬT – PHP / LARAVEL]
-[PHÂN TẦNG ĐỘ DÀI: TIER LONG (1.000 – 2.500 TỪ)]
-
-1. ĐỊNH DANH VAI TRÒ & KHẨU KHÍ (PERSONA & TONE):
-- Vai trò tác giả: Kỹ sư trưởng / Chuyên gia kiến trúc hệ thống (Thought Leader) với tư duy thực chiến sâu sắc.
-- Phong thái: Điềm tĩnh, tự tin, tôn trọng thời gian và trí tuệ của độc giả; giải thích cặn kẽ bản chất thay vì liệt kê tính năng bề nổi.
-- Cự ly xưng hô: Nhất quán sử dụng ngôi xưng "chúng ta" (khi cùng thảo luận giải pháp) và "bạn" (khi hướng dẫn thao tác cụ thể). Tuyệt đối không dùng "tôi" kiêu ngạo hoặc "chúng tôi" mang tính công ty quảng cáo.
-
-2. QUY CHUẨN KẾT CẤU & BỐ CỤC (STRUCTURAL RULES):
-- Mở bài (Hook & Context): Đi thẳng vào bài toán thực tế và giá trị bài viết mang lại ngay trong 2 đoạn đầu (dưới 200 từ). Không chào hỏi rườm rà.
-- Thân bài (Feature Breakdown): Chia tách rõ ràng bằng tiêu đề H2 dạng hành động/lợi ích. Mỗi mục H2 triển khai theo chuỗi logic 3 bước:
-  [Bản chất kỹ thuật ngầm] -> [Ví dụ minh họa code thực tế] -> [Cảnh báo lỗi thường gặp & Tối ưu hiệu năng (Gotchas)].
-- Kết bài (Actionable Wrap-up): Tóm lược 3 điểm then chốt, kèm lời khuyên lộ trình nâng cấp và câu hỏi mở kích thích tư duy phản biện.
-
-3. NHỊP ĐIỆU CÂU & HÌNH THÁI VĂN BẢN (SYNTAX & PACING):
-- Tỷ lệ câu chủ động: Bắt buộc >= 85%. Đưa chủ thể và hành động lên đầu câu để câu văn dứt khoát.
-- Nhịp điệu câu: Đan xen nhịp nhàng giữa câu định nghĩa ngắn (10–15 từ) và câu phân tích kiến trúc (20–28 từ).
-- Độ dài đoạn văn: Mỗi đoạn chỉ chứa từ 2 đến 4 câu; xuống dòng thường xuyên để tối ưu khả năng đọc lướt trên màn hình thiết bị di động.
-
-4. BỘ TỪ ĐIỂN & RÀO CHẮN NGÔN TỪ (LEXICON & CONSTRAINTS):
-- Thuật ngữ chuyên ngành: Giữ nguyên từ gốc tiếng Anh chuẩn (Framework, Dependency Injection, Middleware, WebSocket Server, Artisan Console, Service Provider); tuyệt đối không dịch gượng gạo sang tiếng Việt.
-- Rào chắn cấm kỵ (Negative Constraints):
-  * CẤM dùng từ ngữ thổi phồng sáo rỗng: "thần thánh", "siêu phẩm", "đột phá vũ bão", "toàn diện nhất lịch sử".
-  * CẤM mở đầu đoạn bằng các sáo ngữ dịch máy: "Như chúng ta đã biết", "Trong thế giới ngày nay", "Có thể nói rằng".
-
-5. NGUYÊN TẮC BẢO MẬT & CHỐNG ĐẠO VĂN (ANTI-PLAGIARISM PROTOCOL):
-- Tuyệt đối KHÔNG sao chép nguyên văn bất kỳ câu chữ nào từ các bài viết mẫu. Chỉ kế thừa quy luật tư duy, cấu trúc luận điểm và nhịp điệu hành văn của hồ sơ DNA này để sáng tạo nội dung mới 100%.`
-
-const styleInstructionsBase = ref(STYLE_INSTRUCTIONS_BASE_DEFAULT)
+/* System prompt cơ sở — CHỈ nạp từ analysis.style_instructions (applyAnalysisResult);
+ * khởi tạo rỗng, không mồi snapshot demo (doc §10.3). Phần calibration do
+ * computedStyleInstructions bên dưới ghép thêm, chỉ khi đã có dữ liệu thật. */
+const styleInstructionsBase = ref('')
 
 const computedStyleInstructions = computed(() => {
   const toneStatusLines = toneSliders.map(t => {
@@ -795,83 +573,63 @@ const displayedDnaPrompt = computed(() =>
   sandboxSnapshotPrompt.value || computedStyleInstructions.value,
 )
 
-const STYLE_ANALYSIS = [
-  {
-    name: 'Tính chuyên môn',
-    percent: 70,
-    color: 'primary',
-    icon: 'tabler-school',
-    desc: 'Cân bằng giữa chiều sâu kỹ thuật và tính dễ tiếp cận',
-  },
-  {
-    name: 'Tính tự nhiên',
-    percent: 85,
-    color: 'success',
-    icon: 'tabler-leaf',
-    desc: 'Văn phong mạch lạc, nhịp câu nhịp nhàng, ít gượng gạo',
-  },
-  {
-    name: 'Tính thuyết phục',
-    percent: 75,
-    color: 'info',
-    icon: 'tabler-bulb',
-    desc: 'Có số liệu, dẫn chứng thực tế và lập luận chặt chẽ',
-  },
-  {
-    name: 'Độ phức tạp',
-    percent: 40,
-    color: 'warning',
-    icon: 'tabler-puzzle',
-    desc: 'Dễ đọc, phù hợp từ Junior đến Senior Developer',
-  },
-  {
-    name: 'Cảm xúc & Khẩu khí',
-    percent: 60,
-    color: 'secondary',
-    icon: 'tabler-heart',
-    desc: 'Khách quan, điềm tĩnh, tập trung vào giá trị thực tế',
-  },
-]
-
-const PROMPT_TEXT = 'Hãy viết lại bài viết này về các tính năng mới của Laravel 11 bằng văn phong tự nhiên, hấp dẫn, có cấu trúc rõ ràng với các tiêu đề H2, H3. Bổ sung thêm ví dụ thực tế, số liệu (nếu có), hình ảnh minh họa và liên kết tham khảo chính thức. Đối tượng là lập trình viên PHP/Laravel, nội dung khoảng 1200 - 1500 từ, viết bằng tiếng Việt.'
+/* 5 trục phong cách gốc — CHƯA có điểm thật từ backend (chưa chấm expertise/
+ * naturalness/persuasiveness/complexity/emotion), nên hiển thị empty state
+ * thay vì cột điểm demo (doc §10.3). */
+const styleAnalysisTraits = ref([])
 
 /* Form đóng gói kết quả phân tích thành bản ghi WritingProfile mới. */
 const profileForm = reactive({
-  name: 'Giọng Chuyên gia Kỹ thuật – PHP / Laravel',
-  slug: 'giong-chuyen-gia-ky-thuat-php-laravel',
+  name: '',
+  slug: '',
   dominantTier: 'long',
   status: 'active',
   isEnabled: true,
-  description: 'Văn phong hướng dẫn kỹ thuật mạch lạc, cân bằng giữa chiều sâu kiến trúc hệ thống và khả năng đọc lướt dễ hiểu.',
-  taxonomyTags: ['Công nghệ', 'Lập trình PHP', 'Laravel', 'Technical Blog'],
+  description: '',
+  taxonomyTags: [],
 })
 
-/**
- * =====================================================================
- * CHỨC NĂNG: Chuẩn hóa chuỗi tiếng Việt thành slug URL an toàn.
- * =====================================================================
- * INPUT : str (string).
- * OUTPUT: string slug dạng kebab-case.
- * =====================================================================
- */
-function slugify(text) {
-  return String(text || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/đ/g, 'd')
-    .replace(/[^a-z0-9 -]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
+/* Trạng thái gợi ý slug từ backend — đổ vào SlugField (dumb component).
+ * available=null: chưa gọi; true: base trống; false: base đã có record khác. */
+const slugAvailable = ref(null)
+const slugTakenBy = ref(null)
+
+/* Gọi API gợi ý slug từ 1 chuỗi nguồn bất kỳ — parent chịu trách fetch,
+ * component SlugField chỉ nhận props trạng thái. Mọi gợi ý thành công đều
+ * GHI LẠI vào ô slug (kể cả slug tay — backend chuẩn hóa + suffix nếu trùng). */
+async function runSlugSuggest(source) {
+  const src = source.trim()
+  if (!src) return
+
+  try {
+    const res = await store.suggestSlug({
+      source: src,
+      sluggable_type: 'writing_profile',
+      sluggable_id: draftProfileId.value,
+    })
+
+    // null = response cũ đã bị request mới thay thế (latest-wins ở store) — bỏ qua.
+    if (!res) return
+
+    if (res?.slug) profileForm.slug = res.slug
+    slugAvailable.value = res?.available ?? null
+    slugTakenBy.value = res?.taken_by ?? null
+  } catch {
+    // Lỗi mạng — giữ nguyên slug user đang gõ, không chặn nhập.
+    slugAvailable.value = null
+    slugTakenBy.value = null
+  }
 }
 
-watch(
-  () => profileForm.name,
-  val => {
-    profileForm.slug = slugify(val)
-  },
-)
+/* Blur ô Tên  → source = name hiện tại  → gợi ý + ghi vào ô slug. */
+function onNameBlur() {
+  runSlugSuggest(profileForm.name)
+}
+
+/* Blur ô Slug → source = slug đang gõ  → gợi ý + ghi lại ô slug (chuẩn hóa). */
+function onSlugBlur() {
+  runSlugSuggest(profileForm.slug)
+}
 
 /**
  * =====================================================================
@@ -915,15 +673,15 @@ function severityMeta(severity) {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Khôi phục nội dung mẫu trong trình soạn thảo.
+ * CHỨC NĂNG: Xóa sạch nội dung bài viết đã dán trong trình soạn thảo.
  * =====================================================================
- * INPUT : không — gán lại articleContent = SAMPLE_ARTICLE_HTML.
- * OUTPUT: void; UI editor render lại nội dung mẫu.
+ * INPUT : không.
+ * OUTPUT: void; UI editor trở về trạng thái trống.
  * =====================================================================
  */
-function resetContent() {
-  articleContent.value = SAMPLE_ARTICLE_HTML
-  snack.text = 'Đã khôi phục nội dung bài viết mẫu'
+function clearContent() {
+  articleContent.value = ''
+  snack.text = 'Đã xóa nội dung bài viết đã dán'
   snack.color = 'info'
   snack.show = true
 }
@@ -1007,11 +765,11 @@ function applyAnalysisResult(analysis) {
 
   const keysOrder = store.ruleKeys?.length
     ? store.ruleKeys.map(r => r.key)
-    : DNA_RULE_EXTRACTIONS_DEFAULT.map(r => r.key)
+    : []
 
   dnaRuleExtractions.value = keysOrder.map((key, idx) => ({
     key,
-    title: RULE_TITLE_BY_KEY[key] ?? `${idx + 1}. ${key}`,
+    title: key,
     desc: formatRuleDesc(key, rulesObj[key], droppedRuleKeys.value.includes(key)),
   }))
 
@@ -1036,6 +794,7 @@ function applyAnalysisResult(analysis) {
   draftProfileId.value = analysis?.draft_profile_id ?? analysis?.draft_profile?.id ?? null
   sandboxGeneratedText.value = ''
   sandboxSnapshotPrompt.value = ''
+  sandboxHasRan.value = false
 }
 
 /**
@@ -1357,7 +1116,7 @@ function handleFileChange(event) {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Xóa file đang chọn và khôi phục dữ liệu mẫu ban đầu
+ * CHỨC NĂNG: Gỡ file đang chọn, xóa metadata và giá trị input
  * =====================================================================
  *
  * INPUT:
@@ -1367,20 +1126,20 @@ function handleFileChange(event) {
  * - void
  *
  * SIDE EFFECT:
- * - Đặt lại selectedFile về file mẫu, xóa giá trị file input và bật snackbar
+ * - Đặt lại selectedFile về rỗng, xóa giá trị file input và bật snackbar
  *
  * EXCEPTION:
  * - Không có
  * =====================================================================
  */
 function removeSelectedFile() {
-  selectedFile.name = 'laravel-11-release-analysis.md'
-  selectedFile.sizeLabel = '18.4 KB'
-  selectedFile.typeLabel = 'Markdown (.md)'
-  selectedFile.words = '1,245 từ'
-  selectedFile.status = 'Đã khôi phục file mẫu'
+  selectedFile.name = ''
+  selectedFile.sizeLabel = ''
+  selectedFile.typeLabel = ''
+  selectedFile.words = ''
+  selectedFile.status = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
-  snack.text = 'Đã đặt lại tệp nguồn về mặc định'
+  snack.text = 'Đã gỡ tệp nguồn'
   snack.color = 'info'
   snack.show = true
 }
@@ -1429,6 +1188,8 @@ async function runSandboxDemo() {
     })
 
     sandboxGeneratedText.value = res?.text ?? ''
+    sandboxHasRan.value = true
+
     if (res?.snapshot?.system_prompt) {
       sandboxSnapshotPrompt.value = res.snapshot.system_prompt
       promptMode.value = 'dna'
@@ -1469,6 +1230,16 @@ async function saveWritingProfile(openEditor = false) {
   const name = profileForm.name.trim()
   if (!name) {
     snack.text = 'Vui lòng nhập tên Writing Profile trước khi lưu'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  // Chặn lưu khi chưa phân tích — rules_json chỉ từ rawRulesJson thật
+  // (tránh ghi dữ liệu giả/trống vào DB theo quyết định doc §10.3).
+  if (!hasAnalysisResult.value) {
+    snack.text = 'Hãy phân tích bài mẫu trước để tạo hồ sơ DNA thật rồi mới lưu.'
     snack.color = 'warning'
     snack.show = true
 
@@ -1567,13 +1338,17 @@ async function copyText(text, successMessage = 'Đã sao chép vào bộ nhớ t
  * =====================================================================
  */
 async function copyPrompt() {
-  const targetText = promptMode.value === 'rewrite' ? PROMPT_TEXT : displayedDnaPrompt.value
+  const targetText = displayedDnaPrompt.value
 
-  const label = promptMode.value === 'rewrite'
-    ? 'Đã sao chép prompt gợi ý viết lại'
-    : 'Đã sao chép System Prompt DNA văn phong'
+  if (!targetText.trim()) {
+    snack.text = 'Chưa có System Prompt DNA — hãy phân tích bài mẫu trước'
+    snack.color = 'warning'
+    snack.show = true
 
-  await copyText(targetText, label)
+    return
+  }
+
+  await copyText(targetText, 'Đã sao chép System Prompt DNA văn phong')
 }
 
 /**
@@ -1646,7 +1421,7 @@ onBeforeUnmount(() => {
           color="primary"
           prepend-icon="tabler-device-floppy"
           :loading="store.saving"
-          :disabled="store.saving || isAnalyzing"
+          :disabled="store.saving || isAnalyzing || !hasAnalysisResult"
           @click="saveWritingProfile(false)"
         >
           Lưu Writing Profile
@@ -1688,16 +1463,26 @@ onBeforeUnmount(() => {
                   v-model="profileForm.name"
                   label="Tên văn phong *"
                   placeholder="vd: Giọng Chuyên gia Kỹ thuật – PHP / Laravel"
+                  :rules="[v => !!v?.trim() || 'Tên văn phong bắt buộc nhập']"
+                  required
                   class="mb-3"
+                  @blur="onNameBlur"
                 />
               </VCol>
 
               <VCol cols="12">
-                <AppTextField
+                <SlugField
                   v-model="profileForm.slug"
                   label="Slug định danh *"
                   placeholder="giong-chuyen-gia-ky-thuat-php-laravel"
+                  hint="Blur ô tên hoặc ô slug — hệ thống gợi ý slug khả dụng và cập nhật lại ô."
+                  persistent-hint
+                  :suggesting="store.slugSuggesting"
+                  :available="slugAvailable"
+                  :taken-by="slugTakenBy"
+                  sluggable-type="writing_profile"
                   prefix="localhost:8000/"
+                  @request-suggest="onSlugBlur"
                 />
               </VCol>
             </VRow>
@@ -1891,7 +1676,7 @@ onBeforeUnmount(() => {
                       <IconBtn
                         size="small"
                         color="secondary"
-                        @click="resetContent"
+                        @click="clearContent"
                       >
                         <VIcon icon="tabler-refresh" />
                       </IconBtn>
@@ -1952,8 +1737,11 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <!-- Thông tin tệp đang nạp -->
-                <div class="tonal-panel pa-3 rounded d-flex align-center justify-space-between flex-wrap gap-3">
+                <!-- Thông tin tệp đang nạp (chỉ hiển thị khi đã chọn file thật) -->
+                <div
+                  v-if="selectedFile.name"
+                  class="tonal-panel pa-3 rounded d-flex align-center justify-space-between flex-wrap gap-3"
+                >
                   <div class="d-flex align-center">
                     <VAvatar
                       color="info"
@@ -2089,7 +1877,7 @@ onBeforeUnmount(() => {
                   class="mb-6"
                 >
                   <VCol
-                    v-for="metric in STYLE_DNA_METRICS"
+                    v-for="metric in styleDnaMetrics"
                     :key="metric.label"
                     cols="12"
                     sm="6"
@@ -2254,7 +2042,11 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <!-- Kiểm tra 16 Quy tắc viết văn cốt lõi -->
+                <!--
+                  Kiểm tra 16 Quy tắc viết văn cốt lõi — CHƯA có dữ liệu chấm
+                  thật từ backend (chỉ có 16 key + evidence, chưa chấm severity
+                  từng quy tắc), nên hiển thị empty state thay vì danh sách demo. 
+                -->
                 <div>
                   <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
                     <VIcon
@@ -2266,169 +2058,20 @@ onBeforeUnmount(() => {
                     Đánh giá theo Bộ 16 Quy tắc Viết văn Cốt lõi
                   </div>
 
-                  <div class="d-flex flex-column gap-2">
-                    <div
-                      v-for="item in STYLE_RULE_CHECKS"
-                      :key="item.code"
-                      class="tonal-panel pa-3 rounded d-flex align-start justify-space-between gap-3"
-                    >
-                      <div class="d-flex align-start">
-                        <VIcon
-                          :icon="severityMeta(item.severity).icon"
-                          :color="severityMeta(item.severity).color"
-                          size="18"
-                          class="me-2 mt-1 flex-shrink-0"
-                        />
-                        <div>
-                          <div class="text-body-2 font-weight-medium text-high-emphasis">
-                            {{ item.name }}
-                          </div>
-                          <div class="text-caption text-medium-emphasis">
-                            {{ item.detail }}
-                          </div>
-                        </div>
-                      </div>
-                      <VChip
-                        size="x-small"
-                        :color="severityMeta(item.severity).color"
-                        variant="tonal"
-                        label
-                        class="flex-shrink-0"
-                      >
-                        {{ severityMeta(item.severity).label }}
-                      </VChip>
-                    </div>
+                  <div class="tonal-panel pa-3 rounded text-caption text-medium-emphasis">
+                    Phần chấm điểm theo Bộ 16 Quy tắc Viết văn Cốt lõi sẽ hiển thị ở giai đoạn phát triển sau.
                   </div>
                 </div>
               </VWindowItem>
 
               <!-- ================= TAB 3: CẤU TRÚC ================= -->
               <VWindowItem value="structure">
-                <!-- 4 ô chỉ số cấu trúc -->
-                <VRow
-                  dense
-                  class="mb-6"
-                >
-                  <VCol
-                    v-for="stat in STRUCTURE_METRICS"
-                    :key="stat.label"
-                    cols="6"
-                    sm="3"
-                  >
-                    <div class="tonal-panel pa-3 rounded text-center h-100">
-                      <div class="text-caption text-medium-emphasis mb-1">
-                        {{ stat.label }}
-                      </div>
-                      <div class="text-body-1 font-weight-medium text-high-emphasis">
-                        {{ stat.value }}
-                      </div>
-                      <div class="text-caption text-primary">
-                        {{ stat.note }}
-                      </div>
-                    </div>
-                  </VCol>
-                </VRow>
-
-                <!-- Tỷ lệ bố cục 3 phần -->
-                <div class="mb-6">
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-3">
-                    <VIcon
-                      icon="tabler-chart-bar"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Phân bổ Bố cục Bài viết (Mở bài – Thân bài – Kết bài)
-                  </div>
-
-                  <div class="d-flex flex-column gap-3">
-                    <div
-                      v-for="sec in STRUCTURE_FLOW"
-                      :key="sec.part"
-                      class="tonal-panel pa-3 rounded"
-                    >
-                      <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-1">
-                        <span class="text-body-2 font-weight-medium text-high-emphasis">
-                          {{ sec.part }}
-                        </span>
-                        <div class="d-flex align-center gap-2">
-                          <span class="text-caption text-medium-emphasis">{{ sec.words }}</span>
-                          <VChip
-                            size="x-small"
-                            :color="sec.color"
-                            variant="tonal"
-                            label
-                          >
-                            {{ sec.ratio }}% • {{ sec.status }}
-                          </VChip>
-                        </div>
-                      </div>
-
-                      <VProgressLinear
-                        :model-value="sec.ratio"
-                        :color="sec.color"
-                        height="5"
-                        rounded
-                        class="mb-2"
-                      />
-
-                      <div class="text-caption text-medium-emphasis">
-                        {{ sec.desc }}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Cây dàn ý Heading (H1 - H3) -->
-                <div>
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                    <VIcon
-                      icon="tabler-hierarchy-2"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Cây Dàn ý Tiêu đề (Heading Outline)
-                  </div>
-
-                  <div class="d-flex flex-column gap-2">
-                    <div
-                      v-for="(h, idx) in HEADING_OUTLINE"
-                      :key="idx"
-                      class="tonal-panel px-3 py-2 rounded d-flex align-center justify-space-between flex-wrap gap-2"
-                      :class="{
-                        'ms-4': h.tag === 'H2',
-                        'ms-8': h.tag === 'H3',
-                      }"
-                    >
-                      <div class="d-flex align-center">
-                        <VChip
-                          size="x-small"
-                          :color="h.tag === 'H1' ? 'primary' : h.tag === 'H2' ? 'info' : 'secondary'"
-                          variant="tonal"
-                          label
-                          class="me-2 flex-shrink-0"
-                        >
-                          {{ h.tag }}
-                        </VChip>
-                        <span class="text-body-2 text-high-emphasis">
-                          {{ h.title }}
-                        </span>
-                      </div>
-
-                      <div class="d-flex align-center gap-2">
-                        <span class="text-caption text-medium-emphasis">{{ h.words }}</span>
-                        <VChip
-                          size="x-small"
-                          :color="h.status === 'Chuẩn' ? 'success' : 'warning'"
-                          variant="tonal"
-                          label
-                        >
-                          {{ h.status }}
-                        </VChip>
-                      </div>
-                    </div>
-                  </div>
+                <!--
+                  Chưa có dữ liệu thật từ backend (chỉ số heading/đoạn/câu,
+                  dàn ý H1-H3) — hiển thị empty state thay vì số liệu demo. 
+                -->
+                <div class="tonal-panel pa-4 rounded text-caption text-medium-emphasis">
+                  Phần phân tích cấu trúc (hệ thống Heading, phân bổ Mở–Thân–Kết, dàn ý H1–H3) sẽ được phân tích và hiển thị ở giai đoạn phát triển sau.
                 </div>
               </VWindowItem>
 
@@ -2540,6 +2183,7 @@ onBeforeUnmount(() => {
                       color="primary"
                       size="x-small"
                       prepend-icon="tabler-copy"
+                      :disabled="!activeSandboxSample"
                       @click="copyText(activeSandboxSample, 'Đã sao chép văn bản viết thử')"
                     >
                       Sao chép
@@ -2547,351 +2191,55 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="text-body-2 text-high-emphasis sandbox-output">
-                    {{ activeSandboxSample }}
+                    <template v-if="!sandboxHasRan && !activeSandboxSample">
+                      <span class="text-caption text-medium-emphasis">
+                        Chưa có văn bản. Bấm "Viết thử với DNA vừa phân tích" để sinh.
+                      </span>
+                    </template>
+                    <template v-else-if="sandboxHasRan && !activeSandboxSample">
+                      <span class="text-caption text-warning">
+                        AI chưa sinh được nội dung — thử chủ đề khác hoặc đợi vài giây rồi gọi lại.
+                      </span>
+                    </template>
+                    <template v-else>
+                      {{ activeSandboxSample }}
+                    </template>
                   </div>
                 </div>
               </VWindowItem>
 
               <!-- ================= TAB 4: NỘI DUNG (THỬ NGHIỆM) ================= -->
               <VWindowItem value="content">
-                <!-- Tóm tắt nội dung chính -->
-                <div class="mb-6">
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-1">
-                    <VIcon
-                      icon="tabler-list-details"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Tóm tắt nội dung chính
-                  </div>
-                  <p class="text-body-2 text-medium-emphasis mb-0">
-                    {{ ANALYSIS_SUMMARY }}
-                  </p>
+                <!--
+                  Tóm tắt nội dung chính — CHƯA có dữ liệu thật từ backend
+                  (chưa chấm tóm tắt/chủ đề/điểm mạnh-điểm cần cải thiện),
+                  nên hiển thị empty state thay vì nội dung demo. 
+                -->
+                <div class="tonal-panel pa-4 rounded text-caption text-medium-emphasis">
+                  Phần tóm tắt nội dung, các chủ đề chính, điểm mạnh và điểm cần cải thiện sẽ được phân tích và hiển thị ở giai đoạn phát triển sau.
                 </div>
-
-                <!-- Các chủ đề chính -->
-                <div class="mb-6">
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                    <VIcon
-                      icon="tabler-tag"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Các chủ đề chính
-                  </div>
-                  <div class="d-flex flex-wrap gap-2">
-                    <VChip
-                      v-for="topic in TOPICS"
-                      :key="topic"
-                      size="small"
-                      variant="tonal"
-                      color="primary"
-                      label
-                    >
-                      {{ topic }}
-                    </VChip>
-                  </div>
-                </div>
-
-                <!-- 2 Cột: Điểm mạnh & Điểm cần cải thiện -->
-                <VRow>
-                  <VCol
-                    cols="12"
-                    sm="6"
-                  >
-                    <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                      <VIcon
-                        icon="tabler-circle-check"
-                        size="16"
-                        color="success"
-                        class="me-1"
-                      />
-                      Điểm mạnh
-                    </div>
-                    <div class="d-flex flex-column gap-2">
-                      <div
-                        v-for="pro in STRENGTHS"
-                        :key="pro"
-                        class="d-flex align-start text-body-2 text-medium-emphasis"
-                      >
-                        <VIcon
-                          icon="tabler-circle-check"
-                          color="success"
-                          size="16"
-                          class="me-1 mt-1 flex-shrink-0"
-                        />
-                        <span>{{ pro }}</span>
-                      </div>
-                    </div>
-                  </VCol>
-
-                  <VCol
-                    cols="12"
-                    sm="6"
-                  >
-                    <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                      <VIcon
-                        icon="tabler-alert-circle"
-                        size="16"
-                        color="warning"
-                        class="me-1"
-                      />
-                      Điểm cần cải thiện
-                    </div>
-                    <div class="d-flex flex-column gap-2">
-                      <div
-                        v-for="con in IMPROVEMENTS"
-                        :key="con"
-                        class="d-flex align-start text-body-2 text-medium-emphasis"
-                      >
-                        <VIcon
-                          icon="tabler-alert-circle"
-                          color="warning"
-                          size="16"
-                          class="me-1 mt-1 flex-shrink-0"
-                        />
-                        <span>{{ con }}</span>
-                      </div>
-                    </div>
-                  </VCol>
-                </VRow>
               </VWindowItem>
 
               <!-- ================= TAB 5: HÌNH ẢNH (THỬ NGHIỆM) ================= -->
               <VWindowItem value="images">
-                <!-- 4 Thẻ thống kê hình ảnh -->
-                <VRow
-                  dense
-                  class="mb-6"
-                >
-                  <VCol
-                    v-for="stat in IMAGE_STATS"
-                    :key="stat.label"
-                    cols="6"
-                    sm="3"
-                  >
-                    <div class="tonal-panel pa-3 rounded text-center h-100">
-                      <div class="text-caption text-medium-emphasis mb-1">
-                        {{ stat.label }}
-                      </div>
-                      <div
-                        class="text-body-1 font-weight-medium"
-                        :class="`text-${stat.color}`"
-                      >
-                        {{ stat.value }}
-                      </div>
-                      <div class="text-caption text-medium-emphasis">
-                        {{ stat.sub }}
-                      </div>
-                    </div>
-                  </VCol>
-                </VRow>
-
-                <!-- Kiểm tra ảnh hiện có trong bài -->
-                <div class="mb-6">
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                    <VIcon
-                      icon="tabler-photo-check"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Đánh giá Hình ảnh Hiện có trong Bài viết
-                  </div>
-
-                  <div class="d-flex flex-column gap-3">
-                    <div
-                      v-for="img in DETECTED_IMAGES"
-                      :key="img.name"
-                      class="tonal-panel pa-3 rounded"
-                    >
-                      <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-1">
-                        <div class="d-flex align-center">
-                          <VIcon
-                            icon="tabler-file-info"
-                            size="16"
-                            color="primary"
-                            class="me-2"
-                          />
-                          <span class="text-body-2 font-weight-medium text-high-emphasis">
-                            {{ img.name }}
-                          </span>
-                        </div>
-                        <VChip
-                          size="x-small"
-                          :color="img.hasAlt ? 'success' : 'warning'"
-                          variant="tonal"
-                          label
-                        >
-                          {{ img.hasAlt ? 'Đạt chuẩn Alt SEO' : 'Thiếu thẻ Alt' }}
-                        </VChip>
-                      </div>
-                      <div class="text-caption text-medium-emphasis mb-1">
-                        Vị trí: {{ img.section }} • Alt: <span class="text-high-emphasis">{{ img.alt }}</span>
-                      </div>
-                      <div class="text-caption text-medium-emphasis">
-                        {{ img.note }}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Gợi ý vị trí bổ sung ảnh & AI Image Prompt -->
-                <div>
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                    <VIcon
-                      icon="tabler-wand"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    Gợi ý Bổ sung Minh họa &amp; Prompt Tạo ảnh AI
-                  </div>
-
-                  <div class="d-flex flex-column gap-3">
-                    <div
-                      v-for="slot in SUGGESTED_IMAGE_SLOTS"
-                      :key="slot.position"
-                      class="prompt-box pa-3 rounded"
-                    >
-                      <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-1">
-                        <span class="text-body-2 font-weight-medium text-high-emphasis">
-                          {{ slot.position }}
-                        </span>
-                        <div class="d-flex align-center gap-2">
-                          <VChip
-                            size="x-small"
-                            color="primary"
-                            variant="tonal"
-                            label
-                          >
-                            {{ slot.type }}
-                          </VChip>
-                          <VBtn
-                            variant="text"
-                            color="primary"
-                            size="x-small"
-                            prepend-icon="tabler-copy"
-                            @click="copyText(slot.aiPrompt, 'Đã sao chép Prompt tạo ảnh minh họa')"
-                          >
-                            Copy Prompt
-                          </VBtn>
-                        </div>
-                      </div>
-                      <div class="text-caption text-medium-emphasis mb-1">
-                        Gợi ý thẻ Alt: <span class="text-high-emphasis font-weight-medium">“{{ slot.suggestedAlt }}”</span>
-                      </div>
-                      <div class="text-caption text-medium-emphasis font-italic">
-                        Prompt AI: “{{ slot.aiPrompt }}”
-                      </div>
-                    </div>
-                  </div>
+                <!--
+                  Chưa có dữ liệu quét ảnh / gợi ý minh họa thật từ backend
+                  (chưa có bộ quét ảnh trong result_json), nên hiển thị
+                  empty state thay vì số liệu + ảnh demo. 
+                -->
+                <div class="tonal-panel pa-4 rounded text-caption text-medium-emphasis">
+                  Phần phân tích hình ảnh, thẻ Alt SEO và gợi ý Prompt tạo ảnh AI sẽ được phân tích và hiển thị ở giai đoạn phát triển sau.
                 </div>
               </VWindowItem>
 
               <!-- ================= TAB 6: TÍNH ĐỘC ĐÁO (THỬ NGHIỆM) ================= -->
               <VWindowItem value="uniqueness">
-                <!-- 3 Thước đo Tính độc đáo & Giá trị thông tin -->
-                <div class="d-flex flex-column gap-3 mb-6">
-                  <div
-                    v-for="metric in UNIQUENESS_METRICS"
-                    :key="metric.label"
-                    class="tonal-panel pa-3 rounded"
-                  >
-                    <div class="d-flex justify-space-between align-center mb-1">
-                      <span class="text-body-2 font-weight-medium text-high-emphasis">
-                        {{ metric.label }}
-                      </span>
-                      <span
-                        class="text-body-2 font-weight-medium"
-                        :class="`text-${scoreColor(metric.value)}`"
-                      >
-                        {{ metric.value }}%
-                      </span>
-                    </div>
-                    <VProgressLinear
-                      :model-value="metric.value"
-                      :color="scoreColor(metric.value)"
-                      height="6"
-                      rounded
-                      class="mb-1"
-                    />
-                    <div class="text-caption text-medium-emphasis">
-                      {{ metric.desc }}
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Phát hiện đoạn văn khuôn mẫu & Gợi ý viết lại tạo khác biệt -->
-                <div>
-                  <div class="d-flex align-center text-body-2 font-weight-medium mb-2">
-                    <VIcon
-                      icon="tabler-sparkles"
-                      size="16"
-                      color="primary"
-                      class="me-1"
-                    />
-                    So sánh Đoạn văn Khuôn mẫu &amp; Gợi ý Viết lại Độc đáo hơn
-                  </div>
-
-                  <div class="d-flex flex-column gap-4">
-                    <div
-                      v-for="item in REWRITE_COMPARISONS"
-                      :key="item.location"
-                      class="tonal-panel pa-4 rounded"
-                    >
-                      <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
-                        <div>
-                          <div class="text-body-2 font-weight-medium text-high-emphasis">
-                            {{ item.location }}
-                          </div>
-                          <div class="text-caption text-warning">
-                            Phát hiện: {{ item.issue }}
-                          </div>
-                        </div>
-                        <VBtn
-                          variant="tonal"
-                          color="primary"
-                          size="x-small"
-                          prepend-icon="tabler-copy"
-                          @click="copyText(item.after, 'Đã sao chép đoạn văn gợi ý viết lại')"
-                        >
-                          Sao chép bản cải thiện
-                        </VBtn>
-                      </div>
-
-                      <VRow dense>
-                        <VCol
-                          cols="12"
-                          md="6"
-                        >
-                          <div class="rewrite-box rewrite-box--before pa-3 rounded h-100">
-                            <div class="text-caption font-weight-medium text-warning mb-1">
-                              Bản gốc trong bài (Khá phổ biến)
-                            </div>
-                            <div class="text-body-2 text-medium-emphasis">
-                              “{{ item.before }}”
-                            </div>
-                          </div>
-                        </VCol>
-                        <VCol
-                          cols="12"
-                          md="6"
-                        >
-                          <div class="rewrite-box rewrite-box--after pa-3 rounded h-100">
-                            <div class="text-caption font-weight-medium text-success mb-1">
-                              Gợi ý tạo bản sắc &amp; chiều sâu thực chiến
-                            </div>
-                            <div class="text-body-2 text-high-emphasis">
-                              “{{ item.after }}”
-                            </div>
-                          </div>
-                        </VCol>
-                      </VRow>
-                    </div>
-                  </div>
+                <!--
+                  Chưa có điểm độ độc đáo / information gain / so sánh đoạn
+                  khuôn mẫu thật từ backend — hiển thị empty state. 
+                -->
+                <div class="tonal-panel pa-4 rounded text-caption text-medium-emphasis">
+                  Phần chấm độ độc đáo, giá trị thông tin và so sánh đoạn khuôn mẫu sẽ được phân tích và hiển thị ở giai đoạn phát triển sau.
                 </div>
               </VWindowItem>
             </VWindow>
@@ -2990,10 +2338,19 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <!-- Danh sách 5 trục phong cách thiết kế dạng Cardlet -->
+            <!--
+              Danh sách 5 trục phong cách thiết kế dạng Cardlet — CHƯA có
+              điểm thật từ backend (chưa chấm expertise/naturalness/...). 
+            -->
             <div class="d-flex flex-column gap-2">
               <div
-                v-for="item in STYLE_ANALYSIS"
+                v-if="!styleAnalysisTraits.length"
+                class="tonal-panel pa-3 rounded-lg text-caption text-medium-emphasis"
+              >
+                Phần chấm 5 trục phong cách sẽ hiển thị ở giai đoạn sau.
+              </div>
+              <div
+                v-for="item in styleAnalysisTraits"
                 :key="item.name"
                 class="trait-cardlet pa-3 rounded-lg"
               >
@@ -3209,51 +2566,32 @@ onBeforeUnmount(() => {
           </VCardItem>
 
           <VCardText>
-            <!-- Chuyển đổi giữa Prompt viết lại bài & System Prompt DNA -->
-            <div class="d-flex gap-2 mb-3">
-              <VBtn
-                size="x-small"
-                :variant="promptMode === 'rewrite' ? 'flat' : 'tonal'"
-                :color="promptMode === 'rewrite' ? 'primary' : 'secondary'"
-                @click="promptMode = 'rewrite'"
-              >
-                Prompt viết lại bài
-              </VBtn>
-              <VBtn
-                size="x-small"
-                :variant="promptMode === 'dna' ? 'flat' : 'tonal'"
-                :color="promptMode === 'dna' ? 'primary' : 'secondary'"
-                @click="promptMode = 'dna'"
-              >
-                System Prompt DNA (Snapshot)
-              </VBtn>
-            </div>
-
             <div
-              v-if="promptMode === 'rewrite'"
-              class="prompt-box pa-3 rounded text-body-2 text-medium-emphasis font-italic"
-            >
-              “{{ PROMPT_TEXT }}”
-            </div>
-            <div
-              v-else
               class="prompt-box pa-3 rounded text-body-2 text-high-emphasis sandbox-output"
               style="max-height: 480px; overflow-y: auto;"
             >
               <div
-                v-if="sandboxSnapshotPrompt"
-                class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2"
+                v-if="!displayedDnaPrompt.trim()"
+                class="text-caption text-medium-emphasis"
               >
-                <VChip
-                  size="x-small"
-                  color="success"
-                  variant="tonal"
-                  label
-                >
-                  Snapshot thực tế từ Backend (đã loại bỏ evidence_json)
-                </VChip>
+                Chưa có System Prompt DNA. Phân tích bài mẫu để xem snapshot.
               </div>
-              {{ displayedDnaPrompt }}
+              <template v-else>
+                <div
+                  v-if="sandboxSnapshotPrompt"
+                  class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2"
+                >
+                  <VChip
+                    size="x-small"
+                    color="success"
+                    variant="tonal"
+                    label
+                  >
+                    Snapshot thực tế từ Backend (đã loại bỏ evidence_json)
+                  </VChip>
+                </div>
+                {{ displayedDnaPrompt }}
+              </template>
             </div>
           </VCardText>
         </VCard>
@@ -3330,24 +2668,6 @@ onBeforeUnmount(() => {
               </VCol>
 
               <VCol cols="12">
-                <div class="text-caption text-medium-emphasis mb-1">
-                  Gợi ý phân loại tự động (taxonomy_suggestion):
-                </div>
-                <div class="d-flex flex-wrap gap-1 mb-3">
-                  <VChip
-                    v-for="tag in profileForm.taxonomyTags"
-                    :key="tag"
-                    size="x-small"
-                    color="primary"
-                    variant="tonal"
-                    label
-                  >
-                    {{ tag }}
-                  </VChip>
-                </div>
-              </VCol>
-
-              <VCol cols="12">
                 <div class="d-flex align-center justify-space-between mb-4">
                   <span class="text-body-2">Kích hoạt sử dụng ngay cho AI Writer</span>
                   <VSwitch
@@ -3367,7 +2687,7 @@ onBeforeUnmount(() => {
                 size="small"
                 prepend-icon="tabler-adjustments-horizontal"
                 :loading="store.saving"
-                :disabled="store.saving || isAnalyzing"
+                :disabled="store.saving || isAnalyzing || !hasAnalysisResult"
                 @click="saveWritingProfile(true)"
               >
                 Lưu &amp; Sửa chi tiết 8 Tab
@@ -3378,7 +2698,7 @@ onBeforeUnmount(() => {
                 size="small"
                 prepend-icon="tabler-check"
                 :loading="store.saving"
-                :disabled="store.saving || isAnalyzing"
+                :disabled="store.saving || isAnalyzing || !hasAnalysisResult"
                 @click="saveWritingProfile(false)"
               >
                 Tạo Writing Profile

@@ -415,32 +415,30 @@ Nhóm lỗi tìm được trong lần dò luồng toàn bộ WritingProfile — 
 - **Hậu quả:** toàn bộ `fetchFromUrl()` + `ReferenceSourceFetcher` + nhánh `url` trong `WritingAnalyzeController::store()` không đến được — GĐ5 vừa làm không chạy.
 - **Sửa:** bỏ `disabled: true, isExperiment: true` khỏi entry `'url'` trong `SOURCE_TABS`. Đồng thời comment header `fetchFromUrl` đã được cập nhật nhưng tab vẫn disable — code và trạng thái UI không khớp.
 
-### 10.2. `itemsPerPage` vs `per_page` → list chỉ lấy 15 profile — **HIGH**
+### 10.2. `itemsPerPage` vs `per_page` → list chỉ lấy 15 profile — **ĐÃ SỬA**
 - **Hiện trạng:** `stores/writingStyle.js:102` gửi `{ itemsPerPage: 100, ...params }`; `WritingProfileController::index()` đọc `$request->query('per_page', 15)` — không đọc `itemsPerPage`.
 - **Hậu quả:** `fetchProfiles` chỉ trả `itemsLength ≤ 15` thay vì `per_page=100`.
-- **Sửa:** gửi `per_page` thay vì `itemsPerPage` (hoặc đổi BE đọc cả hai). Khớp với chuẩn `BaseResponse::dataTable` dùng `itemsPerPage` ở module khác.
+- **Sửa:** FE đổi gửi `per_page: 100` khớp BE. (Định hướng sau: chuẩn hóa toàn hệ thống về `itemsPerPage` cho cả FE+BE — rồi BE các module đổi cùng lúc.)
 
-### 10.3. Lưu profile chưa analyze ghi demo giả vào DB — **HIGH**
+### 10.3. Lưu profile chưa analyze ghi demo giả vào DB — **ĐÃ SỬA**
 - **Hiện trạng:** `saveWritingProfile()` gọi `buildRulesJsonPayload()`/`buildEvidenceJsonPayload()` khi chưa analyze — các hàm này trả hằng số mẫu (Laravel 11) thay vì dữ liệu rỗng.
-- **Hậu quả:** người dùng có thể tạo profile thật mang tên demo với 16 rule giả trong DB — gây hiểu sai như đã giải mã.
-- **Sửa:** khi `draftProfileId` chưa có, cần validate bắt buộc `articleContent` đã analyze, hoặc gửi `rules_json`/`evidence_json` rỗng (không mẫu) và cảnh báo UI.
+- **Quyết định nghiệp vụ:** chỉ giữ bố cục; data demo xóa sạch — `DNA_RULE_EXTRACTIONS_DEFAULT`, `DNA_EVIDENCES_DEFAULT`, `SAMPLE_ARTICLE_HTML`, `SANDBOX_SAMPLES_BY_TIER`, `STYLE_*`, `STRUCTURE_*`, `IMAGE_*`, `DETECTED_IMAGES`, `SUGGESTED_IMAGE_SLOTS`, `UNIQUENESS_*`, `REWRITE_COMPARISONS`, `STYLE_INSTRUCTIONS_BASE_DEFAULT`, `STYLE_ANALYSIS`, `PROMPT_TEXT`, `selectedFile` mẫu, `profileForm` mồi, `sandboxForm.topic` mồi đều bỏ hoặc rỗng.
+- **Sửa:** FE thêm `hasAnalysisResult` (= có `rawRulesJson`) làm chốt điều kiện lưu — `saveWritingProfile` và 2 nút Lưu/Tạo đều disabled cho tới khi analyze xong; `rules_json` chỉ build từ `rawRulesJson` (không còn fallback mẫu). Bố cục Tab 3-6 giữ nguyên, đổi sang empty-state text "sẽ hiển thị ở giai đoạn sau". Backend siết `StoreWritingProfileRequest::rules_json.*` (`min:5,max:500`, `uncertainties` mảng chuỗi, `evidence_json.*` schema chặt, `style_instructions min:10`). Test `crud profile` sửa `tone:'ấm'`→`'ấm áp và thân thiện'`.
 
-### 10.4. Taxonomy không gửi → `syncTaxonomyWithNew` là code chết — **HIGH**
+### 10.4. Taxonomy không gửi → `syncTaxonomyWithNew` là code chết — **CHỜ (user tự làm)**
 - **Hiện trạng:** `profileForm.taxonomyTags` là mảng chuỗi tên cứng (`['Công nghệ','Lập trình PHP',...]`); `saveWritingProfile` không đưa vào payload. Backend `G11` đã sẵn nhận `categories`/`new_categories`/`tags`/`new_tags`.
 - **Hậu quả:** `syncTaxonomyWithNew()` không bao giờ chạy — taxonomy hiển thị như gợi ý AI thật nhưng không lưu.
 - **Sửa:** đổi `taxonomyTags` thành `{categories:[id], new_categories:[name], tags:[id], new_tags:[name]}` hoặc giữ chuỗi tên map sang `new_tags`; thêm vào payload lưu. FE cũng cần autocomplete chọn id từ `/taxonomy/categories/options`.
 
-### 10.5. Xóa profile để slug orphan → chặn tái sử dụng — **HIGH**
-- **Hiện trạng:** `WritingProfile` không `use SoftDeletes` → `destroy()` xóa cứng; `HasSlug` chỉ hạ `is_primary` khi **soft** delete, nên slug giữ lại trong bảng `slugs` mãi.
-- **Hậu quả:** slug bị "chiếm" vĩnh viễn — tạo profile mới trùng name bị suffix/deny dù đã xóa bản cũ.
-- **Sửa:** hoặc (a) `use SoftDeletes` trên `WritingProfile` để `deleted()` chạy đúng (đã `use Illuminate\Database\Eloquent\SoftDeletes` import nhưng chưa `use`), hoặc (b) thêm cleanup slug khi hard-delete (`slugs()->delete()` trong `deleted()` hoặc model observer). Tùy ý đồ nghệ thuật — spec comment nói "xóa mềm" nên (a) đúng spec hơn.
+### 10.5. Xóa profile để slug orphan → chặn tái sử dụng — **ĐÃ SỬA (xóa thật, không giữ lịch sử)**
+- **Hiện trạng:** `WritingProfile` hard-delete; hook `deleted()` của `HasSlug` chỉ hạ `is_primary` — row slug còn trong bảng `slugs`, chiếm chỗ vĩnh viễn.
+- **Quyết định nghiệp vụ:** xóa thật, KHÔNG giữ lịch sử slug — slug phải giải phóng để tái sử dụng.
+- **Sửa:** `WritingProfile::booted()` đăng ký listener `deleted` gọi `$model->slugs()->delete()` (mass-delete qua builder, không bắn model event). Import `SoftDeletes` chết đã bỏ. Test: `test_xoa_profile_giai_phong_slug_tai_su_dung_duoc`.
 
-### 10.6. Sandbox trả rỗng → hiện mẫu giả — **HIGH**
-- **Hiện trạng:** `runSandboxDemo()`/`sandboxGeneratedText` dùng `activeSandboxSamples` làm fallback khi `res.text` rỗng — người dùng thấy văn bản mẫu cứng giả làm kết quả AI.
-- **Hậu quả:** gây hiểu sai kết quả sandbox là thật.
-- **Sửa:** khi `res.text` rỗng, hiển thị trạng thái "AI chưa sinh nội dung" hoặc lỗi rõ, không fallback sang mẫu; giữ `SANDBOX_SAMPLES_BY_TIER` chỉ làm placeholder trước khi chạy.
+### 10.6. Sandbox trả rỗng → hiện mẫu giả — **ĐÃ SỬA (plan được duyệt)**
+- **Hiện trạng:** `runSandboxDemo()`/`sandboxGeneratedText` dùng `SANDBOX_SAMPLES_BY_TIER` làm fallback khi `res.text` rỗng — người dùng thấy văn bản mẫu cứng giả làm kết quả AI.
+- **Sửa:** xóa hằng `SANDBOX_SAMPLES_BY_TIER`, thêm cờ `sandboxHasRan` — khi chưa chạy hiển thị "Chưa có văn bản, hãy bấm Viết thử"; khi đã chạy mà rỗng hiển thị "AI chưa sinh được nội dung — thử chủ đề khác hoặc đợi". `activeSandboxSample` chỉ trả `sandboxGeneratedText.value` (không còn `||` fallback mẫu).
 
-### 10.7. Đổi `name` ghi đè slug tùy biến — **HIGH**
-- **Hiện trạng:** `HasSlug::shouldSyncSlug()` trả `true` khi `name` đổi (`wasChanged($source)`), nên update `name` sẽ `syncForModel` lại — ghi đè slug tùy biến user đã đặt trước (ví dụ `giong-custom-01` thành slug từ name mới).
-- **Hậu quả:** slug tùy biến mất khi sửa tên — ngược kỳ vọng UX.
-- **Sửa:** trait chỉ re-sync khi **chưa có slug primary** HOẶC khi client gửi `slug` rõ ràng (đã có trong `update()`); nếu `name` đổi nhưng đã có slug custom (không phải auto-sinh), giữ nguyên slug cũ. Có thể so `slug == Str::slug(old_name)` để biết slug là auto-sinh (cho phép cập nhật) hay custom (giữ).
+### 10.7. Đổi `name` ghi đè slug tùy biến — **CHỜ (user tự làm)**
+- **Hiện trạng:** `HasSlug::shouldSyncSlug()` trả `true` khi `name` đổi (`wasChanged($source)`), nên update `name` sẽ `syncForModel` lại — ghi đè slug tùy biến user đã đặt trước.
+- **Hướng sửa:** trait chỉ re-sync khi **chưa có slug primary** HOẶC khi client gửi `slug` rõ ràng; nếu `name` đổi nhưng đã có slug custom (không phải auto-sinh từ `Str::slug(old_name)`), giữ nguyên slug cũ.

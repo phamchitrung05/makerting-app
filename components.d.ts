@@ -399,6 +399,7 @@ declare module 'vue' {
     SettingsShell: typeof import('./Modules/Settings/resources/js/components/SettingsShell.vue')['default']
     ShareProjectDialog: typeof import('./resources/js/components/dialogs/ShareProjectDialog.vue')['default']
     Shortcuts: typeof import('./resources/js/@core/components/Shortcuts.vue')['default']
+    SlugField: typeof import('./Modules/Core/resources/js/components/SlugField.vue')['default']
     SocialTab: typeof import('./Modules/Settings/resources/js/components/tabs/SocialTab.vue')['default']
     StorageTab: typeof import('./Modules/Settings/resources/js/components/tabs/StorageTab.vue')['default']
     SystemTaskQueuePopup: typeof import('./Modules/TaskCenter/resources/js/components/SystemTaskQueuePopup.vue')['default']

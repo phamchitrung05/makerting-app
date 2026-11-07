@@ -58,7 +58,7 @@ class WritingStyleApiTest extends TestCase
         // store
         $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
             'name' => 'Giọng Tay', 'dominant_tier' => 'short',
-            'rules_json' => ['tone' => 'ấm'],
+            'rules_json' => ['tone' => 'ấm áp và thân thiện'],
         ], $t);
         $res->assertCreated()->assertJsonPath('data.name', 'Giọng Tay');
         $id = $res->json('data.id');
@@ -96,6 +96,33 @@ class WritingStyleApiTest extends TestCase
         $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$id}", [
             'slug' => 'giong-custom-01',
         ], $t)->assertOk()->assertJsonPath('data.slug', 'giong-custom-01');
+    }
+
+    public function test_xoa_profile_giai_phong_slug_tai_su_dung_duoc(): void
+    {
+        $u = $this->admin(['writing.profile.view', 'writing.profile.create', 'writing.profile.manage']);
+        $t = $this->token($u);
+
+        // Tạo profile với slug tùy biến.
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Giọng Xóa Thử', 'slug' => 'giong-xoa-thu', 'rules_json' => [],
+        ], $t);
+        $res->assertCreated();
+        $id = $res->json('data.id');
+
+        $this->assertDatabaseHas('slugs', ['slug' => 'giong-xoa-thu']);
+
+        // Xóa cứng profile.
+        $this->deleteJson("/api/v1/admin/writing-style/writing-profiles/{$id}", [], $t)->assertNoContent();
+
+        // Slug phải được XÓA (không giữ lịch sử) — giải phóng tái sử dụng.
+        $this->assertDatabaseMissing('slugs', ['slug' => 'giong-xoa-thu']);
+
+        // Profile mới cùng name -> được dùng lại slug đó (không bị suffix).
+        $res2 = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Giọng Xóa Thử', 'rules_json' => [],
+        ], $t);
+        $res2->assertCreated()->assertJsonPath('data.slug', 'giong-xoa-thu');
     }
 
     public function test_analyze_tra_202_va_dispatch_job(): void
@@ -377,5 +404,100 @@ class WritingStyleApiTest extends TestCase
         $res->assertOk();
         $this->assertArrayHasKey('draft_profile', $res->json('data'));
         $this->assertNull($res->json('data.draft_profile'));
+    }
+
+    /* =====================================================================
+     * POST /v1/admin/core/slug-suggest — gợi ý slug realtime trên UI.
+     * Trả {slug, available, taken_by}; chỉ đọc, không ghi bảng slugs.
+     * ===================================================================== */
+
+    public function test_slug_suggest_tra_slug_khi_chua_co(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $t = $this->token($u);
+
+        $res = $this->postJson('/api/v1/admin/core/slug-suggest', [
+            'source'         => 'Giọng Chuyên gia Kỹ thuật',
+            'sluggable_type' => 'writing_profile',
+        ], $t);
+
+        $res->assertOk()
+            ->assertJsonPath('data.slug', 'giong-chuyen-gia-ky-thuat')
+            ->assertJsonPath('data.available', true)
+            ->assertJsonPath('data.taken_by', null);
+    }
+
+    public function test_slug_suggest_them_hau_to_khi_slug_da_co(): void
+    {
+        $u = $this->admin(['writing.profile.view', 'writing.profile.create']);
+        $t = $this->token($u);
+
+        // Tạo profile chiếm slug 'giong-x' trước.
+        WritingProfile::create([
+            'name' => 'Giọng X', 'dominant_tier' => 'short', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => [], 'evidence_json' => [],
+        ]);
+
+        $res = $this->postJson('/api/v1/admin/core/slug-suggest', [
+            'source'         => 'Giọng X',
+            'sluggable_type' => 'writing_profile',
+        ], $t);
+
+        $res->assertOk()
+            ->assertJsonPath('data.slug', 'giong-x-1')
+            ->assertJsonPath('data.available', false)
+            ->assertJsonPath('data.taken_by', 'giong-x');
+    }
+
+    public function test_slug_suggest_loai_tru_slug_cua_chinh_record_dang_sua(): void
+    {
+        $u = $this->admin(['writing.profile.view', 'writing.profile.create']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Giọng X', 'dominant_tier' => 'short', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => [], 'evidence_json' => [],
+        ]);
+
+        // Khi sửa chính record đó, slug 'giong-x' của nó phải được coi là trống
+        // (không báo "đã có" do chính nó chiếm).
+        $res = $this->postJson('/api/v1/admin/core/slug-suggest', [
+            'source'         => 'Giọng X',
+            'sluggable_type' => 'writing_profile',
+            'sluggable_id'   => $profile->id,
+        ], $t);
+
+        $res->assertOk()
+            ->assertJsonPath('data.slug', 'giong-x')
+            ->assertJsonPath('data.available', true);
+    }
+
+    public function test_slug_suggest_cho_phep_slug_trung_giua_cac_loai_khac_nhau(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $t = $this->token($u);
+
+        // Category cũng có slug 'giong-x' — nhưng writing_profile được phép trùng
+        // (check theo scope sluggable_type, không phải toàn bảng).
+        \Illuminate\Support\Facades\DB::table('slugs')->insert([
+            'sluggable_type' => 'category',
+            'sluggable_id'   => 99,
+            'slug'           => 'giong-x',
+            'locale'         => 'vi',
+            'is_primary'     => true,
+            'created_at'     => now(),
+            'updated_at'     => now(),
+        ]);
+
+        $res = $this->postJson('/api/v1/admin/core/slug-suggest', [
+            'source'         => 'Giọng X',
+            'sluggable_type' => 'writing_profile',
+        ], $t);
+
+        $res->assertOk()
+            ->assertJsonPath('data.slug', 'giong-x')
+            ->assertJsonPath('data.available', true);
     }
 }

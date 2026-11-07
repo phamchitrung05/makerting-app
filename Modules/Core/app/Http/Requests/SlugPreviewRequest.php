@@ -35,6 +35,9 @@ class SlugPreviewRequest extends FormRequest
         return [
             'source' => ['required', 'string', 'max:250'],
             'sluggable_type' => ['required', 'string', 'max:64'],
+            // ID bản ghi đang sửa — truyền để loại trừ slug của chính nó
+            // khi check trùng (tránh báo "đã có" với slug do chính mình đang giữ).
+            'sluggable_id' => ['nullable', 'integer', 'min:1'],
             'locale' => ['nullable', 'string', 'max:16'],
         ];
     }

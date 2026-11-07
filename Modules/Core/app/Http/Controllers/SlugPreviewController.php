@@ -37,4 +37,32 @@ class SlugPreviewController extends Controller
 
         return BaseResponse::success(['slug' => $slug], 'Sinh slug thành công');
     }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Gợi ý slug cho field nhập trên UI — trả đủ trạng thái trùng.
+     * =====================================================================
+     *
+     * POST /api/v1/admin/core/slug-suggest
+     * INPUT : SlugPreviewRequest (source, sluggable_type, sluggable_id, locale).
+     * OUTPUT: BaseResponse::success {slug, available, taken_by} —
+     *   slug      = chuỗi sẽ dùng (đã suffix -1,-2 nếu base đã chiếm),
+     *   available = base slugify(source) còn trống hay không,
+     *   taken_by  = base đang bị record khác chiếm (khi available=false).
+     * SIDE EFFECT: chỉ đọc, không ghi DB.
+     * =====================================================================
+     */
+    public function suggest(SlugPreviewRequest $request)
+    {
+        $data = $request->validated();
+
+        $result = $this->slugs->suggest(
+            $data['source'],
+            $data['sluggable_type'],
+            $data['sluggable_id'] ?? null,
+            $data['locale'] ?? null,
+        );
+
+        return BaseResponse::success($result, 'Sinh slug thành công');
+    }
 }

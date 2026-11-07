@@ -50,6 +50,40 @@ class WritingProfileDefinition
     }
 
     /* =====================================================================
+     * Chuẩn hóa HTML -> text — giữ nguyên \n giữa các block để đếm câu
+     * chính xác khi văn bản có nhiều đoạn (strip_tags thô sẽ mất \n ẩn
+     * trong </p><p>, <br>, </li>, </h1-6>, </div>...).
+     * ===================================================================== */
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Chuyển HTML (Tiptap) thành plain text, giữ newline block.
+     * =====================================================================
+     * Thay tag đóng/mở block bằng "\n\n", thay <br> bằng "\n", rồi strip
+     * tag + decode entity. Kết quả: text có \n thật giữa đoạn — bắt buộc
+     * cho countSentences tách theo \n{2,} (PLAN.md §304).
+     *
+     * INPUT: string $html (có thể là HTML của Tiptap hoặc text thuần).
+     * OUTPUT: string plain text (vẫn có \n, tab — chưa gộp whitespace).
+     * =====================================================================
+     */
+    public static function htmlToText(string $html): string
+    {
+        // Đóng tag block -> xuống 2 dòng (đoạn mới).
+        $t = preg_replace('/<\/(p|li|h[1-6]|div|blockquote|pre|tr|table|ul|ol)>/i', "\n\n", $html);
+        // <br>, <hr> -> xuống 1 dòng.
+        $t = preg_replace('/<(br|hr)\s*\/?\s*>/i', "\n", $t);
+        // Mở tag block (an toàn cho trường hợp HTML thiếu đóng).
+        $t = preg_replace('/<(p|li|h[1-6]|div|blockquote|pre|tr|table|ul|ol)[^>]*>/i', "\n\n", $t);
+        // Bỏ mọi tag còn lại (inline <b>, <i>, <a>, <span>, entity...).
+        $t = strip_tags($t);
+        // Decode &nbsp; &amp; &lt; ... về ký tự thật.
+        $t = html_entity_decode($t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return trim((string) $t);
+    }
+
+    /* =====================================================================
      * LengthTier — phân tầng 4 cấp độ độ dài.
      * ===================================================================== */
 
@@ -150,7 +184,9 @@ class WritingProfileDefinition
      */
     public static function countSentences(string $text): int
     {
-        $t = trim(strip_tags($text));
+        // Giữ \n giữa block trước — strip_tags thô sẽ mất newline ẩn trong
+        // </p><p>/<br>/</li>... khiến cả bài dính thành 1 cục đếm thiếu câu.
+        $t = self::htmlToText($text);
         if ($t === '') {
             return 0;
         }
@@ -169,7 +205,7 @@ class WritingProfileDefinition
      */
     public static function countWords(string $text): int
     {
-        $t = trim(strip_tags($text));
+        $t = self::htmlToText($text);
         if ($t === '') {
             return 0;
         }
@@ -244,9 +280,9 @@ class WritingProfileDefinition
      */
     private static function normalizeForMatch(string $text): string
     {
-        $t = strip_tags($text);
-        $t = html_entity_decode($t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        // NBSP và mọi whitespace unicode -> 1 space.
+        // Giữ \n giữa block trước — excerpt trong DB có thể cách đoạn bằng \n\n.
+        $t = self::htmlToText($text);
+        // NBSP và mọi whitespace unicode (kể cả \n\n) -> 1 space.
         $t = preg_replace('/[\xC2\xA0\s]+/u', ' ', $t);
 
         return trim((string) $t);
