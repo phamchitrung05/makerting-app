@@ -8,6 +8,7 @@ use Modules\Core\Http\Responses\BaseResponse;
 use Modules\WritingStyle\Http\Requests\StoreWritingProfileRequest;
 use Modules\WritingStyle\Http\Resources\WritingProfileResource;
 use Modules\WritingStyle\Models\WritingProfile;
+use Modules\WritingStyle\Models\WritingProfileAnalysis;
 use Modules\WritingStyle\Services\WritingProfileDefinition;
 
 /**
@@ -18,15 +19,15 @@ use Modules\WritingStyle\Services\WritingProfileDefinition;
  * Cung cấp các endpoint RESTful trong nhóm /v1/admin/writing-style/writing-profiles:
  * - GET    /writing-profiles          : Danh sách phân trang kèm bộ lọc
  * - GET    /writing-profiles/options  : 4 tiers và 16 câu hỏi giải mã DNA
- * - POST   /writing-profiles          : Tạo mới hồ sơ thủ công (origin=manual)
+ * - POST   /writing-profiles          : Tạo hồ sơ khi Lưu (kèm analysis_id -> origin=reference)
  * - GET    /writing-profiles/{id}     : Chi tiết một hồ sơ kèm taxonomy
- * - PUT    /writing-profiles/{id}     : Cập nhật thông tin hồ sơ và đồng bộ taxonomy
+ * - PUT    /writing-profiles/{id}     : Cập nhật hồ sơ và đồng bộ taxonomy
  * - DELETE /writing-profiles/{id}     : Xóa mềm hồ sơ
  *
  * CÁC HÀM/METHOD TRONG FILE:
  * - index(Request $request): Trả danh sách hồ sơ dạng dataTable
  * - options(): Trả danh sách 4 phân tầng độ dài và 16 câu hỏi giải mã
- * - store(StoreWritingProfileRequest $request): Tạo hồ sơ mới và đồng bộ taxonomy
+ * - store(StoreWritingProfileRequest $request): Tạo hồ sơ khi Lưu + gắn analysis
  * - show(WritingProfile $writingProfile): Xem chi tiết hồ sơ
  * - update(StoreWritingProfileRequest $request, WritingProfile $writingProfile): Cập nhật hồ sơ
  * - destroy(WritingProfile $writingProfile): Xóa hồ sơ
@@ -38,24 +39,6 @@ use Modules\WritingStyle\Services\WritingProfileDefinition;
  */
 class WritingProfileController extends Controller
 {
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Lấy danh sách hồ sơ văn phong phân trang kèm bộ lọc
-     * =====================================================================
-     *
-     * INPUT:
-     * - Request $request: Chứa query params search, tier, origin, status, per_page
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: BaseResponse::dataTable phân trang
-     *
-     * SIDE EFFECT:
-     * - Truy vấn bảng writing_profiles kèm quan hệ categories và tags
-     *
-     * EXCEPTION/TRANSACTION:
-     * - Không có
-     * =====================================================================
-     */
     public function index(Request $request)
     {
         $perPage = min((int) $request->query('per_page', 15), 100);
@@ -73,31 +56,12 @@ class WritingProfileController extends Controller
         return BaseResponse::dataTable($items);
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Lấy danh mục 4 phân tầng độ dài và 16 câu hỏi bóc tách DNA
-     * =====================================================================
-     *
-     * INPUT:
-     * - Không có
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: 200 BaseResponse::success({ tiers, rules })
-     *
-     * SIDE EFFECT:
-     * - Đọc cấu hình từ config/writingstyle.php
-     *
-     * EXCEPTION/TRANSACTION:
-     * - Không có
-     * =====================================================================
-     */
     public function options()
     {
         $tiers = [];
         foreach (WritingProfile::TIERS as $t) {
             $tiers[] = [
                 'value'         => $t,
-                // label = nhãn tiếng Việt từ config (bỏ TIER_META hằng ở FE).
                 'label'         => config("writingstyle.tiers.{$t}.label", $t),
                 'sentence_hint' => WritingProfileDefinition::tierLabel($t),
             ];
@@ -114,44 +78,53 @@ class WritingProfileController extends Controller
         ]);
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Tạo mới hồ sơ văn phong thủ công (origin=manual)
-     * =====================================================================
-     *
-     * INPUT:
-     * - StoreWritingProfileRequest $request: Dữ liệu hồ sơ và taxonomy đã validate
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: 201 BaseResponse::created(WritingProfileResource)
-     *
-     * SIDE EFFECT:
-     * - Thêm mới bản ghi vào bảng writing_profiles và đồng bộ categories/tags
-     *
-     * EXCEPTION/TRANSACTION:
-     * - ValidationException nếu vi phạm ràng buộc
-     * =====================================================================
-     */
     public function store(StoreWritingProfileRequest $request)
     {
         $data = $request->validated();
+
+        $analysis = null;
+        if (! empty($data['analysis_id'])) {
+            $analysis = WritingProfileAnalysis::find($data['analysis_id']);
+        }
+        $linkedAnalysis = ($analysis !== null && $analysis->status === WritingProfileAnalysis::STATUS_SUCCEEDED)
+            ? $analysis
+            : null;
+
+        $analysisResult = $linkedAnalysis?->result_json ?? [];
+
         $profile = WritingProfile::create([
-            'name'               => $data['name'],
-            'description'        => $data['description'] ?? null,
-            'dominant_tier'      => $data['dominant_tier'] ?? WritingProfile::TIER_MEDIUM,
-            'rules_json'         => $data['rules_json'] ?? [],
-            'evidence_json'      => $data['evidence_json'] ?? [],
-            'style_instructions' => $data['style_instructions'] ?? '',
-            'origin'             => WritingProfile::ORIGIN_MANUAL,
-            'status'             => $data['status'] ?? WritingProfile::STATUS_DRAFT,
-            'is_enabled'         => $data['is_enabled'] ?? true,
-            'created_by'         => $request->user()?->id,
+            'name'                       => $data['name'],
+            'description'                => $data['description'] ?? null,
+            'dominant_tier'              => $data['dominant_tier'] ?? WritingProfile::TIER_MEDIUM,
+            'temperature'                => $data['temperature'] ?? 0.70,
+            'rules_json'                 => $data['rules_json'] ?? [],
+            'evidence_json'              => $data['evidence_json'] ?? [],
+            'style_instructions'         => $data['style_instructions'] ?? '',
+            'voice_texture_instructions' => $data['voice_texture_instructions']
+                ?? ($analysisResult['voice_texture_instructions'] ?? ''),
+            'voice_texture_sliders_json' => $data['voice_texture_sliders_json']
+                ?? ($analysisResult['voice_texture_sliders_json'] ?? null),
+            'tone_sliders_json'          => $data['tone_sliders_json']
+                ?? ($analysisResult['tone_sliders_json'] ?? null),
+            'origin'                     => $linkedAnalysis !== null
+                ? WritingProfile::ORIGIN_REFERENCE
+                : WritingProfile::ORIGIN_MANUAL,
+            'status'                     => $data['status'] ?? WritingProfile::STATUS_DRAFT,
+            'is_enabled'                 => $data['is_enabled'] ?? true,
+            'created_by'                 => $request->user()?->id,
         ]);
 
-        // Slug tùy biến: trait đã tự sinh từ name khi create; chỉ ghi đè khi
-        // client gửi slug rõ ràng (đã qua regex kebab-case).
         if (! empty($data['slug'])) {
             $profile->syncSlugNow($data['slug']);
+        }
+
+        if ($linkedAnalysis !== null) {
+            $profile->source_hash = $linkedAnalysis->source_hash;
+            $profile->analysis_metadata_json = $linkedAnalysis->result_json['metadata'] ?? null;
+            $profile->save();
+
+            $linkedAnalysis->draft_profile_id = $profile->id;
+            $linkedAnalysis->save();
         }
 
         $taxonomyKeys = ['categories', 'new_categories', 'tags', 'new_tags'];
@@ -162,52 +135,31 @@ class WritingProfileController extends Controller
         return BaseResponse::created(new WritingProfileResource($profile->load(['categories', 'tags'])), 'Tạo văn phong thành công');
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Xem chi tiết một hồ sơ văn phong kèm phân loại
-     * =====================================================================
-     *
-     * INPUT:
-     * - WritingProfile $writingProfile: Model tìm theo route binding
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: 200 BaseResponse::success(WritingProfileResource)
-     *
-     * SIDE EFFECT:
-     * - Eager load quan hệ categories và tags
-     *
-     * EXCEPTION/TRANSACTION:
-     * - 404 ModelNotFoundException nếu ID không tồn tại
-     * =====================================================================
-     */
     public function show(WritingProfile $writingProfile)
     {
-        return BaseResponse::success(new WritingProfileResource($writingProfile->load(['categories', 'tags'])));
+        return BaseResponse::success(new WritingProfileResource(
+            $writingProfile->load(['categories', 'tags', 'analyses'])
+        ));
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Cập nhật thông tin hồ sơ văn phong và đồng bộ taxonomy
-     * =====================================================================
-     *
-     * INPUT:
-     * - StoreWritingProfileRequest $request: Dữ liệu cập nhật
-     * - WritingProfile $writingProfile: Model cần cập nhật
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: 200 BaseResponse::success(WritingProfileResource)
-     *
-     * SIDE EFFECT:
-     * - Cập nhật bảng writing_profiles, tăng version lên 1 và sync taxonomy
-     *
-     * EXCEPTION/TRANSACTION:
-     * - ValidationException nếu vi phạm ràng buộc
-     * =====================================================================
-     */
     public function update(StoreWritingProfileRequest $request, WritingProfile $writingProfile)
     {
         $data = $request->validated();
-        foreach (['name', 'description', 'dominant_tier', 'rules_json', 'evidence_json', 'style_instructions', 'status', 'is_enabled'] as $f) {
+        $updatable = [
+            'name',
+            'description',
+            'dominant_tier',
+            'temperature',
+            'rules_json',
+            'evidence_json',
+            'style_instructions',
+            'voice_texture_instructions',
+            'voice_texture_sliders_json',
+            'tone_sliders_json',
+            'status',
+            'is_enabled',
+        ];
+        foreach ($updatable as $f) {
             if (array_key_exists($f, $data)) {
                 $writingProfile->{$f} = $data[$f];
             }
@@ -215,8 +167,6 @@ class WritingProfileController extends Controller
         $writingProfile->version = ($writingProfile->version ?? 1) + 1;
         $writingProfile->save();
 
-        // Slug: trait đã đồng bộ nếu name vừa đổi; chỉ ghi đè khi client
-        // gửi slug rõ ràng (khác slug hiện hành mới đáng sync lại).
         if (array_key_exists('slug', $data) && filled($data['slug'])) {
             $writingProfile->syncSlugNow($data['slug']);
         }
@@ -229,24 +179,6 @@ class WritingProfileController extends Controller
         return BaseResponse::success(new WritingProfileResource($writingProfile->load(['categories', 'tags'])), 'Cập nhật văn phong thành công');
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Xóa một hồ sơ văn phong
-     * =====================================================================
-     *
-     * INPUT:
-     * - WritingProfile $writingProfile: Model cần xóa
-     *
-     * OUTPUT:
-     * - \Illuminate\Http\JsonResponse: 204 BaseResponse::noContent()
-     *
-     * SIDE EFFECT:
-     * - Xóa mềm hoặc xóa cứng bản ghi trong writing_profiles
-     *
-     * EXCEPTION/TRANSACTION:
-     * - Không có
-     * =====================================================================
-     */
     public function destroy(WritingProfile $writingProfile)
     {
         $writingProfile->delete();

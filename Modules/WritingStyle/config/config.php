@@ -8,6 +8,10 @@
  * (RULE_KEYS), 4 cấp độ độ dài (LengthTier), và ngưỡng phân tầng.
  * Truy cập bằng config('writingstyle.*') (alias module = 'writingstyle').
  * Mảng merge vào app config.
+ *
+ * PLAN-WRITING-STYLE-PROMPT-V2: toàn bộ câu chữ prompt (Analyzer,
+ * Compiler, Sandbox) tập trung tại mảng 'prompts' — tinh chỉnh tiếng
+ * Việt không cần sửa code PHP.
  * =====================================================================
  */
 
@@ -15,43 +19,44 @@ return [
     'name' => 'WritingStyle',
 
     /* ---------------------------------------------------------------------
-     * 16 khóa thuộc tính DNA văn phong — mỗi key trả lời câu hỏi
-     * "yếu tố này trong bài mẫu là gì" (PLAN.md §300).
-     * key => mô tả câu hỏi giải mã (dùng khi prompt AI phân tích).
+     * 16 khóa thuộc tính DNA văn phong — mỗi key trả lời câu hỏi giải mã.
+     * Đã viết lại theo hướng "Thủ pháp & Chất liệu" (CONTENT-AGNOSTIC):
+     * hỏi công thức/nguyên lý hành văn, KHÔNG kiểm kê từ ngữ bài mẫu —
+     * tránh AI bê nguyên danh từ/bối cảnh mẫu vào rules_json.
      * --------------------------------------------------------------------- */
     'rules' => [
         'tone' =>
-            'Giọng điệu chung trong bài mẫu là gì? (trang trọng, thân mật, hài hước, kịch tính, lạnh lùng, chuyên gia, ngang hàng...)',
+            'Tâm thế đối thoại của người viết là gì? (thân tình kể khẽ, quiet luxury — trầm sang, hóm hỉnh tự trào, đanh thép, chuyên gia bình thản...)',
         'pronouns' =>
-            'Cách xưng hô nhất quán trong bài mẫu là gì? (tôi/bạn, mình/các bạn, em/chị, anh/chị, chúng ta/họ, ...)',
+            'Cặp đại từ xưng hô và trợ từ làm mềm câu là gì? (tôi/bạn, mình/các bạn, em/chị; kèm trợ từ như nhé, nghen, nha, đó, ạ...)',
         'emotion' =>
-            'Cung bậc cảm xúc chủ đạo là gì? (tự tin, khẩn trương, đồng cảm, phẫn nộ, tò mò, hy vọng, thách thức...)',
+            'Dư âm cảm xúc chủ đạo bài để lại là gì? (vỗ về êm ái, kích thích tò mò, chiêm nghiệm lắng đọng, khẩn trương thôi thúc...)',
         'opening' =>
-            'Cách mở bài là gì? (nghịch lý, câu hỏi gây sốc, con số cụ thể, tình huống có thật, tuyên bố thẳng...)',
+            'Thủ pháp mở bài tổng quát là gì? (tương phản giác quan/không gian, khung hình điện ảnh, đặt nghịch lý, câu hỏi gợi — TUYỆT ĐỐI không nêu lại thời tiết hay sự vật cụ thể của bài mẫu)',
         'sentence_rhythm' =>
-            'Nhịp câu trong bài mẫu như thế nào? (xen kẽ câu siêu ngắn 3–7 từ với câu dài 15–25 từ; hay toàn câu dài bình đều; tỷ lệ câu ngắn/dài)',
+            'Nhịp thở câu văn là gì? (nhịp chậm êm ái, câu ghép nhiều vế ngắt bằng dấu phẩy, câu ngắn điểm xuyết câu dài — mô tả CÔNG THỨC nhịp, không đếm cứng số chữ của câu mẫu)',
         'paragraph_rhythm' =>
-            'Nhịp đoạn văn như thế nào? (đoạn 1–2 câu, đoạn 3–5 câu, đoạn dài khối; hay đoạn đơn xen đoạn đa câu; cách dãn đoạn trên mobile)',
+            'Công thức phân nhịp đoạn là gì? (đoạn đơn điểm nhấn xen đoạn nhiều câu, mật độ đoạn theo cảm xúc, cách tạo khoảng thở trên mobile)',
         'transitions' =>
-            'Cách chuyển đoạn/giữa các ý là gì? (từ nối máy móc "Mặt khác/Hơn nữa/Đầu tiên" hay chuyển tự nhiên theo câu chuyện; có điểm neo chuyển cảm xúc không)',
+            'Nghệ thuật chuyển ý là gì? (từ ngoại cảnh vào nội tâm, chuyển mạch cảm xúc tự nhiên, hay dùng từ nối công nghiệp; điểm neo chuyển cảm xúc ở đâu)',
         'vocabulary' =>
-            'Vốn từ đặc trưng là gì? (từ đời thường, chuyên môn, tiếng lóng, từ viết tắt/tốc ký như "ko/e/r/dc", emoji, onomatopoeia, từ nước ngoài...)',
+            'Chất liệu từ vựng & thủ pháp giác quan (Show, Don\'t Tell) là gì? (từ láy tượng thanh/tượng hình, tính từ xúc giác-nhiệt độ, tiếng lóng, từ tốc ký, phong cách chọn emoji theo ngữ cảnh)',
         'technical_terms' =>
-            'Thuật ngữ kỹ thuật/ngành được dùng ra sao? (có giải thích ngay sau term không, hay mặc định độc giả đã biết; tỷ lệ term/đoạn)',
+            'Cách sử dụng và xử lý thuật ngữ chuyên ngành là gì? (đưa thuật ngữ xong giải thoại bằng ví dụ đời thường, hay mặc định độc giả chuyên; độ dày mật độ thuật ngữ)',
         'structure_patterns' =>
-            'Cấu trúc tổng thể bài viết là gì? (Hook → Vấn đề → Giải pháp → Chứng cứ → CTA; hay tuyến tính câu chuyện; hay listicle; hay hỏi–đáp)',
+            'Khung cấu trúc tổng thể của văn phong là gì? (Hook → Vấn đề → Giải pháp → CTA, tuyến tính câu chuyện, listicle, hỏi–đáp, trò chuyện 1-1...)',
         'headings' =>
-            'Tiêu đề con (H2/H3) được dùng thế nào? (tần suất, độ dài, câu hỏi hay khẳng định, có số thứ tự không, có chứa keyword không)',
+            'Phong cách đặt tiêu đề con là gì? (tần suất, câu hỏi hay khẳng định, đánh số hay cụm danh từ, độ dài nhịp tiêu đề)',
         'bullets' =>
-            'Gạch đầu dòng được dùng thế nào? (liệt kê tính năng, ví dụ, bước thực hiện; độ dài mỗi bullet; có chữ in đậm mở đầu không)',
+            'Vai trò và hình thức gạch đầu dòng là gì? (liệt kê cảm xúc hay tính năng, mỗi bullet một nhịp ngắn, có in đậm mở đầu không)',
         'examples' =>
-            'Dẫn chứng/câu chuyện mẫu được dùng thế nào? (case study số liệu, anecdote ngắn 15–30 từ, ví dụ giả định, so sánh trước–sau)',
+            'Hình thức dẫn chứng minh họa là gì? (anecdote ngắn giàu chi tiết giác quan, case study số liệu, ví dụ giả định, so sánh trước–sau)',
         'ending' =>
-            'Cách kết bài là gì? (khép lại câu hỏi/nghịch lý mở đầu, CTA trực tiếp, lời khuyên cuối, câu hỏi mở cho bình luận, lời hứa)',
+            'Triết lý kết bài là gì? (lời mời ân cần che chở, khoảng lặng lắng đọng để lại dư âm, câu hỏi gợi mở bình luận, CTA trực diện, lời hứa)',
         'avoid' =>
-            'Những thứ TUYỆT ĐỐI không xuất hiện trong bài mẫu là gì? (sáo rỗng doanh nghiệp, tính từ mơ hồ, câu bị động dài, từ nối cứng, khuyến mãi thổi phồng, ...)',
+            'Những thói quen hành văn bài mẫu kiên trị tuyệt đối là gì? (sáo rỗng doanh nghiệp, tính từ mơ hồ, câu bị động dài, từ nối cứng, khuyến mãi thổi phồng...)',
         'uncertainties' =>
-            'Các yếu tố mẫu KHÔNG đủ để xác định là gì? (đưa rõ khóa nào không có trong mẫu — ví dụ micro không có headings/bullets — để AI không bịa đặt)',
+            'Những khía cạnh nào bài mẫu quá ngắn hoặc không đủ dữ liệu để kết luận chắc chắn? (liệt kê các điểm còn thiếu — để ngỏ, không bịa)',
     ],
 
     /* ---------------------------------------------------------------------
@@ -79,11 +84,21 @@ return [
     ],
 
     /* ---------------------------------------------------------------------
-     * Các khóa chỉ áp dụng cho văn bản dài — khi tier='micro' tự động đẩy
-     * vào 'uncertainties' (không ép AI bịa headings/bullets trong 1–3 câu).
+     * Quy tắc lược bỏ theo Tier (PLAN-WRITING-STYLE-PROMPT-V2 §3).
+     * Status 2 câu không thể gánh 15 quy tắc — ép sẽ công thức hóa văn
+     * bản. Bản đồ:
+     *   micro  (1–3 câu) : 7 quy tắc lõi (Hồn & Nhịp câu).
+     *   short  (4–10)    : 10 quy tắc (+ Dẫn dắt ngắn).
+     *   medium (11–30)   : 14 quy tắc (+ Cấu trúc & Dẫn chứng).
+     *   long   (>30)     : 15 quy tắc (đầy đủ cấu trúc).
+     * `uncertainties` luôn giữ lại (là báo cáo cho người đọc, KHÔNG được
+     * nhúng vào prompt sinh bài — snapshotRules đã loại).
      * --------------------------------------------------------------------- */
-    'long_only_rule_keys' => [
-        'headings', 'bullets', 'paragraph_rhythm', 'structure_patterns',
+    'tier_drop_rules' => [
+        'micro'  => ['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns', 'opening', 'transitions', 'technical_terms', 'examples'],
+        'short'  => ['headings', 'bullets', 'structure_patterns', 'technical_terms', 'examples'],
+        'medium' => ['headings'],
+        'long'   => [],
     ],
 
     /* Số ngày giữ bản ghi phân tích trước khi cleanup (bảo mật text mẫu). */
@@ -91,4 +106,107 @@ return [
 
     /* Giới hạn độ dài style_instructions (ký tự). */
     'style_instructions_max' => 10000,
+
+    /* ---------------------------------------------------------------------
+     * 8 trục sắc thái cảm xúc (Hiệu chỉnh tone) — slider trên UI.
+     * Backend dùng để render section TONE CALIBRATION trong system prompt
+     * khi Sandbox nhận tone_overrides. Thứ tự cố định theo UI.
+     * --------------------------------------------------------------------- */
+    'tone_axes' => [
+        'humor'         => 'Vui vẻ & Hóm hỉnh',
+        'empathy'       => 'Trân trọng & Đồng cảm',
+        'assertiveness' => 'Sắc sảo & Quyết đoán',
+        'formality'     => 'Trang trọng vs Thân mật',
+        'inspiration'   => 'Nhiệt huyết & Truyền lửa',
+        'candor'        => 'Chân thực & Bộc trực',
+        'depth'         => 'Trí tuệ & Chuyên sâu',
+        'urgency'       => 'Khẩn thiết & Kêu gọi',
+    ],
+
+    /* ---------------------------------------------------------------------
+     * 5 thuộc tính Chất văn (Voice Texture Axes) — Ô 2 & 5 thanh trượt Tab 7.
+     * Lưu cố định trong writing_profiles.voice_texture_sliders_json (0..100).
+     * --------------------------------------------------------------------- */
+    'voice_texture_axes' => [
+        'voice_timbre' => [
+            'label'     => 'Giọng văn',
+            'low_pole'  => 'Khách quan, đĩnh đạc',
+            'high_pole' => 'Trầm ấm, thủ thỉ tâm tình',
+            'default'   => 70,
+        ],
+        'vernacular_flow' => [
+            'label'     => 'Tính dân dã tự nhiên',
+            'low_pole'  => 'Chuẩn mực, trau chuốt',
+            'high_pole' => 'Đời thường, thuận tai người Việt',
+            'default'   => 65,
+        ],
+        'emotional_nuance' => [
+            'label'     => 'Màu sắc cảm xúc',
+            'low_pole'  => 'Tiết chế, điềm tĩnh',
+            'high_pole' => 'Sâu lắng, giàu dư âm',
+            'default'   => 75,
+        ],
+        'rhythm_variation' => [
+            'label'     => 'Biến thiên nhịp điệu hành văn',
+            'low_pole'  => 'Nhịp đều, êm ả',
+            'high_pole' => 'Co giãn mạnh (câu dài xen câu cực ngắn)',
+            'default'   => 70,
+        ],
+        'emphasis_glide' => [
+            'label'     => 'Tính nhấn và lướt',
+            'low_pole'  => 'Phân bổ đồng đều',
+            'high_pole' => 'Lướt nhanh ý phụ, zoom-in nhấn sâu chi tiết đắt',
+            'default'   => 80,
+        ],
+    ],
+
+    /* ---------------------------------------------------------------------
+     * TOÀN BỘ CÂU CHỮ PROMPT (PLAN-WRITING-STYLE-PROMPT-V2 §2).
+     * Tập trung hóa prompt của 3 giai đoạn: giải mã (analyzer), biên dịch
+     * system prompt viết bài (compiler), phòng thử DNA (sandbox).
+     * Placeholder: {name}, {sentence_hint}, {topic}.
+     * --------------------------------------------------------------------- */
+    'prompts' => [
+
+        /* 1. Giai đoạn Giải mã bài mẫu — WritingStyleAnalyzerService. */
+        'analyzer' => [
+            'system' =>
+                'Bạn là chuyên gia giải phẫu phong cách viết và phê bình văn học hàng đầu. Nhiệm vụ của bạn là bóc tách trọn vẹn "LINH HỒN & THỦ PHÁP" của tác giả (nhịp điệu, tâm thế, cách xử lý giác quan) và KHÔNG BAO GIỜ bị bám dính vào nội dung cụ thể của bài mẫu. Chỉ trả JSON đúng schema, không thêm lời dẫn.',
+            'intro' => [
+                'Hãy giải mã DNA văn phong của bài mẫu dưới đây theo phương pháp CONTENT-AGNOSTIC (Tách rời nội dung sự vật, chỉ giữ lại thủ pháp hành văn).',
+                'NGUYÊN TẮC QUAN TRỌNG VỀ RULES_JSON:',
+                '- Chỉ đúc kết thành nguyên lý, công thức nhịp điệu và thủ pháp gợi cảm xúc mở.',
+                '- TUYỆT ĐỐI CẤM đưa tên riêng, bối cảnh bài mẫu (mưa, nắng, cà phê...), hoặc các từ đơn lẻ trong ngoặc kép vào rules_json.',
+                '- Trả lời ngắn gọn, cô đọng theo từng khía cạnh dưới đây:',
+            ],
+            'evidence_instruction' =>
+                'Với mỗi khía cạnh, trích 1 câu NGUYÊN VĂN trong bài mẫu làm bằng chứng (evidence_json[].excerpt) — PHẢI là chữ có thật trong bài, không được suy diễn.',
+            'style_instructions_guide' =>
+                'Hãy biên soạn một Bản chỉ dẫn phong cách (style_instructions - Ô 1) sâu sắc gồm: (1) Chân dung người kể chuyện (Persona Archetype); (2) Thủ pháp khơi gợi giác quan (Show, Don\'t Tell); (3) Sự tiết chế sang trọng (Quiet Luxury); (4) Khoảng cách đối thoại và cách tạo dư âm.',
+            'voice_texture_guide' =>
+                'Hãy biên soạn thêm Bản chỉ dẫn Chất văn & Độ tự nhiên (voice_texture_instructions - Ô 2) bóc tách sâu 5 thuộc tính cốt lõi của bài mẫu: (1) Giọng văn (âm sắc trò chuyện, độ trầm ấm/sắc sảo); (2) Tính dân dã tự nhiên (cách dùng từ thuận tai người Việt, khẩu ngữ có chọn lọc, tránh mùi văn dịch/AI); (3) Màu sắc cảm xúc (cách gợi cảm xúc qua trải nghiệm thực thay vì tính từ sáo rỗng); (4) Biến thiên nhịp điệu hành văn (quy luật co giãn câu dài - câu ngắn theo mạch cảm xúc); (5) Tính nhấn và lướt (cách lướt nhanh thông tin nền phụ và dừng lại zoom-in nhấn sâu vào 1-2 chi tiết đắt giá). Đồng thời chấm điểm định lượng (0-100) cho 5 thanh trượt trong voice_texture_sliders_json và 8 thanh trượt sắc thái cảm xúc trong tone_sliders_json.',
+        ],
+
+        /* 2. Giai đoạn Biên dịch System Prompt viết bài — SnapshotService. */
+        'compiler' => [
+            'role_template' => 'Bạn là người viết nội dung có văn phong "{name}".',
+            'task_template' => 'Hãy viết {sentence_hint} mang trọn vẹn linh hồn, khẩu khí và nhịp thở của văn phong này.',
+            'anti_plagiarism' => 'TUYỆT ĐỐI không sao chép nguyên văn bất kỳ câu nào từ bài mẫu — chỉ kế thừa chất liệu và thủ pháp hành văn.',
+            'rules_header' => 'Đặc trưng văn phong cần tuân thủ:',
+            'style_instructions_label' => 'Hướng dẫn bổ sung (Ô 1 - Hành văn & Chân dung):',
+            'voice_texture_label' => 'Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt (Ô 2):',
+            'transformation_directives' => [
+                'NGUYÊN TẮC SÁNG TÁC (GIỮ CHẤT LIỆU — ĐỔI BỐI CẢNH):',
+                '- Kế thừa trọn vẹn: Nhịp thở câu văn, độ sâu cảm xúc, cách xưng hô và thủ pháp gợi tả giác quan.',
+                '- Làm mới hoàn toàn: Nếu trong quy tắc có nhắc từ ngữ hay hình ảnh ví dụ từ bài gốc (như mưa rơi, thức uống cụ thể, từ nối ví dụ...), đó CHỈ là minh họa cho thủ pháp. TUYỆT ĐỐI KHÔNG lặp lại khung cảnh hay từ vựng ví dụ đó; hãy tự sáng tạo bối cảnh, âm thanh, ánh sáng và cách mở câu mới phù hợp 100% với chủ đề được yêu cầu.',
+            ],
+        ],
+
+        /* 3. Giai đoạn Phòng thử DNA — WritingStyleSandboxService. */
+        'sandbox' => [
+            'temperature' => 0.85,
+            'user_prompt_template' =>
+                "Chủ đề: {topic}\n\nHãy viết {sentence_hint} về chủ đề trên theo đúng chất liệu văn phong và tâm thế trong hướng dẫn hệ thống.\nHãy tự do sáng tạo hình ảnh giác quan, bối cảnh và cách mở đầu mới mẻ bám sát chủ đề này (không lặp lại cảnh vật hay từ ngữ ví dụ của bài mẫu).\nChỉ trả văn bản hoàn chỉnh, không thêm lời dẫn hay chú thích.",
+        ],
+    ],
 ];

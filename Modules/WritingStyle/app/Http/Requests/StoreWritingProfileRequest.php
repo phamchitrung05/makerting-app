@@ -27,53 +27,21 @@ use Illuminate\Validation\Rule;
  */
 class StoreWritingProfileRequest extends FormRequest
 {
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Xác thực quyền hạn của người dùng gửi request
-     * =====================================================================
-     *
-     * INPUT:
-     * - Không có
-     *
-     * OUTPUT:
-     * - bool: true (phân quyền đã được kiểm tra bởi route middleware)
-     *
-     * SIDE EFFECT:
-     * - Không có
-     *
-     * EXCEPTION/TRANSACTION:
-     * - Không có
-     * =====================================================================
-     */
     public function authorize(): bool
     {
         return true;
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Khai báo các quy tắc kiểm tra tính hợp lệ của dữ liệu
-     * =====================================================================
-     *
-     * INPUT:
-     * - Không có
-     *
-     * OUTPUT:
-     * - array: Mảng các quy tắc validation cho từng trường dữ liệu
-     *
-     * SIDE EFFECT:
-     * - Không có
-     *
-     * EXCEPTION/TRANSACTION:
-     * - Không ném exception trực tiếp (ném ValidationException nếu vi phạm)
-     * =====================================================================
-     */
     public function rules(): array
     {
         return [
             'name'                  => [$this->method() === 'POST' ? 'required' : 'sometimes', 'string', 'max:160'],
+            // UUID phiên phân tích đã succeeded — gắn profile vào run log và
+            // suy ra origin=reference (không tin client gửi origin).
+            'analysis_id'           => ['nullable', 'string', 'uuid', Rule::exists('writing_profile_analyses', 'id')],
             'description'           => ['nullable', 'string', 'max:2000'],
             'dominant_tier'         => ['nullable', 'in:micro,short,medium,long'],
+            'temperature'           => ['nullable', 'numeric', 'min:0', 'max:2'],
             // rules_json chặt theo 16 khóa DNA thật từ WritingProfileDefinition;
             // mỗi giá trị khóa có độ dài tối thiểu để chặn dữ liệu giả/trống.
             // 15 khóa văn bản là string; uncertainties là mảng chuỗi (doc GĐ1).
@@ -101,6 +69,15 @@ class StoreWritingProfileRequest extends FormRequest
             'evidence_json.*.excerpt' => ['required', 'string', 'min:10', 'max:2000'],
             'evidence_json.*.note'  => ['nullable', 'string', 'max:500'],
             'style_instructions'    => ['nullable', 'string', 'min:10', 'max:10000'],
+            'voice_texture_instructions' => ['nullable', 'string', 'max:10000'],
+            'voice_texture_sliders_json' => ['nullable', 'array'],
+            'voice_texture_sliders_json.voice_timbre' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'voice_texture_sliders_json.vernacular_flow' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'voice_texture_sliders_json.emotional_nuance' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'voice_texture_sliders_json.rhythm_variation' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'voice_texture_sliders_json.emphasis_glide' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'tone_sliders_json'     => ['nullable', 'array'],
+            'tone_sliders_json.*'   => ['nullable', 'integer', 'min:0', 'max:100'],
             'status'                => ['nullable', 'in:draft,active'],
             'is_enabled'            => ['nullable', 'boolean'],
 

@@ -15,7 +15,8 @@ use Modules\Taxonomy\Traits\HasTaxonomy;
  * Một profile = "bộ gen" 16 khóa thuộc tính văn phong (`rules_json`) trả
  * lời câu hỏi "yếu tố này trong bài mẫu là gì" — kèm trích dẫn thực
  * (`evidence_json`, chỉ excerpt có thật trong reference_text), hướng dẫn
- * hành văn (`style_instructions`), cấp độ độ dài chủ đạo (`dominant_tier`)
+ * hành văn (`style_instructions`), chỉ dẫn chất văn (`voice_texture_instructions`
+ * + `voice_texture_sliders_json`), cấp độ độ dài chủ đạo (`dominant_tier`)
  * và nguồn gốc (`origin` manual/reference).
  *
  * `version` tăng mỗi lần sửa; `status` chỉ 'active' mới được dùng để sinh.
@@ -96,6 +97,29 @@ class WritingProfile extends Model
     ];
 
     /* =====================================================================
+     * HẰNG SỐ — 5 trục thuộc tính Chất văn (Voice Texture Axes) & 8 trục Sắc thái (Tone Axes).
+     * ===================================================================== */
+
+    public const VOICE_TEXTURE_KEYS = [
+        'voice_timbre',
+        'vernacular_flow',
+        'emotional_nuance',
+        'rhythm_variation',
+        'emphasis_glide',
+    ];
+
+    public const TONE_AXIS_KEYS = [
+        'humor',
+        'empathy',
+        'assertiveness',
+        'formality',
+        'inspiration',
+        'candor',
+        'depth',
+        'urgency',
+    ];
+
+    /* =====================================================================
      * HẰNG SỐ — Nguồn gốc & trạng thái.
      * ===================================================================== */
 
@@ -115,9 +139,13 @@ class WritingProfile extends Model
         'name',
         'description',
         'dominant_tier',
+        'temperature',
         'rules_json',
         'evidence_json',
         'style_instructions',
+        'voice_texture_instructions',
+        'voice_texture_sliders_json',
+        'tone_sliders_json',
         'origin',
         'source_hash',
         'analysis_metadata_json',
@@ -130,11 +158,14 @@ class WritingProfile extends Model
     protected function casts(): array
     {
         return [
-            'rules_json'             => 'array',
-            'evidence_json'          => 'array',
-            'analysis_metadata_json' => 'array',
-            'is_enabled'             => 'boolean',
-            'version'                => 'integer',
+            'rules_json'                 => 'array',
+            'evidence_json'              => 'array',
+            'voice_texture_sliders_json' => 'array',
+            'tone_sliders_json'          => 'array',
+            'analysis_metadata_json'     => 'array',
+            'is_enabled'                 => 'boolean',
+            'version'                    => 'integer',
+            'temperature'                => 'float',
         ];
     }
 
@@ -191,13 +222,15 @@ class WritingProfile extends Model
      * =====================================================================
      * CHỨC NĂNG: Lấy rules_json lọc theo cấp độ độ dài áp dụng.
      * =====================================================================
-     * Với tier `micro`, các khóa chỉ có nghĩa ở văn bản dài (`headings`,
-     * `bullets`, `paragraph_rhythm`, `structure_patterns`) được đẩy vào
-     * `uncertainties` (không ép AI bịa) — theo PLAN.md §304.
-     * Tier khác trả về toàn bộ rules_json hiện có.
+     * Lọc theo config('writingstyle.tier_drop_rules') (PLAN-WRITING-STYLE-
+     * PROMPT-V2 §3): micro giữ 7 lõi, short 10, medium 14, long 15.
+     * Các khóa bị lược bỏ KHÔNG đưa vào rules trả về — `uncertainties` cũng
+     * được tách ra khỏi output (chỉ là báo cáo cho người đọc lúc phân tích;
+     * nhúng vào prompt sinh bài sẽ làm loãng sự tập trung của LLM và ép AI
+     * viết cẩn trọng/công thức).
      *
      * INPUT: ?string $tier (null -> dominant_tier của profile).
-     * OUTPUT: array rules_json đã lọc.
+     * OUTPUT: array rules_json đã lọc (không chứa uncertainties).
      * =====================================================================
      */
     public function applicableRules(?string $tier = null): array
@@ -205,27 +238,15 @@ class WritingProfile extends Model
         $rules = $this->rules_json ?? [];
         $tier = $tier ?? $this->dominant_tier;
 
-        // Các khóa chỉ có nghĩa ở văn bản dài — lọc theo tier + đẩy vào
-        // uncertainties để AI biết "không có trong mẫu" (không bịa):
-        //   micro : bỏ headings/bullets/paragraph_rhythm/structure_patterns.
-        //   short : bỏ headings/bullets/structure_patterns (giữ paragraph_rhythm).
-        $drop = match ($tier) {
-            self::TIER_MICRO => ['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns'],
-            self::TIER_SHORT => ['headings', 'bullets', 'structure_patterns'],
-            default          => [],
-        };
-
+        $drop = (array) (config('writingstyle.tier_drop_rules', [])[$tier] ?? []);
         if ($drop !== []) {
-            $uncertainties = (array) ($rules['uncertainties'] ?? []);
-
             foreach ($drop as $key) {
-                if (array_key_exists($key, $rules)) {
-                    $uncertainties[] = "{$key}: không áp dụng ở văn bản {$tier} (mẫu không có)";
-                    unset($rules[$key]);
-                }
+                unset($rules[$key]);
             }
-            $rules['uncertainties'] = $uncertainties;
         }
+
+        // `uncertainties` là ghi chú báo cáo — không bao giờ vào prompt sinh bài.
+        unset($rules['uncertainties']);
 
         return $rules;
     }

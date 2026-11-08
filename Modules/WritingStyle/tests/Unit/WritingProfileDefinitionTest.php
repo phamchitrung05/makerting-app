@@ -79,24 +79,42 @@ class WritingProfileDefinitionTest extends TestCase
     }
 
     /* =================================================================
-     * applicableKeys — micro đẩy long-only vào uncertainties.
+     * applicableKeys — lọc theo tier_drop_rules (PLAN-V2 §3):
+     * micro 8 / short 11 / medium 15 / long 16.
      * ================================================================= */
 
-    public function test_applicable_keys_micro_bo_khoa_dai(): void
+    public function test_applicable_keys_micro_giu_8_khoa(): void
     {
         $keys = WritingProfileDefinition::applicableKeys(WritingProfile::TIER_MICRO);
-        $this->assertCount(12, $keys); // 16 - 4 long-only.
-        $this->assertNotContains('headings', $keys);
-        $this->assertNotContains('bullets', $keys);
-        $this->assertNotContains('paragraph_rhythm', $keys);
-        $this->assertNotContains('structure_patterns', $keys);
-        $this->assertContains('tone', $keys);
-        $this->assertContains('uncertainties', $keys);
+        $this->assertCount(8, $keys); // 16 - 8 drop.
+        foreach (['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns', 'opening', 'transitions', 'technical_terms', 'examples'] as $dropped) {
+            $this->assertNotContains($dropped, $keys, "micro phải bỏ {$dropped}");
+        }
+        foreach (['tone', 'pronouns', 'emotion', 'sentence_rhythm', 'vocabulary', 'ending', 'avoid', 'uncertainties'] as $kept) {
+            $this->assertContains($kept, $keys, "micro phải giữ {$kept}");
+        }
     }
 
-    public function test_applicable_keys_medium_du_16(): void
+    public function test_applicable_keys_short_giu_11_khoa(): void
     {
-        $this->assertCount(16, WritingProfileDefinition::applicableKeys(WritingProfile::TIER_MEDIUM));
+        $keys = WritingProfileDefinition::applicableKeys(WritingProfile::TIER_SHORT);
+        $this->assertCount(11, $keys); // 16 - 5 drop.
+        foreach (['headings', 'bullets', 'structure_patterns', 'technical_terms', 'examples'] as $dropped) {
+            $this->assertNotContains($dropped, $keys, "short phải bỏ {$dropped}");
+        }
+        $this->assertContains('opening', $keys);
+        $this->assertContains('transitions', $keys);
+        $this->assertContains('paragraph_rhythm', $keys);
+    }
+
+    public function test_applicable_keys_medium_long(): void
+    {
+        $keys = WritingProfileDefinition::applicableKeys(WritingProfile::TIER_MEDIUM);
+        $this->assertCount(15, $keys); // 16 - headings.
+        $this->assertNotContains('headings', $keys);
+        $this->assertContains('bullets', $keys);
+        $this->assertContains('structure_patterns', $keys);
+
         $this->assertCount(16, WritingProfileDefinition::applicableKeys(WritingProfile::TIER_LONG));
     }
 

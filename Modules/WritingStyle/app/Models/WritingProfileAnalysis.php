@@ -14,8 +14,8 @@ use Illuminate\Support\Str;
  * Một bản ghi = 1 lần chạy "Giải mã văn phong" (AnalyzeWritingProfileJob):
  * nguồn mẫu (paste/url/file + reference_text + source_hash), trạng thái
  * pipeline (pending|running|succeeded|failed + ai_run_id + error_*), kết
- * quả (result_json + detected_tier) và draft profile được tạo ra
- * (draft_profile_id).
+ * quả (result_json + detected_tier) và profile được gắn khi người dùng Lưu
+ * (draft_profile_id — phân tích KHÔNG tự tạo profile).
  *
  * `expires_at` cho phép tự hủy bản ghi (bảo mật reference_text mẫu).
  *
@@ -102,7 +102,9 @@ class WritingProfileAnalysis extends Model
      * ===================================================================== */
 
     /**
-     * CHỨC NĂNG: Profile draft được tạo ra từ phân tích này.
+     * CHỨC NĂNG: Profile được gắn khi người dùng Lưu trên trang create.
+     * Phân tích KHÔNG tự tạo profile — `draft_profile_id` được điền bởi
+     * `WritingProfileController@store` khi payload Lưu kèm analysis_id.
      * INPUT: không. OUTPUT: BelongsTo.
      */
     public function draftProfile(): BelongsTo

@@ -5,107 +5,94 @@
   Route: /admin/writing-style/writing-profiles/edit/:id
   Tự nạp qua file-based routing — tên 'admin-writing-style-writing-profiles-edit-id'.
 
-  Chuẩn hoá theo docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §3.5
-  (trang Add/Edit theo mẫu product/add): PascalCase V*/App*, icon tabler-*,
-  màu theme, VCard mặc định (không border/elevation-0/rounded-xl), field
-  App* + label prop, spacing logical me/ms, không inline font-size.
+  Nối API thật:
+  - onMounted: store.fetchProfile(id) -> GET /writing-profiles/{id}
+    (kèm categories/tags/analyses eager-load từ controller show()).
+  - Map vào 8 tab theo rule_key:
+    Banner+Tổng quan: name/version/description/is_enabled/slug/status
+    Đặc điểm văn phong: rules_json.tone|emotion|pronouns|vocabulary + style_instructions
+    Cấu trúc nội dung: rules_json.opening|structure_patterns|transitions|ending
+    Quy tắc ngôn ngữ: rules_json.pronouns + editorialRules(avoid+vocabulary)
+    Mẫu nội dung: evidence_json
+    Từ vựng & CTA: rules_json.vocabulary/avoid
+    Cài đặt nâng cao: style_instructions + ai_model_used (hiển thị)
+    Lịch sử: analyses (đã load) + version hiện tại
+  - saveProfile() -> PUT /writing-profiles/{id}: chỉ merge các khóa rules_json
+    user được chỉnh trên UI (không đè 9 khóa còn lại) + categories/tags +
+    status/is_enabled + slug + description + style_instructions.
 
-  CÁC HÀM/METHOD TRONG FILE:
-  - saveProfile()   : lưu Writing Profile (demo — nối API sau).
-  - prev/nextQuote  : điều hướng carousel ví dụ văn phong.
-  - addSampleQuote  : thêm 1 mẫu trích dẫn mới.
-  INPUT/OUTPUT: route.params.id -> profile đang sửa (nạp sau).
-  SIDE EFFECT: chưa gọi API (demo tĩnh).
+  UI-only giữ nguyên (KHÔNG map, không lưu — doc §10.3):
+  radar 6 trục, expressionLevel, sampleQuotes, displayChannels,
+  overviewForm.industry/primaryGoal/targetAudience/brandPillars, avatar,
+  emojiDensity, ctaList, temperature, autoScoreCheck, nút "Khôi phục" lịch sử.
+
+  CHUẨN UI (docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §3.5):
+  PascalCase V*/App*, icon tabler-*, màu theme, spacing logical me/ms,
+  không inline font-size, không mồi dữ liệu giả cho phần đã có API.
   =====================================================================
 -->
 <script setup>
-import { reactive, ref } from 'vue'
+/* eslint-disable camelcase */
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
+import TaxonomyField from '@modules/Taxonomy/resources/js/components/TaxonomyField.vue'
+import { firstErrorMessage } from '@/utils/api'
+import { useWritingStyleStore } from '../../../stores/writingStyle'
 
 definePage({ meta: { layout: 'default' } })
 
-/* Tab mặc định mở sẵn là "Đặc điểm văn phong" giống ảnh mẫu. */
-const activeTab = ref('style-traits')
+const route = useRoute()
+const router = useRouter()
+const store = useWritingStyleStore()
 
-/* Thông tin trên Banner Profile. */
+const profile = ref(null)
+const loading = ref(true)
+const saving = ref(false)
+const loadError = ref('')
+
+const activeTab = ref('style-traits')
+const snack = reactive({ show: false, text: '', color: 'success' })
+
+/* Slug realtime — trạng thái đổ vào SlugField (giống trang create). */
+const slugAvailable = ref(null)
+const slugTakenBy = ref(null)
+const slugDirty = ref(false) // user đã chỉnh slug tay -> chỉ gửi khi dirty
+
+/* ---------------------------------------------------------------------
+ * BANNER + TAB 1: TỔNG QUAN
+ * ------------------------------------------------------------------- */
 const profileData = reactive({
-  name: 'Brand Voice – Mộc Cà Phê',
-  version: 'v1.4',
-  isActive: true,
-  shortDesc: 'Văn phong gần gũi, ấm áp, truyền cảm hứng về cà phê và nhịp sống chậm.',
+  name: '',
+  version: 'v1',
+  isActive: false,      // is_enabled
+  status: 'draft',
+  shortDesc: '',        // description
+  slug: '',
 })
 
-/* 8 Tabs điều hướng ngang. */
-const profileTabs = [
-  { value: 'overview', label: 'Tổng quan', icon: 'tabler-file-text' },
-  { value: 'style-traits', label: 'Đặc điểm văn phong', icon: 'tabler-adjustments-horizontal' },
-  { value: 'content-structure', label: 'Cấu trúc nội dung', icon: 'tabler-layout-grid' },
-  { value: 'language-rules', label: 'Quy tắc ngôn ngữ', icon: 'tabler-message-2' },
-  { value: 'content-samples', label: 'Mẫu nội dung', icon: 'tabler-files' },
-  { value: 'vocab-cta', label: 'Từ vựng & CTA', icon: 'tabler-heart' },
-  { value: 'advanced', label: 'Cài đặt nâng cao', icon: 'tabler-settings' },
-  { value: 'history', label: 'Lịch sử', icon: 'tabler-history' },
-]
+const overviewForm = reactive({
+  // UI-only — giữ nguyên layout, không map DB (không có cột).
+  industry: '',
+  primaryGoal: '',
+  targetAudience: '',
+  brandPillars: [],
+})
 
-/* ---------------- DỮ LIỆU TAB 2: ĐẶC ĐIỂM VĂN PHONG ---------------- */
-const traitSummaryList = [
-  { title: 'Giọng điệu', value: 'Thân thiện, ấm áp', icon: 'tabler-microphone', color: 'warning' },
-  { title: 'Cảm xúc', value: 'Tích cực, truyền cảm hứng', icon: 'tabler-heart', color: 'error' },
-  { title: 'Tính chuyên nghiệp', value: 'Chuyên nghiệp vừa phải', icon: 'tabler-briefcase', color: 'primary' },
-  { title: 'Cá tính thương hiệu', value: 'Gần gũi, chân thành', icon: 'tabler-leaf', color: 'success' },
-  { title: 'Mức độ hài hước', value: 'Vừa phải', icon: 'tabler-mood-smile', color: 'warning' },
-]
+/* Taxonomy — TaxonomyField nhận id[] cho categories, (id|name)[] cho tags. */
+const categories = ref([])
+const tags = ref([])
+const newTags = ref([]) // tên tag mới do user gõ (không phải id)
 
-const traitDetailText = ref(
-  'Văn phong của Mộc Cà Phê mang hơi thở của sự ấm áp, gần gũi và tích cực.\nChúng tôi không chỉ bán cà phê, mà còn chia sẻ những khoảnh khắc đẹp trong cuộc sống, truyền cảm hứng về lối sống chậm và tận hưởng hiện tại.',
-)
+/* ---------------------------------------------------------------------
+ * TAB 2: ĐẶC ĐIỂM VĂN PHONG — map rules_json + style_instructions
+ * ------------------------------------------------------------------- */
+const traitSummaryList = ref([]) // render từ rules_json.tone/emotion/pronouns/vocabulary
 
-const expressionLevel = ref(85)
 
-/* Carousel Ví dụ văn phong. */
 const currentQuoteIdx = ref(0)
+const sampleQuotes = ref([])     // UI-only — giữ nguyên mẫu, không map DB
 
-const sampleQuotes = ref([
-  {
-    text: 'Một ly cà phê, một chút bình yên... Đôi khi, hạnh phúc chỉ đơn giản là được thưởng thức những điều nhỏ bé trong cuộc sống.',
-    image: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=300',
-    tags: ['Truyền cảm hứng', 'Gần gũi', 'Tích cực'],
-  },
-  {
-    text: 'Giữa phố thị vội vã, mời bạn ghé hiên nhà Mộc ngồi lại đôi chút, nghe một bản nhạc dịu êm và nhấp ngụm cà phê rang mộc thơm nồng.',
-    image: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=300',
-    tags: ['Sống chậm', 'Ấm áp', 'Thư giãn'],
-  },
-  {
-    text: 'Mỗi hạt cà phê đều mang trong mình câu chuyện của nắng gió cao nguyên và bàn tay chăm chút của người nông dân Việt.',
-    image: 'https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=300',
-    tags: ['Chân thành', 'Kể chuyện', 'Cà phê Việt'],
-  },
-  {
-    text: 'Sáng đầu tuần sẽ dịu dàng hơn thật nhiều khi trên bàn làm việc có thêm hương thơm quen thuộc từ ly Latte nóng hổi.',
-    image: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=300',
-    tags: ['Năng lượng sáng', 'Gần gũi', 'Tích cực'],
-  },
-])
-
-const prevQuote = () => {
-  currentQuoteIdx.value =
-    (currentQuoteIdx.value - 1 + sampleQuotes.value.length) % sampleQuotes.value.length
-}
-
-const nextQuote = () => {
-  currentQuoteIdx.value = (currentQuoteIdx.value + 1) % sampleQuotes.value.length
-}
-
-const addSampleQuote = () => {
-  sampleQuotes.value.push({
-    text: 'Chiều mưa lành lạnh, chẳng gì tuyệt hơn một góc quán quen và tách Cappuccino ấm sực lòng.',
-    image: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=300',
-    tags: ['Ấm áp', 'Chiều mưa', 'Mộc Cà Phê'],
-  })
-  currentQuoteIdx.value = sampleQuotes.value.length - 1
-}
-
-/* Lưới 8 Kênh Tùy chọn hiển thị. */
 const displayChannels = ref([
   { name: 'Facebook', icon: 'tabler-brand-facebook', color: '#1877F2', enabled: true },
   { name: 'YouTube', icon: 'tabler-brand-youtube', color: '#FF0000', enabled: true },
@@ -117,113 +104,894 @@ const displayChannels = ref([
   { name: 'Khác', icon: 'tabler-dots', color: '#4b5563', enabled: false },
 ])
 
-/* Tab 1: Tổng quan. */
-const overviewForm = reactive({
-  industry: 'F&B – Chuỗi Cà phê & Đồ uống',
-  primaryGoal: 'Kết nối cảm xúc & Xây dựng cộng đồng',
-  tags: ['Cà phê', 'Lifestyle', 'Truyền cảm hứng', 'Sống chậm', 'Mộc Cà Phê'],
-  targetAudience:
-    'Nhân viên văn phòng, freelancer và người trẻ (22–35 tuổi) yêu thích không gian cà phê yên tĩnh, trân trọng giá trị nguyên bản và tìm kiếm sự cân bằng trong cuộc sống.',
-  brandPillars: [
-    { title: 'Sự Ấm Áp & Hiếu Khách', desc: 'Luôn chào đón người đọc như một người bạn thân ghé chơi nhà.', icon: 'tabler-coffee', color: 'warning' },
-    { title: 'Nhịp Sống Chậm (Slow Living)', desc: 'Khuyến khích tận hưởng từng khoảnh khắc hiện tại.', icon: 'tabler-leaf', color: 'success' },
-    { title: 'Chất Lượng Nguyên Bản', desc: 'Tôn vinh hương vị tự nhiên của hạt cà phê rang mộc.', icon: 'tabler-wand', color: 'primary' },
-  ],
-})
+const prevQuote = () => {
+  currentQuoteIdx.value = (currentQuoteIdx.value - 1 + sampleQuotes.value.length) % sampleQuotes.value.length
+}
 
-/* Tab 3: Cấu trúc nội dung. */
-const structureSections = [
-  {
-    title: 'Mở bài: Khơi gợi khung cảnh & Cảm xúc',
-    weight: '20% bài viết',
-    sentences: '1 – 2 câu ngắn',
-    guideline: 'Bắt đầu bằng hình ảnh thời tiết, âm thanh hoặc hương thơm cà phê quen thuộc để thu hút sự đồng cảm.',
-    sample: 'Sáng nay trời trở gió se lạnh, còn gì tuyệt hơn được ủ ấm đôi bàn tay bên tách cà phê vừa pha nóng hổi...',
-  },
-  {
-    title: 'Thân bài: Câu chuyện nhỏ & Giá trị sản phẩm',
-    weight: '60% bài viết',
-    sentences: '3 – 5 câu vừa phải',
-    guideline: 'Lồng ghép khéo léo hương vị đồ uống vào câu chuyện đời sống. Chia đoạn thoáng mắt.',
-    sample: 'Vị đắng dịu nhẹ hòa quyện cùng lớp kem sữa béo ngậy của Latte hạt dẻ giúp đánh thức mọi giác quan một cách êm dịu nhất.',
-  },
-  {
-    title: 'Kết bài: Lời mời ghé quán thân tình (Soft CTA)',
-    weight: '20% bài viết',
-    sentences: '1 – 2 câu kết',
-    guideline: 'Không thúc ép mua hàng; luôn kết bằng lời chúc ngày mới tốt lành hoặc lời hẹn gặp tại quán.',
-    sample: 'Nếu hôm nay cần một góc nhỏ bình yên để chạy nốt công việc, Mộc luôn dành sẵn bàn cạnh cửa sổ chờ bạn ghé qua nhé! ☕🌿',
-  },
-]
+const nextQuote = () => {
+  currentQuoteIdx.value = (currentQuoteIdx.value + 1) % sampleQuotes.value.length
+}
 
-/* Tab 4: Quy tắc ngôn ngữ. */
+const addSampleQuote = () => {
+  sampleQuotes.value.push({ text: 'Nội dung mẫu mới…', image: '', tags: [] })
+  currentQuoteIdx.value = sampleQuotes.value.length - 1
+}
+
+/* ---------------------------------------------------------------------
+ * TAB 3: CẤU TRÚC NỘI DUNG — render từ rules_json
+ * ------------------------------------------------------------------- */
+const structureSections = ref([]) // [{title, weight, sentences, guideline, sample}]
+
+/* ---------------------------------------------------------------------
+ * TỪ ĐIỂN TÊN TIẾNG VIỆT CHO 16 KHÓA DNA
+ * ------------------------------------------------------------------- */
+const RULE_LABELS = {
+  tone: 'Giọng điệu & Tâm thế',
+  pronouns: 'Đại từ xưng hô',
+  emotion: 'Cảm xúc chủ đạo',
+  opening: 'Cách mở bài',
+  sentence_rhythm: 'Nhịp thở câu văn',
+  paragraph_rhythm: 'Nhịp phân đoạn',
+  transitions: 'Nghệ thuật chuyển ý',
+  vocabulary: 'Chất liệu từ vựng',
+  technical_terms: 'Thuật ngữ chuyên ngành',
+  structure_patterns: 'Khung cấu trúc bài',
+  headings: 'Tiêu đề con (Heading)',
+  bullets: 'Gạch đầu dòng (Bullet)',
+  examples: 'Dẫn chứng & Ví dụ',
+  ending: 'Kết bài & CTA',
+  avoid: 'Điều kiêng kỵ (Avoid)',
+  uncertainties: 'Điểm chưa xác định',
+}
+
+function ruleLabel(key) {
+  return RULE_LABELS[key] || key
+}
+
+/* ---------------------------------------------------------------------
+ * TAB 4: QUY TẮC NGÔN NGỮ — render từ rules_json.pronouns/avoid/vocabulary
+ * ------------------------------------------------------------------- */
 const languageConfig = reactive({
-  brandPronoun: 'Mình / Tụi mình / Mộc',
-  customerPronoun: 'Bạn / Cả nhà / Người thương',
-  emojiDensity: 'Vừa phải (2–3 emoji ấm áp mỗi đoạn: ☕🌿✨)',
-  editorialRules: [
-    { text: 'Ưu tiên các tính từ gợi cảm giác ấm cúng, mộc mạc, dịu dàng', allowed: true },
-    { text: 'Ngắt dòng sau mỗi 2–3 câu để dễ đọc trên thiết bị di động', allowed: true },
-    { text: 'Sử dụng ngôn từ giật gân, viết hoa toàn bộ câu để ép mua hàng', allowed: false },
-    { text: 'Dùng từ lóng thiếu chuẩn mực hoặc chê bai đối thủ cạnh tranh', allowed: false },
-  ],
+  brandPronoun: '',
+  customerPronoun: '',
+  emojiDensity: '', // UI-only
+  editorialRules: [], // [{text, allowed}]
 })
 
-/* Tab 5: Mẫu nội dung. */
-const fullPostSamples = [
-  {
-    channel: 'Facebook Fanpage',
-    date: '30/10/2026',
-    title: 'Góc nhỏ bình yên cho ngày mưa đầu mùa',
-    content: `Ngoài hiên mưa cứ rơi rả rích, còn bên trong Mộc lại ngập tràn mùi hương cà phê mới xay ấm sực. ☕🌧️\n\nĐôi khi giữa một tuần làm việc bận rộn, điều chúng mình cần chỉ là một khoảng lặng nhỏ để thở sâu và lắng nghe chính mình.\n\nGhé Mộc trú mưa và thưởng thức ly Cacao nóng bạn nhé!`,
-  },
-  {
-    channel: 'Instagram Post',
-    date: '28/10/2026',
-    title: 'Hương vị mùa thu trong tách Trà Đào Cam Sả',
-    content: `Chút thanh mát của cam vàng, vị ngọt dịu từ đào ngâm giòn sần sật hòa cùng hương sả ấm nồng. 🍑🍊\n\nMột thức uống vừa đủ dịu dàng để chiều lòng những tâm hồn đang tìm kiếm chút nắng ấm ngày thu.`,
-  },
-  {
-    channel: 'TikTok / Reels Script',
-    date: '25/10/2026',
-    title: 'Kịch bản: 30 giây pha chế Cold Brew Cam Vàng',
-    content: `[0-5s]: Cận cảnh đá viên rơi vào ly thủy tinh, tiếng ASMR sống động.\n[5-18s]: Rót dòng Cold Brew ủ lạnh 18 tiếng hòa quyện cùng nước cam tươi.\n[18-30s]: Đặt ly nước bên khung cửa sổ ngập nắng + Voiceover ấm áp: "Nạp chút tươi mới cho buổi sáng tỉnh táo cùng Mộc nhé!"`,
-  },
-]
+/* ---------------------------------------------------------------------
+ * TAB 5: MẪU NỘI DUNG — render từ evidence_json
+ * ------------------------------------------------------------------- */
+const fullPostSamples = ref([]) // [{channel, date, title, content}]
 
-/* Tab 6: Từ vựng & CTA. */
+/* ---------------------------------------------------------------------
+ * TAB 6: TỪ VỰNG & CTA — render từ rules_json.vocabulary/avoid/ending
+ * ------------------------------------------------------------------- */
 const vocabConfig = reactive({
-  powerWords: ['bình yên', 'ấm áp', 'rang mộc', 'khoảnh khắc', 'tận hưởng', 'dịu dàng', 'thơm nồng', 'nhịp sống chậm', 'hiên nhà'],
-  negativeWords: ['xả kho', 'rẻ vô địch', 'mua ngay kẻo hết', 'cam kết 100%', 'hàng loạt'],
-  ctaList: [
-    { type: 'CTA Tương tác nhẹ nhàng', text: 'Sáng nay của bạn bắt đầu bằng thức uống gì thế? Kể cho Mộc nghe với nhé!' },
-    { type: 'CTA Mời ghé trải nghiệm tại quán', text: 'Mộc vẫn mở cửa từ 7h sáng với nhạc nhẹ và bánh thơm, hẹn gặp bạn chiều nay nha!' },
-    { type: 'CTA Đặt hàng giao tận nơi', text: 'Nhắn nhẹ cho Mộc để tụi mình gửi ngay một ly cà phê ấm nóng tới bàn làm việc của bạn nhé!' },
-  ],
+  vocabularyDesc: '',
+  powerWords: [],
+  negativeWords: [],
+  ctaPhilosophy: '',
+  newPowerWord: '',
+  newNegativeWord: '',
 })
 
-/* Tab 7: Cài đặt nâng cao. */
+function addPowerWord() {
+  const w = vocabConfig.newPowerWord.trim()
+  if (w && !vocabConfig.powerWords.includes(w)) {
+    vocabConfig.powerWords.push(w)
+    vocabConfig.newPowerWord = ''
+  }
+}
+
+function addNegativeWord() {
+  const w = vocabConfig.newNegativeWord.trim()
+  if (w && !vocabConfig.negativeWords.includes(w)) {
+    vocabConfig.negativeWords.push(w)
+    vocabConfig.newNegativeWord = ''
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * TAB 7: CÀI ĐẶT NÂNG CAO — Ô 1 (style_instructions) + Ô 2 (voice_texture) + 5 sliders
+ * ------------------------------------------------------------------- */
 const advancedConfig = reactive({
-  systemPrompt: `BẠN LÀ NGƯỜI KỂ CHUYỆN CỦA THƯƠNG HIỆU "MỘC CÀ PHÊ".
-- Giọng điệu: Thân thiện (95%), Tích cực (90%), Gần gũi (89%), Truyền cảm hứng (88%).
-- Xưng hô: Xưng "Mộc" hoặc "chúng mình", gọi người đọc là "bạn".
-- Phong cách: Mang hơi thở ấm áp, chia sẻ khoảnh khắc đẹp và truyền cảm hứng về lối sống chậm.`,
-  preferredModel: 'Claude 3.5 Sonnet (Khuyên dùng cho văn chương)',
+  systemPrompt: '',
+  voiceTexturePrompt: '',
+  preferredModel: '',
   temperature: 0.75,
   autoScoreCheck: true,
 })
 
-/* Tab 8: Lịch sử phiên bản. */
-const versionHistory = [
-  { version: 'v1.4', summary: 'Cập nhật biểu đồ DNA 6 trục & thêm kênh TikTok, Blog', date: '30/10/2026 14:20', author: 'Phạm Chí Trung', current: true },
-  { version: 'v1.3', summary: 'Tinh chỉnh mức độ thể hiện lên 85% và bổ sung 4 ví dụ văn phong', date: '22/10/2026 09:15', author: 'Phạm Chí Trung', current: false },
-  { version: 'v1.2', summary: 'Bổ sung từ điển từ vựng khuyến khích & mẫu câu CTA mềm mại', date: '10/10/2026 16:40', author: 'Phạm Chí Trung', current: false },
-  { version: 'v1.0', summary: 'Khởi tạo hồ sơ Brand Voice – Mộc Cà Phê lần đầu', date: '01/10/2026 08:00', author: 'Phạm Chí Trung', current: false },
+/* 5 Thanh trượt canh chỉnh Chất văn (lưu cố định vào writing_profiles.voice_texture_sliders_json) */
+const voiceTextureSliders = reactive([
+  {
+    key: 'voice_timbre',
+    label: '1. Giọng văn',
+    lowPole: 'Khách quan, đĩnh đạc',
+    highPole: 'Trầm ấm, thủ thỉ tâm tình',
+    baseline: 50,
+    defaultVal: 50,
+    value: 70,
+    color: 'primary',
+    icon: 'tabler-microphone-2',
+    hint: '0%: Sắc sảo, chuẩn mực chuyên gia ↔ 100%: Thủ thỉ gần gũi như đang tâm tình 1-1.',
+  },
+  {
+    key: 'vernacular_flow',
+    label: '2. Tính dân dã tự nhiên',
+    lowPole: 'Chuẩn mực, trau chuốt',
+    highPole: 'Đời thường, thuận tai người Việt',
+    baseline: 50,
+    defaultVal: 50,
+    value: 65,
+    color: 'success',
+    icon: 'tabler-message-circle',
+    hint: '0%: Văn phong gọt giũa, học thuật ↔ 100%: Từ thuần Việt dung dị, khẩu ngữ đời thường tự nhiên.',
+  },
+  {
+    key: 'emotional_nuance',
+    label: '3. Màu sắc cảm xúc',
+    lowPole: 'Tiết chế, điềm tĩnh',
+    highPole: 'Sâu lắng, giàu dư âm',
+    baseline: 50,
+    defaultVal: 50,
+    value: 75,
+    color: 'error',
+    icon: 'tabler-heart-spark',
+    hint: '0%: Khách quan, trung lập ↔ 100%: Giàu chiều sâu nội tâm, gợi cảm xúc qua chi tiết & khoảng lặng.',
+  },
+  {
+    key: 'rhythm_variation',
+    label: '4. Biến thiên nhịp điệu hành văn',
+    lowPole: 'Nhịp đều, êm ả',
+    highPole: 'Co giãn mạnh (câu dài xen câu cực ngắn)',
+    baseline: 50,
+    defaultVal: 50,
+    value: 70,
+    color: 'warning',
+    icon: 'tabler-wave-sine',
+    hint: '0%: Nhịp câu ổn định, thư thái ↔ 100%: Đan xen câu ghép dài với câu đơn 3–6 chữ tạo điểm rơi.',
+  },
+  {
+    key: 'emphasis_glide',
+    label: '5. Tính nhấn và lướt',
+    lowPole: 'Phân bổ đồng đều',
+    highPole: 'Lướt nhanh ý phụ, zoom-in chi tiết đắt',
+    baseline: 50,
+    defaultVal: 50,
+    value: 80,
+    color: 'info',
+    icon: 'tabler-focus-2',
+    hint: '0%: Triển khai đều các ý ↔ 100%: Lướt qua thông tin nền trong 1 câu, dừng lại khắc họa sâu chi tiết đắt giá.',
+  },
+])
+
+/* Danh sách Checkbox các dạng hành văn xoay quanh 5 thuộc tính Chất văn.
+ * Khi người dùng tích chọn / bỏ chọn -> tự động cộng hưởng tính điểm cho 5 thanh trượt
+ * và đồng bộ gợi ý vào Ô 2 (giống cơ chế Sandbox cảm xúc). */
+const VOICE_STYLE_OPTIONS = [
+  {
+    id: 'intimate_whisper',
+    title: 'Thủ thỉ tâm tình & Kể chuyện gần gũi',
+    attributeLabel: 'Giọng văn',
+    color: 'primary',
+    icon: 'tabler-microphone-2',
+    desc: 'Hạ thấp khoảng cách với người đọc, trò chuyện ấm áp như tri kỷ bên tách trà.',
+    deltas: { voice_timbre: 25, emotional_nuance: 15, vernacular_flow: 10, rhythm_variation: 0, emphasis_glide: 5 },
+    directive: 'Giọng văn trầm ấm, thủ thỉ như một người bạn tri kỷ đang kể chuyện 1-1, không lên gân thuyết giáo.',
+  },
+  {
+    id: 'sharp_poised',
+    title: 'Đĩnh đạc, sắc sảo & Chuẩn mực chuyên gia',
+    attributeLabel: 'Giọng văn',
+    color: 'primary',
+    icon: 'tabler-award',
+    desc: 'Khẩu khí chững chạc, lập luận gãy gọn, tạo độ tin cậy cao và tiết chế cảm tính.',
+    deltas: { voice_timbre: -20, vernacular_flow: -15, emotional_nuance: -15, rhythm_variation: 5, emphasis_glide: 15 },
+    directive: 'Giọng văn đĩnh đạc, điềm tĩnh và sắc sảo; ưu tiên nhận định gãy gọn, xác đáng của người có trải nghiệm sâu.',
+  },
+  {
+    id: 'vernacular_natural',
+    title: 'Dân dã đời thường & Thuận tai người Việt',
+    attributeLabel: 'Tính dân dã tự nhiên',
+    color: 'success',
+    icon: 'tabler-message-circle',
+    desc: 'Từ thuần Việt dung dị, mở câu bằng từ nối cảm xúc tự nhiên, thoát mùi văn dịch AI.',
+    deltas: { voice_timbre: 15, vernacular_flow: 30, emotional_nuance: 10, rhythm_variation: 10, emphasis_glide: 0 },
+    directive: 'Ưu tiên từ thuần Việt dung dị, thuận tai; cho phép mở câu bằng từ nối cảm xúc đời thường (Mà thật ra, Ấy vậy mà, Đôi khi...).',
+  },
+  {
+    id: 'quiet_luxury_polish',
+    title: 'Trau chuốt tinh tế & Tiết chế (Quiet Luxury)',
+    attributeLabel: 'Tính dân dã tự nhiên',
+    color: 'success',
+    icon: 'tabler-diamond',
+    desc: 'Từ vựng chọn lọc kỹ lưỡng, sang trọng kín đáo, tuyệt đối tránh khẩu ngữ suồng sã.',
+    deltas: { voice_timbre: 5, vernacular_flow: -20, emotional_nuance: 15, rhythm_variation: 0, emphasis_glide: 20 },
+    directive: 'Câu chữ gọt giũa tinh tế theo tinh thần Quiet Luxury; chọn lọc từ ngữ giàu sức gợi, tránh khẩu ngữ suồng sã.',
+  },
+  {
+    id: 'deep_resonance',
+    title: 'Sâu lắng, giàu dư âm & Gợi tả giác quan',
+    attributeLabel: 'Màu sắc cảm xúc',
+    color: 'error',
+    icon: 'tabler-heart-spark',
+    desc: 'Không dùng tính từ sáo rỗng, để chi tiết ánh sáng/âm thanh/xúc giác tự gợi nỗi niềm.',
+    deltas: { voice_timbre: 15, vernacular_flow: 5, emotional_nuance: 30, rhythm_variation: 10, emphasis_glide: 15 },
+    directive: 'Màu sắc cảm xúc lắng đọng, giàu dư âm; truyền tải qua chi tiết giác quan và khoảng lặng thay vì tính từ cảm thán sáo rỗng.',
+  },
+  {
+    id: 'dynamic_cadence',
+    title: 'Co giãn nhịp thở (Câu dài xen câu cực ngắn)',
+    attributeLabel: 'Biến thiên nhịp điệu',
+    color: 'warning',
+    icon: 'tabler-wave-sine',
+    desc: 'Sau 2–3 câu ghép dài miêu tả liên hoàn sẽ đặt 1 câu đơn 3–6 chữ để chốt nhịp.',
+    deltas: { voice_timbre: 0, vernacular_flow: 10, emotional_nuance: 10, rhythm_variation: 30, emphasis_glide: 15 },
+    directive: 'Biến thiên nhịp câu rõ rệt: đan xen 2–3 câu ghép dài nhiều vế với 1 câu đơn cực ngắn (3–6 chữ) đứng riêng làm điểm rơi.',
+  },
+  {
+    id: 'steady_calm_flow',
+    title: 'Nhịp văn đều đặn, êm ả & Thư thái',
+    attributeLabel: 'Biến thiên nhịp điệu',
+    color: 'warning',
+    icon: 'tabler-ripple',
+    desc: 'Duy trì nhịp thở chậm rãi, liền mạch, dẫn dắt người đọc tuần tự không giật cục.',
+    deltas: { voice_timbre: 10, vernacular_flow: 0, emotional_nuance: 5, rhythm_variation: -25, emphasis_glide: -10 },
+    directive: 'Duy trì nhịp điệu hành văn êm ả, khoan thai; các câu nối tiếp nhau mượt mà, không ngắt nhịp đột ngột.',
+  },
+  {
+    id: 'zoom_in_glide',
+    title: 'Lướt nhanh ý phụ – Zoom-in nhấn sâu chi tiết đắt',
+    attributeLabel: 'Tính nhấn và lướt',
+    color: 'info',
+    icon: 'tabler-focus-2',
+    desc: 'Gói gọn thông tin nền trong 1 câu lướt nhanh, dừng lại khắc họa cận cảnh điểm sáng.',
+    deltas: { voice_timbre: 0, vernacular_flow: 0, emotional_nuance: 15, rhythm_variation: 15, emphasis_glide: 30 },
+    directive: 'Áp dụng triệt để nghệ thuật Nhấn – Lướt: lướt nhanh thông tin nền phụ trong 1 câu ngắn, dừng lại zoom-in khắc họa sâu 1 chi tiết đắt giá nhất.',
+  },
 ]
 
-const saveProfile = () => {
-  console.log('Đã lưu Writing Profile:', profileData)
+const selectedVoiceOptionIds = ref([])
+
+function recalculateVoiceTextureFromCheckboxes() {
+  const checkedItems = VOICE_STYLE_OPTIONS.filter(opt =>
+    selectedVoiceOptionIds.value.includes(opt.id),
+  )
+
+  // 1. Tính lại điểm 5 thanh trượt từ baseline + tổng delta các ô đã chọn
+  voiceTextureSliders.forEach(slider => {
+    const base = typeof slider.baseline === 'number' ? slider.baseline : 50
+    if (!checkedItems.length) {
+      slider.value = base
+      return
+    }
+    const totalDelta = checkedItems.reduce(
+      (sum, item) => sum + (Number(item.deltas?.[slider.key]) || 0),
+      0,
+    )
+    slider.value = Math.max(5, Math.min(100, base + totalDelta))
+  })
+
+  // 2. Đồng bộ các dòng chỉ đạo đã tích chọn vào Ô 2 (giữ nguyên phần văn bản gốc của AI)
+  const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  const currentLines = String(advancedConfig.voiceTexturePrompt || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '' && !allDirectives.has(l))
+
+  const selectedLines = checkedItems.map(o => `- ${o.directive}`)
+  advancedConfig.voiceTexturePrompt = [...currentLines, ...selectedLines].join('\n')
 }
+
+function toggleVoiceStyleOption(optId) {
+  const idx = selectedVoiceOptionIds.value.indexOf(optId)
+  if (idx >= 0) {
+    selectedVoiceOptionIds.value.splice(idx, 1)
+  } else {
+    selectedVoiceOptionIds.value.push(optId)
+  }
+  recalculateVoiceTextureFromCheckboxes()
+}
+
+function resetVoiceTextureSliders() {
+  selectedVoiceOptionIds.value = []
+  voiceTextureSliders.forEach(s => {
+    s.value = s.baseline
+  })
+  const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  advancedConfig.voiceTexturePrompt = String(advancedConfig.voiceTexturePrompt || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '' && !allDirectives.has(l))
+    .join('\n')
+
+  snack.text = 'Đã khôi phục 5 thanh trượt Chất văn và bỏ chọn các gợi ý'
+  snack.color = 'info'
+  snack.show = true
+}
+
+/* ---------------------------------------------------------------------
+ * TAB 8: LỊCH SỬ — render từ analyses + version hiện tại
+ * ------------------------------------------------------------------- */
+const versionHistory = ref([])
+
+/* ---------------------------------------------------------------------
+ * TAB 9 (MỚI): PHÒNG THỬ DNA — sandbox + tone calibration
+ * ------------------------------------------------------------------- */
+const sandboxForm = reactive({
+  topic: '',
+  targetTier: 'medium',
+})
+
+const sandboxGeneratedText = ref('')
+const sandboxSnapshotPrompt = ref('')
+const sandboxHasRan = ref(false)
+
+/* Chỉ render văn bản THẬT sandbox sinh — KHÔNG có fallback mẫu. */
+const activeSandboxSample = computed(() => sandboxGeneratedText.value)
+
+/* Preset hiệu chỉnh tone — giống trang create; khi chọn preset đẩy các
+ * slider tương ứng lên cao rồi gửi tone_overrides xuống Sandbox. */
+const TONE_PRESETS = [
+  { title: 'DNA Gốc', value: 'default' },
+  { title: 'Hóm hỉnh & Gần gũi', value: 'humorous' },
+  { title: 'Đồng cảm & Trân trọng', value: 'empathy' },
+  { title: 'Sắc sảo & Quyết đoán', value: 'assertive' },
+  { title: 'Truyền lửa & Thôi thúc', value: 'inspiring' },
+]
+
+const activeTonePreset = ref('default')
+
+/* 8 trục sắc thái cảm xúc — baseline 50 (điểm cân bằng) để render diff.
+ * (Trên create baseline khác nhau theo profile; ở edit dùng chuẩn 50 đơn giản.) */
+const toneSliders = reactive([
+  { key: 'humor',         category: 'emotion', label: 'Vui vẻ & Hóm hỉnh',        baseline: 50, value: 50, color: 'warning',  icon: 'tabler-mood-smile',   hint: 'Chêm xen ví dụ dí dỏm, chơi chữ tinh tế, tạo không khí nhẹ nhàng' },
+  { key: 'empathy',       category: 'emotion', label: 'Trân trọng & Đồng cảm',    baseline: 50, value: 50, color: 'error',    icon: 'tabler-heart',        hint: 'Ghi nhận nỗ lực độc giả, thấu hiểu khó khăn, giọng điệu ấm áp' },
+  { key: 'assertiveness', category: 'tone',    label: 'Sắc sảo & Quyết đoán',     baseline: 50, value: 50, color: 'primary',  icon: 'tabler-bolt',         hint: 'Luận điểm đanh thép, lập trường dứt khoát, giảm từ ngập ngừng' },
+  { key: 'formality',     category: 'tone',    label: 'Trang trọng vs Thân mật',  baseline: 50, value: 50, color: 'info',     icon: 'tabler-scale',        hint: '0%: Thân tình như bạn bè | 100%: Chuẩn mực học thuật' },
+  { key: 'inspiration',   category: 'emotion', label: 'Nhiệt huyết & Truyền lửa', baseline: 50, value: 50, color: 'warning',  icon: 'tabler-flame',        hint: 'Tiết tấu hào sảng, thắp sáng động lực, khơi gợi niềm tin' },
+  { key: 'candor',        category: 'emotion', label: 'Chân thực & Bộc trực',     baseline: 50, value: 50, color: 'success',  icon: 'tabler-shield-check', hint: 'Kể chuyện thực tế, dám nói sự thật gai góc, không né tránh' },
+  { key: 'depth',         category: 'tone',    label: 'Trí tuệ & Chuyên sâu',     baseline: 50, value: 50, color: 'primary',  icon: 'tabler-brain',        hint: 'Phân tích bản chất, cơ chế hoạt động ngầm, số liệu, kiến trúc' },
+  { key: 'urgency',       category: 'tone',    label: 'Khẩn thiết & Kêu gọi',     baseline: 50, value: 50, color: 'error',    icon: 'tabler-alarm',        hint: 'Nhấn mạnh cấp thiết của thời điểm, thôi thúc hành động ngay' },
+])
+
+function applyTonePreset(presetKey) {
+  activeTonePreset.value = presetKey
+  if (presetKey === 'default') {
+    toneSliders.forEach(t => { t.value = t.baseline })
+    snack.text = 'Đã khôi phục phổ cảm xúc về mặc định'
+  } else if (presetKey === 'humorous') {
+    toneSliders.forEach(t => {
+      if (t.key === 'humor') t.value = 80
+      else if (t.key === 'formality') t.value = 35
+      else if (t.key === 'empathy') t.value = 70
+      else t.value = t.baseline
+    })
+    snack.text = 'Đã áp dụng preset: Hóm hỉnh & Gần gũi'
+  } else if (presetKey === 'empathy') {
+    toneSliders.forEach(t => {
+      if (t.key === 'empathy') t.value = 90
+      else if (t.key === 'candor') t.value = 80
+      else if (t.key === 'formality') t.value = 45
+      else t.value = t.baseline
+    })
+    snack.text = 'Đã áp dụng preset: Đồng cảm & Trân trọng'
+  } else if (presetKey === 'assertive') {
+    toneSliders.forEach(t => {
+      if (t.key === 'assertiveness') t.value = 90
+      else if (t.key === 'depth') t.value = 90
+      else if (t.key === 'urgency') t.value = 70
+      else t.value = t.baseline
+    })
+    snack.text = 'Đã áp dụng preset: Sắc sảo & Quyết đoán'
+  } else if (presetKey === 'inspiring') {
+    toneSliders.forEach(t => {
+      if (t.key === 'inspiration') t.value = 90
+      else if (t.key === 'urgency') t.value = 75
+      else if (t.key === 'humor') t.value = 60
+      else t.value = t.baseline
+    })
+    snack.text = 'Đã áp dụng preset: Truyền lửa & Thôi thúc'
+  }
+  snack.color = 'primary'
+  snack.show = true
+}
+
+function resetToneToBaseline() { applyTonePreset('default') }
+
+/* style_instructions gửi lên backend = style_instructions của profile hiện
+ * tại (KHÔNG ghép TONE CALIBRATION phía client — backend tự render section
+ * đó từ `tone_overrides` qua SnapshotService::renderToneSection, ghép thêm
+ * ở đây sẽ sinh 2 khối calibration trùng lặp trong system prompt). */
+const sandboxStyleInstructions = computed(() => {
+  return advancedConfig.systemPrompt || profile.value?.style_instructions || ''
+})
+
+async function runSandboxDemo() {
+  if (!profile.value?.id) {
+    snack.text = 'Chưa tải được hồ sơ — hãy đợi nạp xong'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  const topic = sandboxForm.topic.trim()
+  if (!topic) {
+    snack.text = 'Vui lòng nhập chủ đề muốn viết thử nghiệm'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  // tone_overrides: key => percent hiện tại trên các slider (8 trục).
+  const toneOverrides = Object.fromEntries(
+    toneSliders.map(t => [t.key, Number(t.value) || 0]),
+  )
+
+  // voice_texture_sliders_json: 5 thanh trượt Chất văn hiện tại ở Tab 7.
+  const voiceSlidersPayload = Object.fromEntries(
+    voiceTextureSliders.map(s => [s.key, Number(s.value) || 0]),
+  )
+
+  try {
+    const res = await store.sandbox(profile.value.id, {
+      topic,
+      target_tier: sandboxForm.targetTier || profile.value.dominant_tier,
+
+      // style_instructions (Ô 1) + voice_texture_instructions (Ô 2) + 5 sliders Chất văn
+      style_instructions: sandboxStyleInstructions.value || undefined,
+      voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || undefined,
+      voice_texture_sliders_json: voiceSlidersPayload,
+      tone_overrides: toneOverrides,
+      temperature: Number(advancedConfig.temperature),
+    })
+
+    sandboxGeneratedText.value = res?.text ?? ''
+    sandboxHasRan.value = true
+
+    if (res?.snapshot?.system_prompt) {
+      sandboxSnapshotPrompt.value = res.snapshot.system_prompt
+    }
+
+    const tierLabel = (res?.target_tier || sandboxForm.targetTier).toUpperCase()
+
+    snack.text = `Đã sinh văn bản thử nghiệm ở cấp độ "${tierLabel}"`
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  }
+}
+
+async function copyText(text, successMessage = 'Đã sao chép') {
+  try {
+    await navigator.clipboard.writeText(text)
+    snack.text = successMessage
+    snack.color = 'success'
+  } catch {
+    snack.text = 'Không sao chép được — chọn và copy thủ công'
+    snack.color = 'error'
+  }
+  snack.show = true
+}
+
+/* ---------------------------------------------------------------------
+ * 9 Tabs điều hướng (thêm Phòng thử DNA ở cuối)
+ * ------------------------------------------------------------------- */
+const profileTabs = [
+  { value: 'overview', label: 'Tổng quan', icon: 'tabler-file-text' },
+  { value: 'style-traits', label: 'Đặc điểm văn phong', icon: 'tabler-adjustments-horizontal' },
+  { value: 'content-structure', label: 'Cấu trúc nội dung', icon: 'tabler-layout-grid' },
+  { value: 'language-rules', label: 'Quy tắc ngôn ngữ', icon: 'tabler-message-2' },
+  { value: 'content-samples', label: 'Mẫu nội dung', icon: 'tabler-files' },
+  { value: 'vocab-cta', label: 'Từ vựng & CTA', icon: 'tabler-heart' },
+  { value: 'advanced', label: 'Cài đặt nâng cao', icon: 'tabler-settings' },
+  { value: 'history', label: 'Lịch sử', icon: 'tabler-history' },
+  { value: 'sandbox', label: 'Phòng thử DNA', icon: 'tabler-flask' },
+]
+
+/* ===================================================================
+ * PARSE/MERGE RULES_JSON — map 2 chiều giữa UI và rules_json
+ * =================================================================== */
+
+/* Trích nhanh các từ in nháy trong vocabulary thành powerWords.
+ * rules_json.vocabulary thường dạng: '...: "từ1", "từ2"...' */
+function extractQuotedWords(text) {
+  const out = []
+  const re = /["“”«»]([^"“”«»]+)["“”«»]/g
+  let m
+  while ((m = re.exec(String(text ?? ''))) !== null) {
+    const w = m[1].trim()
+    if (w && w.length <= 40 && !out.includes(w)) out.push(w)
+  }
+
+  return out
+}
+
+/* Tách pronouns thành "xưng của brand" và "gọi khách" theo các dấu phân
+ * tách phổ biến trong mô tả AI ("xưng X, gọi Y", "X xưng A, gọi B"...). */
+function splitPronouns(text) {
+  const t = String(text ?? '').trim()
+  if (!t) return { brand: '', customer: '' }
+
+  // Ưu tiên tách bằng "gọi" — nửa sau là customer.
+  const idx = t.toLowerCase().search(/gọi\s/)
+  if (idx > 0) {
+    return {
+      brand: t.slice(0, idx).replace(/^[,:.\s]+|[,:.\s]+$/g, ''),
+      customer: t.slice(idx).replace(/^[gG]ọi\s+/, '').replace(/^[,:.\s]+|[,:.\s]+$/g, ''),
+    }
+  }
+
+  // Fallback tách theo dấu phẩy đầu — trước dấu phẩy = brand, sau = customer.
+  const parts = t.split(/[,;|]/).map(s => s.trim()).filter(Boolean)
+  if (parts.length >= 2) return { brand: parts[0], customer: parts.slice(1).join(', ') }
+
+  return { brand: t, customer: '' }
+}
+
+/* Ghép lại pronouns từ 2 ô nhập — giữ cấu trúc "xưng X, gọi Y". */
+function joinPronouns(brand, customer) {
+  const b = String(brand ?? '').trim()
+  const c = String(customer ?? '').trim()
+  if (b && c) return `${b}, gọi ${c}`
+
+  return b || c
+}
+
+/* Convert rules_json.avoid text -> mảng {text, allowed:false}.
+ * Trong mẫu, avoid thường là câu dài liệt kê — tách bằng dấu chấm câu. */
+function avoidToRules(text) {
+  const items = String(text ?? '')
+    .split(/[.\n]+/)
+    .map(s => s.trim())
+    .filter(s => s.length >= 4)
+
+  return items.map(s => ({ text: s, allowed: false }))
+}
+
+function vocabToRules(text) {
+  const words = extractQuotedWords(text)
+
+  return words.length
+    ? words.map(w => ({ text: `Nên dùng "${w}"`, allowed: true }))
+    : []
+}
+
+/* ===================================================================
+ * APPLY PROFILE -> FORM
+ * =================================================================== */
+function applyProfileToForm(p) {
+  profile.value = p
+
+  profileData.name = p.name ?? ''
+  profileData.version = `v${p.version ?? 1}`
+  profileData.isActive = Boolean(p.is_enabled)
+  profileData.status = p.status ?? 'draft'
+  profileData.shortDesc = p.description ?? ''
+  profileData.slug = p.slug ?? ''
+  slugDirty.value = false
+
+  advancedConfig.systemPrompt = p.style_instructions ?? ''
+  advancedConfig.voiceTexturePrompt = p.voice_texture_instructions ?? ''
+  advancedConfig.preferredModel = p.analysis_metadata_json?.ai_model_used ?? 'Chưa rõ (tạo tay)'
+  advancedConfig.temperature = typeof p.temperature === 'number' ? p.temperature : 0.7
+
+  const savedVoiceSliders = p.voice_texture_sliders_json && typeof p.voice_texture_sliders_json === 'object'
+    ? p.voice_texture_sliders_json
+    : {}
+  voiceTextureSliders.forEach(s => {
+    const val = typeof savedVoiceSliders[s.key] === 'number'
+      ? savedVoiceSliders[s.key]
+      : s.defaultVal
+    s.baseline = val
+    s.value = val
+  })
+
+  // Đồng bộ trạng thái checkbox nếu trong Ô 2 đã có các dòng gợi ý tương ứng
+  const currentVoiceText = String(p.voice_texture_instructions ?? '')
+  selectedVoiceOptionIds.value = VOICE_STYLE_OPTIONS
+    .filter(opt => currentVoiceText.includes(opt.directive))
+    .map(opt => opt.id)
+
+  // Nạp 8 thanh trượt Sandbox sắc thái cảm xúc từ DB (tone_sliders_json)
+  const savedToneSliders = p.tone_sliders_json && typeof p.tone_sliders_json === 'object'
+    ? p.tone_sliders_json
+    : {}
+  toneSliders.forEach(t => {
+    const val = typeof savedToneSliders[t.key] === 'number'
+      ? savedToneSliders[t.key]
+      : 50
+    t.baseline = val
+    t.value = val
+  })
+
+  const rules = p.rules_json && typeof p.rules_json === 'object' ? p.rules_json : {}
+
+  // traitSummaryList — 4 ô tóm tắt từ rules (icon/color chọn sẵn).
+  traitSummaryList.value = [
+    { title: 'Giọng điệu', value: rules.tone || '—', icon: 'tabler-microphone', color: 'warning' },
+    { title: 'Cảm xúc', value: rules.emotion || '—', icon: 'tabler-heart', color: 'error' },
+    { title: 'Xưng hô', value: rules.pronouns || '—', icon: 'tabler-users', color: 'success' },
+    { title: 'Vốn từ', value: rules.vocabulary || '—', icon: 'tabler-book', color: 'info' },
+    { title: 'Cách mở bài', value: rules.opening || '—', icon: 'tabler-arrow-bar-to-right', color: 'primary' },
+  ]
+
+  // Cấu trúc nội dung — 3 phần lấy từ rule_keys (thân thiện với tier ngắn).
+  const tierVal = p.dominant_tier
+  const isMicro = tierVal === 'micro'
+  const isShort = tierVal === 'short'
+
+  structureSections.value = [
+    {
+      title: 'Cách mở bài (Opening)',
+      weight: 'rules_json.opening',
+      sentences: '',
+      guideline: 'Cách AI nhận diện thủ pháp mở đầu trong bài mẫu.',
+      sample: rules.opening || (isMicro ? 'Không áp dụng cho văn bản cực ngắn (Micro 1–3 câu — ý liền một mạch).' : 'Chưa có dữ liệu.'),
+    },
+    {
+      title: 'Cấu trúc bài & Chuyển đoạn (Structure & Transitions)',
+      weight: 'rules_json.structure_patterns',
+      sentences: '',
+      guideline: 'Mô hình khung bài tổng thể + nghệ thuật chuyển đoạn giữa các ý.',
+      sample: [rules.structure_patterns, rules.transitions].filter(Boolean).join(' • ') || (isMicro || isShort ? 'Không áp dụng cho văn bản ngắn (Micro/Short — không chia dàn ý nhiều phần).' : 'Chưa có dữ liệu.'),
+    },
+    {
+      title: 'Kết bài & CTA (Ending)',
+      weight: 'rules_json.ending',
+      sentences: '',
+      guideline: 'Cách khép lại bài viết và phong cách kêu gọi hành động.',
+      sample: rules.ending || 'Chưa có dữ liệu.',
+    },
+  ]
+
+  // Quy tắc ngôn ngữ
+  const pr = splitPronouns(rules.pronouns)
+
+  languageConfig.brandPronoun = pr.brand
+  languageConfig.customerPronoun = pr.customer
+  languageConfig.editorialRules = [
+    ...vocabToRules(rules.vocabulary),
+    ...avoidToRules(rules.avoid),
+  ]
+
+  // Mẫu nội dung từ evidence_json — lọc bỏ 'uncertainties' (vì đây là điểm thiếu dữ liệu, không phải phong cách viết)
+  const evs = (Array.isArray(p.evidence_json) ? p.evidence_json : [])
+    .filter(ev => ev.rule_key !== 'uncertainties')
+
+  fullPostSamples.value = evs.map(ev => ({
+    channel: ev.rule_key || 'unknown',
+    date: '',
+    title: ev.note ? ev.note : `Bằng chứng cho ${ruleLabel(ev.rule_key)}`,
+    content: ev.excerpt || '',
+  }))
+
+  // Từ vựng & CTA
+  let vocabDesc = String(rules.vocabulary ?? '').trim()
+  const kwMatch = vocabDesc.search(/[;.]\s*Từ ngữ ưu tiên[:]/i)
+  if (kwMatch > 0) {
+    vocabDesc = vocabDesc.substring(0, kwMatch).trim()
+  }
+  vocabConfig.vocabularyDesc = vocabDesc
+  vocabConfig.powerWords = extractQuotedWords(rules.vocabulary)
+  vocabConfig.negativeWords = avoidToRules(rules.avoid).map(r => r.text)
+  vocabConfig.ctaPhilosophy = rules.ending || ''
+
+  // Taxonomy
+  categories.value = (p.categories ?? []).map(c => c.id)
+  tags.value = (p.tags ?? []).map(t => t.id)
+  newTags.value = []
+
+  // Lịch sử — mỗi lần giải mã 1 dòng + entry hiện tại trên đầu.
+  const analyses = Array.isArray(p.analyses) ? p.analyses : []
+
+  versionHistory.value = [
+    {
+      version: `v${p.version ?? 1}`,
+      summary: 'Phiên bản hiện tại',
+      date: p.updated_at ? new Date(p.updated_at).toLocaleString('vi-VN') : '',
+      author: '',
+      current: true,
+    },
+    ...analyses.map(a => ({
+      version: `analysis`,
+      summary: `Giải mã ${a.status === 'succeeded' ? 'thành công' : a.status}`,
+      date: a.created_at ? new Date(a.created_at).toLocaleString('vi-VN') : '',
+      author: a.ai_run_id ? `ai_run:${a.ai_run_id.slice(0, 8)}` : '',
+      current: false,
+    })),
+  ]
+}
+
+/* ===================================================================
+ * BUILD PAYLOAD PUT — merge các khóa rules_json user chỉnh trên UI,
+ * giữ nguyên 9 khóa còn lại từ profile.rules_json hiện tại.
+ * =================================================================== */
+function buildRulesJsonPayload() {
+  const current = (profile.value?.rules_json && typeof profile.value.rules_json === 'object')
+    ? { ...profile.value.rules_json }
+    : {}
+
+  // Các khóa có UI chỉnh: pronouns (từ 2 ô), vocabulary (powerWords),
+  // avoid (negativeWords), opening/structure_patterns/transitions/ending
+  // (3 structureSections), tone/emotion (từ traitSummaryList — chỉ đọc
+  // trên UI nên không đè; nếu muốn chỉnh được thì thêm input).
+  const pronounsJoined = joinPronouns(languageConfig.brandPronoun, languageConfig.customerPronoun)
+  if (pronounsJoined) current.pronouns = pronounsJoined
+
+  if (structureSections.value.length >= 3) {
+    current.opening = structureSections.value[0]?.sample ?? current.opening
+    // structure_patterns & transitions gộp trong section 2 — giữ chuỗi gộp,
+    // không tách lại (vì UI chỉ hiển thị 1 sample gộp).
+    const s2 = structureSections.value[1]?.sample ?? ''
+
+    if (s2 && s2 !== 'Chưa có dữ liệu.') {
+      // Tách lại theo ' • ' nếu có (rules gốc đã join bằng •).
+      const parts = s2.split(' • ').map(s => s.trim()).filter(Boolean)
+
+      if (parts.length >= 2) {
+        current.structure_patterns = parts[0]
+        current.transitions = parts.slice(1).join(' • ')
+      } else {
+        current.structure_patterns = s2
+      }
+    }
+    current.ending = structureSections.value[2]?.sample ?? current.ending
+  }
+
+  // 1. Vocabulary + Power Words (ghép vào rules_json.vocabulary)
+  let finalVocab = (vocabConfig.vocabularyDesc ?? '').trim()
+  const kwIdx = finalVocab.search(/[;.]\s*Từ ngữ ưu tiên[:]/i)
+  if (kwIdx > 0) {
+    finalVocab = finalVocab.substring(0, kwIdx).trim()
+  }
+
+  if (Array.isArray(vocabConfig.powerWords) && vocabConfig.powerWords.length > 0) {
+    const quotedList = vocabConfig.powerWords.map(w => `"${w.trim()}"`).join(', ')
+    finalVocab = finalVocab
+      ? `${finalVocab}. Từ ngữ ưu tiên: ${quotedList}.`
+      : `Từ ngữ ưu tiên: ${quotedList}.`
+  }
+
+  if (finalVocab) {
+    current.vocabulary = finalVocab.slice(0, 495)
+  }
+
+  // 2. CTA / Ending
+  if (vocabConfig.ctaPhilosophy?.trim()) {
+    current.ending = vocabConfig.ctaPhilosophy.trim()
+  }
+
+  // avoid từ negativeWords (các dòng đã bỏ allowed=false ra).
+  if (Array.isArray(vocabConfig.negativeWords) && vocabConfig.negativeWords.length) {
+    current.avoid = vocabConfig.negativeWords.join('. ')
+  }
+
+  return current
+}
+
+function buildEvidenceJsonPayload() {
+  // Giữ nguyên evidence_json hiện tại — tab Mẫu nội dung chỉ hiển thị,
+  // không cho chỉnh sửa (chưa thiết kế edit từng excerpt).
+  return Array.isArray(profile.value?.evidence_json) ? profile.value.evidence_json : []
+}
+
+async function saveProfile() {
+  const name = profileData.name.trim()
+  if (!name) {
+    snack.text = 'Vui lòng nhập tên Writing Profile'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  const voiceSlidersPayload = Object.fromEntries(
+    voiceTextureSliders.map(s => [s.key, Number(s.value) || 0]),
+  )
+
+  const toneSlidersPayload = Object.fromEntries(
+    toneSliders.map(t => [t.key, Number(t.value) || 0]),
+  )
+
+  const payload = {
+    name,
+    description: profileData.shortDesc?.trim() || null,
+    dominant_tier: profile.value?.dominant_tier || 'medium',
+    rules_json: buildRulesJsonPayload(),
+    evidence_json: buildEvidenceJsonPayload(),
+    style_instructions: advancedConfig.systemPrompt?.trim() || null,
+    voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || null,
+    voice_texture_sliders_json: voiceSlidersPayload,
+    tone_sliders_json: toneSlidersPayload,
+    temperature: Number(advancedConfig.temperature),
+    status: profileData.isActive ? 'active' : 'draft',
+    is_enabled: Boolean(profileData.isActive),
+
+    // Taxonomy — TaxonomyField v-model đã chuẩn hóa: categories = id[],
+    // tags = (id|name)[]; new_tags = string[] do user gõ mới.
+    categories: categories.value,
+    tags: tags.value.filter(t => typeof t !== 'string'),
+    new_tags: [...tags.value.filter(t => typeof t === 'string'), ...newTags.value],
+  }
+
+  // Slug chỉ gửi khi user thực sự đổi (tránh auto-resync thừa).
+  if (slugDirty.value && profileData.slug?.trim())
+    payload.slug = profileData.slug.trim()
+
+  saving.value = true
+  try {
+    const saved = await store.updateProfile(profile.value.id, payload)
+
+    applyProfileToForm(saved)
+
+    snack.text = `Đã lưu "${saved?.name ?? name}" — version ${saved?.version ?? ''}`
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  } finally {
+    saving.value = false
+  }
+}
+
+/* Slug — blur ô name/slug gọi suggest, loại trừ chính id này. */
+async function runSlugSuggest(source) {
+  const src = String(source ?? '').trim()
+  if (!src) return
+
+  try {
+    const res = await store.suggestSlug({
+      source: src,
+      sluggable_type: 'writing_profile',
+      sluggable_id: profile.value?.id,
+    })
+    if (!res) return
+    if (res?.slug) profileData.slug = res.slug
+    slugAvailable.value = res?.available ?? null
+    slugTakenBy.value = res?.taken_by ?? null
+  } catch {
+    slugAvailable.value = null
+    slugTakenBy.value = null
+  }
+}
+
+function onNameBlur() { runSlugSuggest(profileData.name) }
+function onSlugBlur() { runSlugSuggest(profileData.slug) }
+
+/* SlugField update → đánh dấu dirty để chỉ gửi khi đổi. */
+function onSlugInput(v) {
+  profileData.slug = v
+  slugDirty.value = true
+}
+
+/* ===================================================================
+ * LOAD
+ * =================================================================== */
+onMounted(async () => {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const p = await store.fetchProfile(route.params.id)
+
+    applyProfileToForm(p)
+
+    // options (tiers/ruleKeys) cần cho chuẩn hóa key — nạp song song an toàn.
+    store.fetchOptions().catch(() => {})
+  } catch (e) {
+    loadError.value = firstErrorMessage(e)
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <template>
@@ -241,8 +1009,18 @@ const saveProfile = () => {
 
       <div class="d-flex gap-4 align-center flex-wrap">
         <VBtn
+          variant="tonal"
+          color="secondary"
+          prepend-icon="tabler-arrow-left"
+          @click="router.push({ name: 'admin-writing-style-writing-profiles-list' })"
+        >
+          Quay lại
+        </VBtn>
+        <VBtn
           color="primary"
           prepend-icon="tabler-check"
+          :loading="saving"
+          :disabled="saving || loading || !profile"
           @click="saveProfile"
         >
           Lưu thay đổi
@@ -250,1086 +1028,1414 @@ const saveProfile = () => {
       </div>
     </div>
 
-    <!-- ================= 2. BANNER HỒ SƠ + THANH TABS ================= -->
-    <VCard class="mb-6">
-      <VCardText>
-        <VRow class="align-center">
-          <VCol
-            cols="12"
-            class="d-flex align-center gap-x-4"
-          >
-            <!-- Avatar + nút sửa nhỏ -->
-            <div class="position-relative">
+    <!-- Error loading -->
+    <VAlert
+      v-if="loadError"
+      type="error"
+      variant="tonal"
+      class="mb-6"
+    >
+      {{ loadError }}
+      <template #append>
+        <VBtn
+          size="small"
+          variant="text"
+          @click="router.push({ name: 'admin-writing-style-writing-profiles-list' })"
+        >
+          Về danh sách
+        </VBtn>
+      </template>
+    </VAlert>
+
+    <!-- Loading -->
+    <div
+      v-else-if="loading"
+      class="d-flex justify-center py-12"
+    >
+      <VProgressCircular
+        indeterminate
+        color="primary"
+      />
+    </div>
+
+    <template v-else>
+      <!-- ================= 2. BANNER HỒ SƠ + THANH TABS ================= -->
+      <VCard class="mb-6">
+        <VCardText>
+          <VRow class="align-center">
+            <VCol
+              cols="12"
+              class="d-flex align-center gap-x-4"
+            >
               <VAvatar
                 size="72"
                 rounded
                 variant="tonal"
-                color="warning"
+                color="primary"
               >
-                <VImg
-                  src="https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=200"
-                  cover
+                <VIcon
+                  icon="tabler-dna"
+                  size="40"
                 />
               </VAvatar>
-              <VBtn
-                icon="tabler-pencil"
-                size="24"
-                color="primary"
-                class="avatar-edit-btn text-white"
-                elevation="2"
-              />
-            </div>
 
-            <div>
-              <div class="d-flex align-center flex-wrap gap-x-2 mb-1">
-                <h5 class="text-h5 font-weight-medium mb-0">
-                  {{ profileData.name }}
-                </h5>
-                <VChip
-                  size="small"
-                  color="primary"
-                  variant="tonal"
-                  label
-                >
-                  {{ profileData.version }}
-                </VChip>
-                <VChip
-                  size="small"
-                  :color="profileData.isActive ? 'success' : 'secondary'"
-                  variant="tonal"
-                  label
-                >
-                  {{ profileData.isActive ? 'Đang sử dụng' : 'Tạm dừng' }}
-                </VChip>
-                <VSwitch
-                  v-model="profileData.isActive"
-                  color="primary"
-                  density="compact"
-                  hide-details
-                  inset
-                  class="ms-1"
-                />
-              </div>
-              <div class="text-body-2 text-medium-emphasis">
-                {{ profileData.shortDesc }}
-              </div>
-            </div>
-          </VCol>
-        </VRow>
-      </VCardText>
-
-      <VDivider />
-
-      <VTabs
-        v-model="activeTab"
-        show-arrows
-        class="px-4"
-      >
-        <VTab
-          v-for="tab in profileTabs"
-          :key="tab.value"
-          :value="tab.value"
-        >
-          <VIcon
-            :icon="tab.icon"
-            size="18"
-            class="me-2"
-          />
-          {{ tab.label }}
-        </VTab>
-      </VTabs>
-    </VCard>
-
-    <!-- ================= 3. NỘI DUNG 8 TABS ================= -->
-    <VWindow v-model="activeTab">
-      <!-- TAB 1: TỔNG QUAN -->
-      <VWindowItem value="overview">
-        <VRow>
-          <VCol
-            cols="12"
-            lg="7"
-          >
-            <VCard
-              title="Thông tin cơ bản của Writing Profile"
-              subtitle="Thiết lập tên gọi, phiên bản, ngành hàng và thông điệp định vị"
-            >
-              <VCardText>
-                <VRow>
-                  <VCol
-                    cols="12"
-                    sm="8"
-                  >
-                    <AppTextField
-                      v-model="profileData.name"
-                      label="Tên Writing Profile *"
-                    />
-                  </VCol>
-                  <VCol
-                    cols="12"
-                    sm="4"
-                  >
-                    <AppTextField
-                      v-model="profileData.version"
-                      label="Phiên bản"
-                    />
-                  </VCol>
-                  <VCol
-                    cols="12"
-                    sm="6"
-                  >
-                    <AppSelect
-                      v-model="overviewForm.industry"
-                      :items="['F&B – Chuỗi Cà phê & Đồ uống', 'Du lịch & Nghỉ dưỡng', 'Bán lẻ & Thời trang', 'Công nghệ & SaaS']"
-                      label="Ngành hàng / Lĩnh vực"
-                    />
-                  </VCol>
-                  <VCol
-                    cols="12"
-                    sm="6"
-                  >
-                    <AppSelect
-                      v-model="overviewForm.primaryGoal"
-                      :items="['Kết nối cảm xúc & Xây dựng cộng đồng', 'Thúc đẩy doanh số & Khuyến mãi', 'Chia sẻ kiến thức chuyên môn']"
-                      label="Mục tiêu truyền thông chính"
-                    />
-                  </VCol>
-                  <VCol cols="12">
-                    <AppTextarea
-                      v-model="profileData.shortDesc"
-                      label="Mô tả ngắn gọn"
-                      rows="2"
-                    />
-                  </VCol>
-                  <VCol cols="12">
-                    <VLabel class="mb-2 text-body-2">
-                      Thẻ phân loại (Profile Tags)
-                    </VLabel>
-                    <div class="d-flex flex-wrap gap-2">
-                      <VChip
-                        v-for="tag in overviewForm.tags"
-                        :key="tag"
-                        size="small"
-                        color="primary"
-                        variant="tonal"
-                        closable
-                      >
-                        {{ tag }}
-                      </VChip>
-                    </div>
-                  </VCol>
-                </VRow>
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <VCol
-            cols="12"
-            lg="5"
-          >
-            <VCard
-              title="Chân dung Độc giả & Giá trị cốt lõi"
-              subtitle="Đối tượng khách hàng mà văn phong này hướng tới"
-            >
-              <VCardText>
-                <AppTextarea
-                  v-model="overviewForm.targetAudience"
-                  label="Độc giả mục tiêu (Target Persona)"
-                  rows="3"
-                  class="mb-4"
-                />
-                <VLabel class="mb-2 text-body-2">
-                  3 Trụ cột cảm xúc thương hiệu
-                </VLabel>
-                <div class="d-flex flex-column gap-3">
-                  <div
-                    v-for="pillar in overviewForm.brandPillars"
-                    :key="pillar.title"
-                    class="pa-3 rounded border d-flex align-center"
-                  >
-                    <VAvatar
-                      :color="pillar.color"
-                      variant="tonal"
-                      size="36"
-                      rounded
-                      class="me-3"
-                    >
-                      <VIcon
-                        :icon="pillar.icon"
-                        size="20"
-                      />
-                    </VAvatar>
-                    <div>
-                      <div class="text-body-2 font-weight-medium text-high-emphasis">
-                        {{ pillar.title }}
-                      </div>
-                      <div class="text-caption text-medium-emphasis">
-                        {{ pillar.desc }}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </VCardText>
-            </VCard>
-          </VCol>
-        </VRow>
-      </VWindowItem>
-
-      <!-- TAB 2: ĐẶC ĐIỂM VĂN PHONG -->
-      <VWindowItem value="style-traits">
-        <VRow>
-          <!-- Tổng quan đặc điểm: Radar + summary -->
-          <VCol
-            cols="12"
-            lg="6"
-          >
-            <VCard
-              title="Tổng quan đặc điểm"
-              subtitle="DNA văn phong của bạn"
-              class="mb-6"
-            >
-              <VCardText>
-                <VRow class="align-center">
-                  <VCol
-                    cols="12"
-                    sm="7"
-                    class="d-flex justify-center"
-                  >
-                    <svg
-                      viewBox="0 0 320 265"
-                      class="radar-chart"
-                    >
-                      <polygon
-                        points="160,35 247,85 247,185 160,235 73,185 73,85"
-                        class="radar-ring radar-ring--outer"
-                      />
-                      <polygon
-                        points="160,68 218,101 218,168 160,202 102,168 102,101"
-                        class="radar-ring"
-                      />
-                      <polygon
-                        points="160,101 189,118 189,151 160,168 131,151 131,118"
-                        class="radar-ring radar-ring--inner"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="160"
-                        y2="35"
-                        class="radar-axis"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="247"
-                        y2="85"
-                        class="radar-axis"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="247"
-                        y2="185"
-                        class="radar-axis"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="160"
-                        y2="235"
-                        class="radar-axis"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="73"
-                        y2="185"
-                        class="radar-axis"
-                      />
-                      <line
-                        x1="160"
-                        y1="135"
-                        x2="73"
-                        y2="85"
-                        class="radar-axis"
-                      />
-                      <polygon
-                        points="160,40 236,91 226,173 160,207 83,179 82,90"
-                        class="radar-data"
-                      />
-                      <circle
-                        cx="160"
-                        cy="40"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <circle
-                        cx="236"
-                        cy="91"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <circle
-                        cx="226"
-                        cy="173"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <circle
-                        cx="160"
-                        cy="207"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <circle
-                        cx="83"
-                        cy="179"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <circle
-                        cx="82"
-                        cy="90"
-                        r="3.5"
-                        class="radar-dot"
-                      />
-                      <text
-                        x="160"
-                        y="16"
-                        text-anchor="middle"
-                        class="radar-label-bold"
-                      >Thân thiện</text>
-                      <text
-                        x="160"
-                        y="28"
-                        text-anchor="middle"
-                        class="radar-label-sub"
-                      >(95%)</text>
-                      <text
-                        x="256"
-                        y="78"
-                        text-anchor="start"
-                        class="radar-label-bold"
-                      >Truyền cảm hứng</text>
-                      <text
-                        x="256"
-                        y="90"
-                        text-anchor="start"
-                        class="radar-label-sub"
-                      >(88%)</text>
-                      <text
-                        x="256"
-                        y="184"
-                        text-anchor="start"
-                        class="radar-label-bold"
-                      >Chuyên nghiệp</text>
-                      <text
-                        x="256"
-                        y="196"
-                        text-anchor="start"
-                        class="radar-label-sub"
-                      >(76%)</text>
-                      <text
-                        x="160"
-                        y="250"
-                        text-anchor="middle"
-                        class="radar-label-bold"
-                      >Sáng tạo</text>
-                      <text
-                        x="160"
-                        y="262"
-                        text-anchor="middle"
-                        class="radar-label-sub"
-                      >(72%)</text>
-                      <text
-                        x="64"
-                        y="184"
-                        text-anchor="end"
-                        class="radar-label-bold"
-                      >Gần gũi</text>
-                      <text
-                        x="64"
-                        y="196"
-                        text-anchor="end"
-                        class="radar-label-sub"
-                      >(89%)</text>
-                      <text
-                        x="64"
-                        y="78"
-                        text-anchor="end"
-                        class="radar-label-bold"
-                      >Tích cực</text>
-                      <text
-                        x="64"
-                        y="90"
-                        text-anchor="end"
-                        class="radar-label-sub"
-                      >(90%)</text>
-                    </svg>
-                  </VCol>
-                  <VCol
-                    cols="12"
-                    sm="5"
-                  >
-                    <div class="d-flex flex-column gap-3">
-                      <div
-                        v-for="attr in traitSummaryList"
-                        :key="attr.title"
-                        class="d-flex align-center"
-                      >
-                        <VAvatar
-                          :color="attr.color"
-                          variant="tonal"
-                          size="34"
-                          rounded
-                          class="me-3 flex-shrink-0"
-                        >
-                          <VIcon
-                            :icon="attr.icon"
-                            size="18"
-                          />
-                        </VAvatar>
-                        <div>
-                          <div class="text-body-2 font-weight-medium text-high-emphasis">
-                            {{ attr.title }}
-                          </div>
-                          <div class="text-caption text-medium-emphasis">
-                            {{ attr.value }}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </VCol>
-                </VRow>
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <!-- Chi tiết đặc điểm -->
-          <VCol
-            cols="12"
-            lg="6"
-          >
-            <VCard
-              title="Chi tiết đặc điểm"
-              subtitle="Mô tả chi tiết hơn về phong cách viết"
-              class="mb-6"
-            >
-              <VCardText>
-                <AppTextarea
-                  v-model="traitDetailText"
-                  rows="5"
-                  counter="2000"
-                  class="mb-4"
-                />
-                <div class="d-flex justify-space-between align-center mb-1">
-                  <span class="text-body-2 font-weight-medium">Mức độ thể hiện</span>
-                  <span class="text-subtitle-1 font-weight-medium text-primary">{{ expressionLevel }}%</span>
-                </div>
-                <VSlider
-                  v-model="expressionLevel"
-                  min="0"
-                  max="100"
-                  step="1"
-                  color="primary"
-                  hide-details
-                />
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <!-- Ví dụ văn phong -->
-          <VCol
-            cols="12"
-            lg="6"
-          >
-            <VCard class="mb-6">
-              <VCardItem>
-                <template #title>
-                  Ví dụ văn phong
-                </template>
-                <template #subtitle>
-                  Các đoạn văn mẫu thể hiện phong cách viết
-                </template>
-                <template #append>
-                  <VBtn
-                    variant="tonal"
-                    color="primary"
-                    size="small"
-                    prepend-icon="tabler-plus"
-                    @click="addSampleQuote"
-                  >
-                    Thêm mẫu
-                  </VBtn>
-                </template>
-              </VCardItem>
-              <VCardText>
-                <div class="quote-showcase-box pa-4 rounded mb-4">
-                  <div class="d-flex align-center justify-space-between gap-4">
-                    <div class="d-flex align-start flex-grow-1">
-                      <VIcon
-                        icon="tabler-quote"
-                        size="26"
-                        color="primary"
-                        class="me-2 mt-n1"
-                      />
-                      <p class="text-body-2 font-italic text-high-emphasis mb-0">
-                        “{{ sampleQuotes[currentQuoteIdx].text }}”
-                      </p>
-                    </div>
-                    <VAvatar
-                      rounded
-                      size="84"
-                      class="flex-shrink-0 border"
-                    >
-                      <VImg
-                        :src="sampleQuotes[currentQuoteIdx].image"
-                        cover
-                      />
-                    </VAvatar>
-                  </div>
-                </div>
-                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
-                  <div class="d-flex flex-wrap gap-2">
-                    <VChip
-                      v-for="tag in sampleQuotes[currentQuoteIdx].tags"
-                      :key="tag"
-                      size="x-small"
-                      color="primary"
-                      variant="tonal"
-                      label
-                    >
-                      {{ tag }}
-                    </VChip>
-                  </div>
-                  <div class="d-flex align-center gap-1">
-                    <span
-                      v-for="(_, qIdx) in sampleQuotes"
-                      :key="qIdx"
-                      class="quote-dot cursor-pointer"
-                      :class="{ 'quote-dot--active': currentQuoteIdx === qIdx }"
-                      @click="currentQuoteIdx = qIdx"
-                    />
-                  </div>
-                  <div class="d-flex align-center gap-1">
-                    <IconBtn
-                      size="small"
-                      @click="prevQuote"
-                    >
-                      <VIcon icon="tabler-chevron-left" />
-                    </IconBtn>
-                    <IconBtn
-                      size="small"
-                      @click="nextQuote"
-                    >
-                      <VIcon icon="tabler-chevron-right" />
-                    </IconBtn>
-                  </div>
-                </div>
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <!-- Tùy chọn hiển thị -->
-          <VCol
-            cols="12"
-            lg="6"
-          >
-            <VCard
-              title="Tùy chọn hiển thị"
-              subtitle="Cách áp dụng và hiển thị phong cách này"
-              class="mb-6"
-            >
-              <VCardText>
-                <VRow>
-                  <VCol
-                    v-for="ch in displayChannels"
-                    :key="ch.name"
-                    cols="12"
-                    sm="6"
-                  >
-                    <div class="channel-toggle-box px-3 py-2 rounded border d-flex align-center justify-space-between">
-                      <div class="d-flex align-center text-truncate me-2">
-                        <VAvatar
-                          :color="ch.color"
-                          size="24"
-                          rounded
-                          class="me-2 flex-shrink-0"
-                        >
-                          <VIcon
-                            :icon="ch.icon"
-                            size="14"
-                            color="white"
-                          />
-                        </VAvatar>
-                        <span class="text-body-2 font-weight-medium text-high-emphasis text-truncate">
-                          {{ ch.name }}
-                        </span>
-                      </div>
-                      <VSwitch
-                        v-model="ch.enabled"
-                        color="primary"
-                        density="compact"
-                        hide-details
-                        inset
-                      />
-                    </div>
-                  </VCol>
-                </VRow>
-              </VCardText>
-            </VCard>
-          </VCol>
-        </VRow>
-      </VWindowItem>
-
-      <!-- TAB 3: CẤU TRÚC NỘI DUNG -->
-      <VWindowItem value="content-structure">
-        <VCard>
-          <VCardItem>
-            <template #title>
-              Khung Cấu trúc Bài viết Chuẩn (Content Skeleton)
-            </template>
-            <template #subtitle>
-              Thiết lập tỷ lệ độ dài, cách dẫn dắt câu chuyện và quy tắc ngắt đoạn cho AI
-            </template>
-            <template #append>
-              <VBtn
-                color="primary"
-                prepend-icon="tabler-plus"
-              >
-                Thêm khối cấu trúc
-              </VBtn>
-            </template>
-          </VCardItem>
-          <VCardText>
-            <VRow>
-              <VCol
-                v-for="(sec, idx) in structureSections"
-                :key="sec.title"
-                cols="12"
-                md="4"
-              >
-                <div class="border rounded pa-4 h-100 d-flex flex-column justify-space-between">
-                  <div>
-                    <div class="d-flex justify-space-between align-center mb-3">
-                      <VChip
-                        size="small"
-                        color="primary"
-                        variant="flat"
-                        label
-                      >
-                        Phần {{ idx + 1 }} • {{ sec.weight }}
-                      </VChip>
-                      <span class="text-caption text-medium-emphasis">{{ sec.sentences }}</span>
-                    </div>
-                    <div class="text-subtitle-1 font-weight-medium text-high-emphasis mb-2">
-                      {{ sec.title }}
-                    </div>
-                    <div class="text-body-2 text-medium-emphasis mb-3">
-                      {{ sec.guideline }}
-                    </div>
-                  </div>
-                  <div class="pa-3 rounded bg-surface border text-body-2 font-italic text-high-emphasis">
-                    “{{ sec.sample }}”
-                  </div>
-                </div>
-              </VCol>
-            </VRow>
-          </VCardText>
-        </VCard>
-      </VWindowItem>
-
-      <!-- TAB 4: QUY TẮC NGÔN NGỮ -->
-      <VWindowItem value="language-rules">
-        <VRow>
-          <VCol
-            cols="12"
-            md="6"
-          >
-            <VCard title="Quy chuẩn Xưng hô & Hình thức câu chữ">
-              <VCardText class="d-flex flex-column gap-4">
-                <AppSelect
-                  v-model="languageConfig.brandPronoun"
-                  :items="['Mình / Tụi mình / Mộc', 'Chúng tôi / Mộc Cà Phê', 'Ad / Nhà Mộc']"
-                  label="Đại từ xưng hô của Thương hiệu"
-                />
-                <AppSelect
-                  v-model="languageConfig.customerPronoun"
-                  :items="['Bạn / Cả nhà / Người thương', 'Quý khách / Anh Chị', 'Các tín đồ cà phê']"
-                  label="Cách gọi Khách hàng / Độc giả"
-                />
-                <AppSelect
-                  v-model="languageConfig.emojiDensity"
-                  :items="['Vừa phải (2–3 emoji ấm áp mỗi đoạn: ☕🌿✨)', 'Tối giản (Chỉ dùng ở cuối bài)', 'Không sử dụng Emoji']"
-                  label="Mật độ sử dụng Emoji"
-                />
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <VCol
-            cols="12"
-            md="6"
-          >
-            <VCard title="Danh sách Kiểm duyệt Ngôn từ (Do's & Don'ts)">
-              <VCardText class="d-flex flex-column gap-3">
-                <div
-                  v-for="rule in languageConfig.editorialRules"
-                  :key="rule.text"
-                  class="pa-3 rounded border d-flex align-center justify-space-between"
-                >
-                  <div class="d-flex align-center text-body-2 text-high-emphasis">
-                    <VIcon
-                      :icon="rule.allowed ? 'tabler-circle-check' : 'tabler-circle-x'"
-                      :color="rule.allowed ? 'success' : 'error'"
-                      size="18"
-                      class="me-2"
-                    />
-                    <span>{{ rule.text }}</span>
-                  </div>
+              <div class="flex-grow-1">
+                <div class="d-flex align-center flex-wrap gap-x-2 mb-1">
+                  <h5 class="text-h5 font-weight-medium mb-0">
+                    {{ profileData.name }}
+                  </h5>
                   <VChip
-                    size="x-small"
-                    :color="rule.allowed ? 'success' : 'error'"
+                    size="small"
+                    color="primary"
                     variant="tonal"
                     label
                   >
-                    {{ rule.allowed ? 'Khuyến khích' : 'Cấm dùng' }}
+                    {{ profileData.version }}
                   </VChip>
-                </div>
-              </VCardText>
-            </VCard>
-          </VCol>
-        </VRow>
-      </VWindowItem>
-
-      <!-- TAB 5: MẪU NỘI DUNG -->
-      <VWindowItem value="content-samples">
-        <VCard>
-          <VCardItem>
-            <template #title>
-              Thư viện Bài viết Mẫu (Brand Voice Samples)
-            </template>
-            <template #subtitle>
-              Các bài đăng mẫu làm tài liệu tham chiếu (Few-Shot Examples) cho AI học theo
-            </template>
-            <template #append>
-              <VBtn
-                color="primary"
-                prepend-icon="tabler-plus"
-              >
-                Thêm bài mẫu mới
-              </VBtn>
-            </template>
-          </VCardItem>
-          <VCardText>
-            <VRow>
-              <VCol
-                v-for="post in fullPostSamples"
-                :key="post.title"
-                cols="12"
-                md="4"
-              >
-                <div class="border rounded pa-4 h-100 d-flex flex-column justify-space-between">
-                  <div>
-                    <div class="d-flex justify-space-between align-center mb-3">
-                      <VChip
-                        size="small"
-                        color="primary"
-                        variant="tonal"
-                        label
-                      >
-                        {{ post.channel }}
-                      </VChip>
-                      <span class="text-caption text-medium-emphasis">{{ post.date }}</span>
-                    </div>
-                    <div class="text-subtitle-1 font-weight-medium text-high-emphasis mb-2">
-                      {{ post.title }}
-                    </div>
-                    <div
-                      class="text-body-2 text-medium-emphasis mb-3"
-                      style="white-space: pre-line; line-height: 1.6;"
-                    >
-                      {{ post.content }}
-                    </div>
-                  </div>
-                  <div class="d-flex justify-end gap-2 pt-3 border-t">
-                    <VBtn
-                      variant="text"
-                      size="small"
-                      color="secondary"
-                      prepend-icon="tabler-copy"
-                    >
-                      Sao chép
-                    </VBtn>
-                    <VBtn
-                      variant="tonal"
-                      size="small"
-                      color="primary"
-                      prepend-icon="tabler-pencil"
-                    >
-                      Chỉnh sửa
-                    </VBtn>
-                  </div>
-                </div>
-              </VCol>
-            </VRow>
-          </VCardText>
-        </VCard>
-      </VWindowItem>
-
-      <!-- TAB 6: TỪ VỰNG & CTA -->
-      <VWindowItem value="vocab-cta">
-        <VRow>
-          <VCol
-            cols="12"
-            md="6"
-          >
-            <VCard title="Từ điển Từ vựng Thương hiệu (Brand Lexicon)">
-              <VCardText>
-                <div class="mb-5">
-                  <div class="text-body-2 font-weight-medium text-success mb-2">
-                    Từ khóa Đặc trưng Nên dùng (Power Words)
-                  </div>
-                  <div class="d-flex flex-wrap gap-2">
-                    <VChip
-                      v-for="w in vocabConfig.powerWords"
-                      :key="w"
-                      size="small"
-                      color="success"
-                      variant="tonal"
-                      closable
-                    >
-                      {{ w }}
-                    </VChip>
-                  </div>
-                </div>
-                <div>
-                  <div class="text-body-2 font-weight-medium text-error mb-2">
-                    Từ khóa Cấm xuất hiện (Negative Keywords)
-                  </div>
-                  <div class="d-flex flex-wrap gap-2">
-                    <VChip
-                      v-for="w in vocabConfig.negativeWords"
-                      :key="w"
-                      size="small"
-                      color="error"
-                      variant="tonal"
-                      closable
-                    >
-                      {{ w }}
-                    </VChip>
-                  </div>
-                </div>
-              </VCardText>
-            </VCard>
-          </VCol>
-
-          <VCol
-            cols="12"
-            md="6"
-          >
-            <VCard title="Mẫu câu Kêu gọi Hành động (CTA Templates)">
-              <VCardText class="d-flex flex-column gap-3">
-                <div
-                  v-for="cta in vocabConfig.ctaList"
-                  :key="cta.type"
-                  class="pa-3 rounded border"
-                >
-                  <div class="text-body-2 font-weight-medium text-primary mb-1">
-                    {{ cta.type }}
-                  </div>
-                  <div class="text-body-2 text-high-emphasis font-italic">
-                    “{{ cta.text }}”
-                  </div>
-                </div>
-              </VCardText>
-            </VCard>
-          </VCol>
-        </VRow>
-      </VWindowItem>
-
-      <!-- TAB 7: CÀI ĐẶT NÂNG CAO -->
-      <VWindowItem value="advanced">
-        <VCard
-          title="Cấu hình System Prompt & Tham số Mô hình AI"
-          subtitle="Tinh chỉnh trực tiếp chỉ thị hệ thống và mức độ sáng tạo của AI"
-        >
-          <VCardText>
-            <VRow>
-              <VCol
-                cols="12"
-                md="7"
-              >
-                <AppTextarea
-                  v-model="advancedConfig.systemPrompt"
-                  label="System Prompt tự động biên dịch"
-                  rows="8"
-                  class="font-mono"
-                />
-              </VCol>
-              <VCol
-                cols="12"
-                md="5"
-              >
-                <AppSelect
-                  v-model="advancedConfig.preferredModel"
-                  :items="['Claude 3.5 Sonnet (Khuyên dùng cho văn chương)', 'GPT-4o (Đa năng)', 'Gemini 1.5 Pro']"
-                  label="Mô hình AI ưu tiên cho Profile này"
-                  class="mb-6"
-                />
-                <div class="mb-4">
-                  <div class="d-flex justify-space-between text-body-2 font-weight-medium mb-1">
-                    <span>Độ bay bổng / Sáng tạo (Temperature)</span>
-                    <span class="text-primary">{{ advancedConfig.temperature }}</span>
-                  </div>
-                  <VSlider
-                    v-model="advancedConfig.temperature"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    color="primary"
-                    hide-details
-                  />
-                </div>
-                <div class="d-flex align-center justify-space-between pt-3 border-t">
-                  <span class="text-body-2 font-weight-medium">
-                    Tự động chấm điểm độ khớp văn phong trước khi xuất bản
-                  </span>
+                  <VChip
+                    size="small"
+                    :color="profileData.isActive ? 'success' : 'secondary'"
+                    variant="tonal"
+                    label
+                  >
+                    {{ profileData.isActive ? 'Đang sử dụng' : 'Nháp / Lưu trữ' }}
+                  </VChip>
                   <VSwitch
-                    v-model="advancedConfig.autoScoreCheck"
+                    v-model="profileData.isActive"
                     color="primary"
+                    density="compact"
                     hide-details
                     inset
+                    class="ms-1"
                   />
                 </div>
-              </VCol>
-            </VRow>
-          </VCardText>
-        </VCard>
-      </VWindowItem>
+                <div class="text-body-2 text-medium-emphasis">
+                  {{ profileData.shortDesc || 'Chưa có mô tả' }}
+                </div>
+              </div>
+            </VCol>
+          </VRow>
+        </VCardText>
 
-      <!-- TAB 8: LỊCH SỬ -->
-      <VWindowItem value="history">
-        <VCard
-          title="Lịch sử Phiên bản & Nhật ký Chỉnh sửa"
-          subtitle="Theo dõi các thay đổi qua từng phiên bản và khôi phục khi cần"
+        <VDivider />
+
+        <VTabs
+          v-model="activeTab"
+          show-arrows
+          class="px-4"
         >
-          <VCardText class="d-flex flex-column gap-3">
-            <div
-              v-for="ver in versionHistory"
-              :key="ver.version"
-              class="pa-4 rounded border d-flex align-center justify-space-between flex-wrap gap-3"
-              :class="{ 'ver-item--current': ver.current }"
+          <VTab
+            v-for="tab in profileTabs"
+            :key="tab.value"
+            :value="tab.value"
+          >
+            <VIcon
+              :icon="tab.icon"
+              size="18"
+              class="me-2"
+            />
+            {{ tab.label }}
+          </VTab>
+        </VTabs>
+      </VCard>
+
+      <!-- ================= 3. NỘI DUNG 8 TABS ================= -->
+      <VWindow
+        v-model="activeTab"
+        class="profile-tab-window"
+      >
+        <!-- TAB 1: TỔNG QUAN -->
+        <VWindowItem value="overview">
+          <VRow>
+            <VCol
+              cols="12"
+              lg="7"
             >
-              <div class="d-flex align-center">
-                <VAvatar
-                  :color="ver.current ? 'primary' : 'secondary'"
-                  :variant="ver.current ? 'flat' : 'tonal'"
-                  size="40"
-                  rounded
-                  class="me-3"
+              <VCard
+                title="Thông tin cơ bản của Writing Profile"
+                subtitle="Thiết lập tên gọi, slug, phân loại và mô tả"
+              >
+                <VCardText>
+                  <VRow>
+                    <VCol
+                      cols="12"
+                      sm="8"
+                    >
+                      <AppTextField
+                        v-model="profileData.name"
+                        label="Tên Writing Profile *"
+                        @blur="onNameBlur"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="4"
+                    >
+                      <AppTextField
+                        :model-value="profileData.version"
+                        label="Phiên bản"
+                        readonly
+                        disabled
+                      />
+                    </VCol>
+                    <VCol cols="12">
+                      <SlugField
+                        v-model="profileData.slug"
+                        label="Slug định danh"
+                        placeholder="vd: giong-chuyen-gia-ky-thuat"
+                        hint="Blur ô tên hoặc ô slug để gợi ý slug khả dụng"
+                        persistent-hint
+                        :suggesting="store.slugSuggesting"
+                        :available="slugAvailable"
+                        :taken-by="slugTakenBy"
+                        sluggable-type="writing_profile"
+                        prefix="localhost:8000/"
+                        @update:model-value="onSlugInput"
+                        @request-suggest="onSlugBlur"
+                      />
+                    </VCol>
+                    <VCol cols="12">
+                      <AppTextarea
+                        v-model="profileData.shortDesc"
+                        label="Mô tả ngắn gọn"
+                        rows="2"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      md="6"
+                    >
+                      <TaxonomyField
+                        v-model="categories"
+                        type="category"
+                        scope="writing_profile"
+                        label="Danh mục (Categories)"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      md="6"
+                    >
+                      <TaxonomyField
+                        v-model="tags"
+                        type="tag"
+                        scope="writing_profile"
+                        label="Thẻ phân loại (Tags)"
+                        allow-create
+                      />
+                    </VCol>
+                  </VRow>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <VCol
+              cols="12"
+              lg="5"
+            >
+              <VCard
+                title="Chân dung Độc giả & Giá trị cốt lõi"
+                subtitle="(UI-only — chưa lưu DB, giữ nguyên để dùng sau)"
+              >
+                <VCardText>
+                  <AppTextarea
+                    v-model="overviewForm.targetAudience"
+                    label="Độc giả mục tiêu (Target Persona)"
+                    rows="3"
+                    class="mb-4"
+                    placeholder="Mô tả độc giả mục tiêu — hiện chưa lưu"
+                  />
+                  <VLabel class="mb-2 text-body-2">
+                    Trụ cột cảm xúc thương hiệu
+                  </VLabel>
+                  <div
+                    v-if="!overviewForm.brandPillars.length"
+                    class="text-caption text-medium-emphasis"
+                  >
+                    Chưa cấu hình — sẽ lưu khi backend hỗ trợ.
+                  </div>
+                  <div class="d-flex flex-column gap-3">
+                    <div
+                      v-for="pillar in overviewForm.brandPillars"
+                      :key="pillar.title"
+                      class="pa-3 rounded border d-flex align-center"
+                    >
+                      <VAvatar
+                        :color="pillar.color"
+                        variant="tonal"
+                        size="36"
+                        rounded
+                        class="me-3"
+                      >
+                        <VIcon
+                          :icon="pillar.icon"
+                          size="20"
+                        />
+                      </VAvatar>
+                      <div>
+                        <div class="text-body-2 font-weight-medium text-high-emphasis">
+                          {{ pillar.title }}
+                        </div>
+                        <div class="text-caption text-medium-emphasis">
+                          {{ pillar.desc }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+
+        <!-- TAB 2: ĐẶC ĐIỂM VĂN PHONG -->
+        <VWindowItem value="style-traits">
+          <VRow>
+            <VCol
+              cols="12"
+              lg="6"
+            >
+              <VCard
+                title="Tổng quan đặc điểm (từ rules_json)"
+                subtitle="Các khóa DNA chính của văn phong"
+                class="mb-6"
+              >
+                <VCardText>
+                  <div class="d-flex flex-column gap-3">
+                    <div
+                      v-for="attr in traitSummaryList"
+                      :key="attr.title"
+                      class="d-flex align-start"
+                    >
+                      <VAvatar
+                        :color="attr.color"
+                        variant="tonal"
+                        size="34"
+                        rounded
+                        class="me-3 flex-shrink-0"
+                      >
+                        <VIcon
+                          :icon="attr.icon"
+                          size="18"
+                        />
+                      </VAvatar>
+                      <div>
+                        <div class="text-body-2 font-weight-medium text-high-emphasis">
+                          {{ attr.title }}
+                        </div>
+                        <div class="text-caption text-medium-emphasis">
+                          {{ attr.value }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+
+              <!-- Radar UI-only: giữ nguyên không map -->
+              <VCard
+                title="Biểu đồ DNA (UI-only)"
+                subtitle="Chưa có dữ liệu chấm điểm từng trục — giữ layout chờ backend"
+                class="mb-6"
+              >
+                <VCardText class="text-center text-caption text-medium-emphasis">
+                  Radar 6 trục sẽ hiển thị khi backend chấm điểm (chưa có trong rules_json).
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <VCol
+              cols="12"
+              lg="6"
+            >
+              <VCard
+                title="Kênh áp dụng (UI-only)"
+                subtitle="Hiển thị mặc định — chưa map DB"
+                class="mb-6"
+              >
+                <VCardText>
+                  <VRow>
+                    <VCol
+                      v-for="ch in displayChannels"
+                      :key="ch.name"
+                      cols="12"
+                      sm="6"
+                    >
+                      <div class="channel-toggle-box px-3 py-2 rounded border d-flex align-center justify-space-between">
+                        <div class="d-flex align-center text-truncate me-2">
+                          <VAvatar
+                            :color="ch.color"
+                            size="24"
+                            rounded
+                            class="me-2 flex-shrink-0"
+                          >
+                            <VIcon
+                              :icon="ch.icon"
+                              size="14"
+                              color="white"
+                            />
+                          </VAvatar>
+                          <span class="text-body-2 font-weight-medium text-high-emphasis text-truncate">
+                            {{ ch.name }}
+                          </span>
+                        </div>
+                        <VSwitch
+                          v-model="ch.enabled"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          inset
+                        />
+                      </div>
+                    </VCol>
+                  </VRow>
+                </VCardText>
+              </VCard>
+
+              <VCard class="mb-6">
+                <VCardItem>
+                  <template #title>
+                    Ví dụ văn phong (UI-only)
+                  </template>
+                  <template #subtitle>
+                    Chưa lưu DB — giữ để bổ sung sau
+                  </template>
+                </VCardItem>
+                <VCardText>
+                  <div class="text-caption text-medium-emphasis">
+                    Mẫu trích dẫn văn phong sẽ hiển thị từ evidence_json ở tab "Mẫu nội dung".
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+
+        <!-- TAB 3: CẤU TRÚC NỘI DUNG -->
+        <VWindowItem value="content-structure">
+          <VCard>
+            <VCardItem>
+              <template #title>
+                Cấu trúc bài viết (từ rules_json)
+              </template>
+              <template #subtitle>
+                Đổ từ 3 khóa opening / structure_patterns+transitions / ending — chỉnh text sẽ lưu lại
+              </template>
+            </VCardItem>
+            <VCardText>
+              <VRow>
+                <VCol
+                  v-for="(sec, idx) in structureSections"
+                  :key="sec.title"
+                  cols="12"
+                  md="4"
                 >
-                  <span class="text-body-2 font-weight-medium">{{ ver.version }}</span>
-                </VAvatar>
-                <div>
-                  <div class="d-flex align-center gap-2">
-                    <span class="text-subtitle-1 font-weight-medium text-high-emphasis">{{ ver.summary }}</span>
+                  <div class="border rounded pa-4 h-100 d-flex flex-column">
                     <VChip
-                      v-if="ver.current"
+                      size="small"
+                      color="primary"
+                      variant="flat"
+                      label
+                      class="mb-3"
+                    >
+                      {{ sec.title }}
+                    </VChip>
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      {{ sec.guideline }}
+                    </div>
+                    <AppTextarea
+                      v-model="sec.sample"
+                      :label="`Nội dung rules_json`"
+                      rows="6"
+                      class="flex-grow-1"
+                    />
+                  </div>
+                </VCol>
+              </VRow>
+            </VCardText>
+          </VCard>
+        </VWindowItem>
+
+        <!-- TAB 4: QUY TẮC NGÔN NGỮ -->
+        <VWindowItem value="language-rules">
+          <VRow>
+            <VCol
+              cols="12"
+              md="6"
+            >
+              <VCard title="Quy chuẩn Đại từ Xưng hô">
+                <VCardText class="d-flex flex-column gap-4">
+                  <AppTextField
+                    v-model="languageConfig.brandPronoun"
+                    label="Xưng hô của Thương hiệu"
+                    placeholder="vd: nhà em, mình, chúng tôi"
+                  />
+                  <AppTextField
+                    v-model="languageConfig.customerPronoun"
+                    label="Cách gọi Khách hàng / Độc giả"
+                    placeholder="vd: dâu rể, các bạn, quý khách"
+                  />
+                  <div class="text-caption text-medium-emphasis">
+                    Hai ô này sẽ ghép lại thành "xưng A, gọi B" khi lưu vào rules_json.pronouns.
+                  </div>
+                  <AppSelect
+                    v-model="languageConfig.emojiDensity"
+                    :items="['Vừa phải', 'Tối giản', 'Không sử dụng']"
+                    label="Mật độ Emoji (UI-only — chưa lưu)"
+                  />
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <VCol
+              cols="12"
+              md="6"
+            >
+              <VCard title="Do's & Don'ts (từ vocabulary + avoid)">
+                <VCardText class="d-flex flex-column gap-3">
+                  <div
+                    v-if="!languageConfig.editorialRules.length"
+                    class="text-caption text-medium-emphasis"
+                  >
+                    Chưa có quy tắc từ vocabulary/avoid.
+                  </div>
+                  <div
+                    v-for="(rule, i) in languageConfig.editorialRules"
+                    :key="i"
+                    class="pa-3 rounded border d-flex align-center justify-space-between"
+                  >
+                    <div class="d-flex align-center text-body-2 text-high-emphasis">
+                      <VIcon
+                        :icon="rule.allowed ? 'tabler-circle-check' : 'tabler-circle-x'"
+                        :color="rule.allowed ? 'success' : 'error'"
+                        size="18"
+                        class="me-2"
+                      />
+                      <span>{{ rule.text }}</span>
+                    </div>
+                    <VChip
                       size="x-small"
-                      color="success"
+                      :color="rule.allowed ? 'success' : 'error'"
+                      variant="tonal"
+                      label
+                    >
+                      {{ rule.allowed ? 'Khuyến khích' : 'Cấm dùng' }}
+                    </VChip>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+
+        <!-- TAB 5: MẪU NỘI DUNG -->
+        <VWindowItem value="content-samples">
+          <VCard>
+            <VCardItem>
+              <template #title>
+                Bằng chứng trích dẫn (evidence_json)
+              </template>
+              <template #subtitle>
+                Các câu trích nguyên văn từ bài mẫu — đã kiểm chứng, chỉ đọc
+              </template>
+            </VCardItem>
+            <VCardText>
+              <div
+                v-if="!fullPostSamples.length"
+                class="tonal-panel pa-4 rounded text-caption text-medium-emphasis"
+              >
+                Chưa có bằng chứng trích dẫn — chạy giải mã để tạo.
+              </div>
+              <VRow v-else>
+                <VCol
+                  v-for="post in fullPostSamples"
+                  :key="post.title"
+                  cols="12"
+                  md="4"
+                >
+                  <div class="border rounded pa-4 h-100 d-flex flex-column">
+                    <VChip
+                      size="small"
+                      color="primary"
+                      variant="tonal"
+                      label
+                      class="mb-3 font-weight-medium"
+                    >
+                      {{ ruleLabel(post.channel) }}
+                    </VChip>
+                    <div class="text-body-2 text-medium-emphasis mb-3 flex-grow-1">
+                      {{ post.content }}
+                    </div>
+                    <div class="text-caption text-disabled">
+                      {{ post.title }}
+                    </div>
+                  </div>
+                </VCol>
+              </VRow>
+            </VCardText>
+          </VCard>
+        </VWindowItem>
+
+        <!-- TAB 6: TỪ VỰNG & CTA -->
+        <VWindowItem value="vocab-cta">
+          <VRow>
+            <!-- Cột 1: Từ điển Từ vựng & Thủ pháp Ngôn ngữ -->
+            <VCol
+              cols="12"
+              md="6"
+            >
+              <VCard
+                title="Từ điển Từ vựng & Thủ pháp Ngôn ngữ"
+                subtitle="Đúc kết từ thuộc tính Chất liệu từ vựng"
+                class="h-100"
+              >
+                <VCardText class="d-flex flex-column gap-5">
+                  <!-- 1. Mô tả thủ pháp từ vựng -->
+                  <div>
+                    <div class="text-body-2 font-weight-medium mb-1">
+                      Thủ pháp & Chất liệu từ vựng (từ AI giải mã):
+                    </div>
+                    <AppTextarea
+                      v-model="vocabConfig.vocabularyDesc"
+                      rows="3"
+                      placeholder="Mô tả nguyên lý sử dụng từ vựng, từ tượng thanh, tính từ giác quan..."
+                    />
+                  </div>
+
+                  <!-- 2. Từ khóa thương hiệu ưu tiên dùng (Power Words) -->
+                  <div>
+                    <div class="d-flex justify-space-between align-center mb-2">
+                      <span class="text-body-2 font-weight-medium text-success">
+                        Từ khóa ưu tiên dùng (Power Words)
+                      </span>
+                      <span class="text-caption text-medium-emphasis">
+                        {{ vocabConfig.powerWords.length }} từ
+                      </span>
+                    </div>
+
+                    <div class="d-flex gap-2 mb-3">
+                      <AppTextField
+                        v-model="vocabConfig.newPowerWord"
+                        placeholder="Thêm từ khóa thương hiệu..."
+                        density="compact"
+                        hide-details
+                        @keydown.enter.prevent="addPowerWord"
+                      />
+                      <VBtn
+                        size="small"
+                        color="success"
+                        variant="tonal"
+                        prepend-icon="tabler-plus"
+                        @click="addPowerWord"
+                      >
+                        Thêm
+                      </VBtn>
+                    </div>
+
+                    <div
+                      v-if="!vocabConfig.powerWords.length"
+                      class="text-caption text-medium-emphasis mb-2"
+                    >
+                      Chưa có từ khóa riêng lẻ. Bạn có thể thêm các từ/cụm từ thương hiệu độc quyền vào đây.
+                    </div>
+                    <div
+                      v-else
+                      class="d-flex flex-wrap gap-2"
+                    >
+                      <VChip
+                        v-for="w in vocabConfig.powerWords"
+                        :key="w"
+                        size="small"
+                        color="success"
+                        variant="tonal"
+                        closable
+                        @click:close="vocabConfig.powerWords = vocabConfig.powerWords.filter(x => x !== w)"
+                      >
+                        {{ w }}
+                      </VChip>
+                    </div>
+                  </div>
+
+                  <!-- 3. Từ ngữ & thói quen kiêng kỵ (Negative Words / Avoid) -->
+                  <div>
+                    <div class="d-flex justify-space-between align-center mb-2">
+                      <span class="text-body-2 font-weight-medium text-error">
+                        Cấm xuất hiện / Kiêng kỵ (từ rules_json.avoid)
+                      </span>
+                      <span class="text-caption text-medium-emphasis">
+                        {{ vocabConfig.negativeWords.length }} quy tắc
+                      </span>
+                    </div>
+
+                    <div class="d-flex gap-2 mb-3">
+                      <AppTextField
+                        v-model="vocabConfig.newNegativeWord"
+                        placeholder="Thêm điều cấm / từ kiêng kỵ..."
+                        density="compact"
+                        hide-details
+                        @keydown.enter.prevent="addNegativeWord"
+                      />
+                      <VBtn
+                        size="small"
+                        color="error"
+                        variant="tonal"
+                        prepend-icon="tabler-plus"
+                        @click="addNegativeWord"
+                      >
+                        Thêm
+                      </VBtn>
+                    </div>
+
+                    <div
+                      v-if="!vocabConfig.negativeWords.length"
+                      class="text-caption text-medium-emphasis mb-2"
+                    >
+                      Chưa có quy tắc cấm.
+                    </div>
+                    <div
+                      v-else
+                      class="d-flex flex-wrap gap-2"
+                    >
+                      <VChip
+                        v-for="(w, i) in vocabConfig.negativeWords"
+                        :key="i"
+                        size="small"
+                        color="error"
+                        variant="tonal"
+                        closable
+                        @click:close="vocabConfig.negativeWords.splice(i, 1)"
+                      >
+                        {{ w }}
+                      </VChip>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <!-- Cột 2: Triết lý Kết bài & Kêu gọi Hành động (CTA) -->
+            <VCol
+              cols="12"
+              md="6"
+            >
+              <VCard
+                title="Triết lý Kết bài & Kêu gọi Hành động (CTA)"
+                subtitle="Đúc kết từ thuộc tính Kết bài & Kêu gọi Hành động"
+                class="h-100"
+              >
+                <VCardText class="d-flex flex-column gap-5">
+                  <div>
+                    <div class="text-body-2 font-weight-medium mb-1">
+                      Phong cách Kết bài & Chiến lược CTA:
+                    </div>
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Định hướng cách AI chốt lại bài viết (CTA trực tiếp, lời mời nhẹ nhàng, câu hỏi gợi mở, hay để lại khoảng lặng dư âm).
+                    </div>
+                    <AppTextarea
+                      v-model="vocabConfig.ctaPhilosophy"
+                      rows="6"
+                      placeholder="Mô tả phong cách kết bài và cách thức kêu gọi hành động..."
+                    />
+                  </div>
+
+                  <div class="border rounded pa-4 bg-var-theme-background">
+                    <div class="d-flex align-center gap-2 mb-2">
+                      <VIcon
+                        icon="tabler-bulb"
+                        color="primary"
+                        size="20"
+                      />
+                      <span class="text-body-2 font-weight-bold">
+                        Gợi ý phong cách CTA phổ biến
+                      </span>
+                    </div>
+                    <ul class="text-caption text-medium-emphasis ps-4 d-flex flex-column gap-1 mb-0">
+                      <li><strong>Status tâm tình / Quiet luxury:</strong> Lời chúc an lành, câu hỏi mở gợi chiêm nghiệm, không ép mua hàng.</li>
+                      <li><strong>Bán hàng thực chiến:</strong> CTA trực diện (inbox báo giá, để lại SĐT, ưu đãi có giới hạn).</li>
+                      <li><strong>Chia sẻ giá trị / Chuyên gia:</strong> Mời thảo luận, lưu lại bài viết, chia sẻ góc nhìn.</li>
+                    </ul>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+
+        <!-- TAB 7: CÀI ĐẶT NÂNG CAO -->
+        <VWindowItem value="advanced">
+          <!-- ===== VCARD 1: PROMPT BỔ SUNG 1 & THAM SỐ MODEL / ĐỘ BAY BỔNG ===== -->
+          <VCard
+            title="Prompt bổ sung 1 & Tham số Mô hình"
+            subtitle="Hướng dẫn hành văn tổng thể (style_instructions) và Độ bay bổng (temperature) lưu vào DB"
+            class="mb-6"
+          >
+            <VCardText>
+              <VRow>
+                <!-- Cột trái: Ô 1 (style_instructions) -->
+                <VCol
+                  cols="12"
+                  md="7"
+                >
+                  <div class="d-flex align-center gap-2 mb-1">
+                    <VChip
+                      size="x-small"
+                      color="primary"
                       variant="flat"
                       label
                     >
-                      Hiện tại
+                      Prompt bổ sung 1
                     </VChip>
+                    <span class="text-body-2 font-weight-bold text-high-emphasis">
+                      Hướng dẫn hành văn &amp; Chân dung biên tập (style_instructions)
+                    </span>
                   </div>
-                  <div class="text-caption text-medium-emphasis">
-                    Cập nhật lúc {{ ver.date }} • bởi <strong>{{ ver.author }}</strong>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Định hình chân dung người kể chuyện (Persona), thủ pháp gợi tả giác quan và bố cục tổng thể.
+                  </div>
+                  <AppTextarea
+                    v-model="advancedConfig.systemPrompt"
+                    rows="9"
+                    counter="10000"
+                    placeholder="Nhập hướng dẫn hành văn tổng thể (Ô 1)..."
+                    class="font-mono"
+                  />
+                </VCol>
+
+                <!-- Cột phải: Model & Độ bay bổng (Temperature) -->
+                <VCol
+                  cols="12"
+                  md="5"
+                >
+                  <AppTextField
+                    :model-value="advancedConfig.preferredModel"
+                    label="Model đã dùng khi giải mã"
+                    readonly
+                    disabled
+                    class="mb-6"
+                  />
+                  <div class="mb-4">
+                    <div class="d-flex justify-space-between text-body-2 font-weight-medium mb-1">
+                      <span>Độ bay bổng / Sáng tạo (Temperature)</span>
+                      <span class="text-primary">{{ advancedConfig.temperature }}</span>
+                    </div>
+                    <VSlider
+                      v-model="advancedConfig.temperature"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      color="primary"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Độ ngẫu hứng của AI: thấp (0.1–0.3: kỷ luật, an toàn) — trung bình (0.7–0.85: tự nhiên, cảm xúc) — cao (0.9–1.0: phá cách, bay bổng).
+                    </div>
+                  </div>
+
+                  <div class="d-flex align-center justify-space-between pt-3 border-t">
+                    <span class="text-body-2 font-weight-medium">
+                      Tự động chấm điểm (UI-only)
+                    </span>
+                    <VSwitch
+                      v-model="advancedConfig.autoScoreCheck"
+                      color="primary"
+                      hide-details
+                      inset
+                    />
+                  </div>
+                </VCol>
+              </VRow>
+            </VCardText>
+          </VCard>
+
+          <!-- ===== VCARD 2: PROMPT BỔ SUNG 2 (CHẤT VĂN) — TRÁI: Ô TEXT, PHẢI: GỢI Ý CHECKBOX & 5 THANH TRƯỢT ===== -->
+          <VCard
+            title="Prompt bổ sung 2 — Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt"
+            subtitle="Bóc tách và canh chỉnh 5 thuộc tính Chất văn: Giọng văn, Tính dân dã tự nhiên, Màu sắc cảm xúc, Biến thiên nhịp điệu, Tính nhấn và lướt"
+          >
+            <VCardText>
+              <VRow>
+                <!-- Cột trái: Ô Text Prompt bổ sung 2 + Tóm tắt chỉ số -->
+                <VCol
+                  cols="12"
+                  md="6"
+                >
+                  <div class="d-flex align-center justify-space-between mb-1">
+                    <div class="d-flex align-center gap-2">
+                      <VChip
+                        size="x-small"
+                        color="info"
+                        variant="flat"
+                        label
+                      >
+                        Prompt bổ sung 2
+                      </VChip>
+                      <span class="text-body-2 font-weight-bold text-high-emphasis">
+                        Chỉ dẫn Chất văn (voice_texture_instructions)
+                      </span>
+                    </div>
+                  </div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Khi giải mã bài mẫu, AI tự động phân tích Ô 2 này. Bạn có thể tự do chỉnh sửa văn bản hoặc tích chọn các gợi ý bên phải để đồng bộ vào đây.
+                  </div>
+                  <AppTextarea
+                    v-model="advancedConfig.voiceTexturePrompt"
+                    rows="16"
+                    counter="10000"
+                    placeholder="Nhập chỉ dẫn về giọng văn, tính dân dã tự nhiên, màu sắc cảm xúc, biến thiên nhịp điệu, tính nhấn và lướt..."
+                    class="font-mono mb-4"
+                  />
+
+                  <!-- Tóm tắt trực quan cấu hình Chất văn hiện tại -->
+                  <div class="tonal-panel pa-4 rounded">
+                    <div class="d-flex align-center gap-2 mb-2">
+                      <VIcon
+                        icon="tabler-dna"
+                        color="primary"
+                        size="18"
+                      />
+                      <span class="text-body-2 font-weight-bold text-high-emphasis">
+                        Tóm tắt chỉ số Chất văn đang áp dụng
+                      </span>
+                    </div>
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      Các thông số dưới đây sẽ được biên dịch trực tiếp vào System Prompt cùng với Ô 1 và Ô 2 khi tạo bài viết:
+                    </div>
+                    <div class="d-flex flex-column gap-2">
+                      <div
+                        v-for="slider in voiceTextureSliders"
+                        :key="`summary-${slider.key}`"
+                        class="d-flex align-center justify-space-between text-caption"
+                      >
+                        <span class="text-medium-emphasis">{{ slider.label }}:</span>
+                        <span class="font-weight-bold text-high-emphasis">
+                          {{ slider.value }}% ({{ slider.value >= 70 ? slider.highPole : (slider.value <= 35 ? slider.lowPole : 'Cân bằng') }})
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </VCol>
+
+                <!-- Cột phải: Toàn bộ Gợi ý Checkbox & 5 Thanh trượt canh chỉnh Chất văn -->
+                <VCol
+                  cols="12"
+                  md="6"
+                >
+                  <!-- 1. Hộp Checkbox Gợi ý cách hành văn xoay quanh 5 thuộc tính Chất văn -->
+                  <div class="tonal-panel pa-4 rounded mb-4">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
+                      <div>
+                        <div class="d-flex align-center gap-2">
+                          <VIcon
+                            icon="tabler-checkbox"
+                            color="primary"
+                            size="20"
+                          />
+                          <span class="text-body-2 font-weight-bold text-high-emphasis">
+                            Gợi ý cách hành văn xoay quanh 5 thuộc tính Chất văn
+                          </span>
+                          <VChip
+                            v-if="selectedVoiceOptionIds.length"
+                            size="x-small"
+                            color="primary"
+                            variant="flat"
+                            label
+                          >
+                            Đã chọn {{ selectedVoiceOptionIds.length }} dạng
+                          </VChip>
+                        </div>
+                        <div class="text-caption text-medium-emphasis mt-1">
+                          Tích chọn các dạng hành văn — 5 thanh trượt bên dưới sẽ tự động chạy tính điểm và đồng bộ gợi ý sang Ô 2 bên trái
+                        </div>
+                      </div>
+                      <VBtn
+                        v-if="selectedVoiceOptionIds.length"
+                        size="x-small"
+                        variant="text"
+                        color="secondary"
+                        prepend-icon="tabler-refresh"
+                        @click="resetVoiceTextureSliders"
+                      >
+                        Bỏ chọn &amp; Khôi phục
+                      </VBtn>
+                    </div>
+
+                    <VRow dense>
+                      <VCol
+                        v-for="opt in VOICE_STYLE_OPTIONS"
+                        :key="opt.id"
+                        cols="12"
+                        sm="6"
+                      >
+                        <div
+                          class="pa-3 rounded border h-100 cursor-pointer d-flex align-start gap-2 transition-all"
+                          :class="selectedVoiceOptionIds.includes(opt.id) ? 'ver-item--current' : 'bg-surface'"
+                          @click="toggleVoiceStyleOption(opt.id)"
+                        >
+                          <VCheckboxBtn
+                            :model-value="selectedVoiceOptionIds.includes(opt.id)"
+                            :color="opt.color"
+                            density="compact"
+                            class="mt-n1"
+                            @click.stop="toggleVoiceStyleOption(opt.id)"
+                          />
+                          <div class="flex-grow-1">
+                            <div class="d-flex align-center justify-space-between flex-wrap gap-1 mb-1">
+                              <span class="text-body-2 font-weight-bold text-high-emphasis">
+                                {{ opt.title }}
+                              </span>
+                              <VChip
+                                size="x-small"
+                                :color="opt.color"
+                                variant="tonal"
+                                label
+                              >
+                                {{ opt.attributeLabel }}
+                              </VChip>
+                            </div>
+                            <div class="text-caption text-medium-emphasis mb-2">
+                              {{ opt.desc }}
+                            </div>
+                            <div class="d-flex flex-wrap gap-1">
+                              <template
+                                v-for="slider in voiceTextureSliders"
+                                :key="`delta-${opt.id}-${slider.key}`"
+                              >
+                                <VChip
+                                  v-if="opt.deltas[slider.key]"
+                                  size="x-small"
+                                  :color="opt.deltas[slider.key] > 0 ? 'success' : 'warning'"
+                                  variant="outlined"
+                                  label
+                                >
+                                  {{ slider.label.replace(/^\d+\.\s*/, '') }}: {{ opt.deltas[slider.key] > 0 ? `+${opt.deltas[slider.key]}%` : `${opt.deltas[slider.key]}%` }}
+                                </VChip>
+                              </template>
+                            </div>
+                          </div>
+                        </div>
+                      </VCol>
+                    </VRow>
+                  </div>
+
+                  <!-- 2. Khung 5 Thanh trượt canh chỉnh Chất văn (0% - 100%) -->
+                  <div class="tonal-panel pa-4 rounded">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
+                      <div>
+                        <div class="d-flex align-center gap-2">
+                          <VIcon
+                            icon="tabler-adjustments-heart"
+                            color="primary"
+                            size="20"
+                          />
+                          <span class="text-body-2 font-weight-bold text-high-emphasis">
+                            5 Thanh trượt canh chỉnh Chất văn (0% – 100%)
+                          </span>
+                        </div>
+                        <div class="text-caption text-medium-emphasis mt-1">
+                          Tự động chạy tính điểm khi tích chọn ở trên, hoặc kéo thanh trượt để tinh chỉnh thủ công
+                        </div>
+                      </div>
+                      <VBtn
+                        size="x-small"
+                        variant="text"
+                        color="secondary"
+                        prepend-icon="tabler-refresh"
+                        @click="resetVoiceTextureSliders"
+                      >
+                        Khôi phục gốc
+                      </VBtn>
+                    </div>
+
+                    <div class="d-flex flex-column gap-3">
+                      <div
+                        v-for="slider in voiceTextureSliders"
+                        :key="slider.key"
+                        class="pa-3 rounded border bg-surface"
+                      >
+                        <div class="d-flex align-center justify-space-between mb-2">
+                          <div class="d-flex align-center">
+                            <VAvatar
+                              :color="slider.color"
+                              variant="tonal"
+                              size="28"
+                              rounded
+                              class="me-2 flex-shrink-0"
+                            >
+                              <VIcon
+                                :icon="slider.icon"
+                                size="15"
+                              />
+                            </VAvatar>
+                            <span class="text-body-2 font-weight-medium text-high-emphasis">
+                              {{ slider.label }}
+                            </span>
+                          </div>
+                          <div class="d-flex align-center gap-2">
+                            <VChip
+                              v-if="slider.value !== slider.baseline"
+                              size="x-small"
+                              :color="slider.value > slider.baseline ? 'success' : 'warning'"
+                              variant="tonal"
+                              label
+                            >
+                              {{ slider.value > slider.baseline ? `+${slider.value - slider.baseline}%` : `${slider.value - slider.baseline}%` }} so với gốc
+                            </VChip>
+                            <span
+                              class="text-body-2 font-weight-bold"
+                              :class="`text-${slider.color}`"
+                            >
+                              {{ slider.value }}%
+                            </span>
+                          </div>
+                        </div>
+
+                        <div class="d-flex justify-space-between text-caption text-medium-emphasis mb-1">
+                          <span>0%: {{ slider.lowPole }}</span>
+                          <span>100%: {{ slider.highPole }}</span>
+                        </div>
+
+                        <VSlider
+                          v-model="slider.value"
+                          :min="0"
+                          :max="100"
+                          :step="1"
+                          :color="slider.color"
+                          hide-details
+                          density="compact"
+                        />
+
+                        <div class="text-caption text-medium-emphasis mt-1">
+                          {{ slider.hint }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </VCol>
+              </VRow>
+            </VCardText>
+          </VCard>
+        </VWindowItem>
+
+        <!-- TAB 8: LỊCH SỬ -->
+        <VWindowItem value="history">
+          <VCard
+            title="Lịch sử Phiên bản & Giải mã"
+            subtitle="Version hiện tại + các lần giải mã đã chạy trên profile này"
+          >
+            <VCardText class="d-flex flex-column gap-3">
+              <div
+                v-for="ver in versionHistory"
+                :key="ver.date + ver.summary"
+                class="pa-4 rounded border d-flex align-center justify-space-between flex-wrap gap-3"
+                :class="{ 'ver-item--current': ver.current }"
+              >
+                <div class="d-flex align-center">
+                  <VAvatar
+                    :color="ver.current ? 'primary' : 'secondary'"
+                    :variant="ver.current ? 'flat' : 'tonal'"
+                    size="40"
+                    rounded
+                    class="me-3"
+                  >
+                    <span class="text-body-2 font-weight-medium">{{ ver.version }}</span>
+                  </VAvatar>
+                  <div>
+                    <div class="d-flex align-center gap-2">
+                      <span class="text-subtitle-1 font-weight-medium text-high-emphasis">{{ ver.summary }}</span>
+                      <VChip
+                        v-if="ver.current"
+                        size="x-small"
+                        color="success"
+                        variant="flat"
+                        label
+                      >
+                        Hiện tại
+                      </VChip>
+                    </div>
+                    <div class="text-caption text-medium-emphasis">
+                      {{ ver.date }}<template v-if="ver.author"> • {{ ver.author }}</template>
+                    </div>
                   </div>
                 </div>
               </div>
-              <VBtn
-                v-if="!ver.current"
-                variant="tonal"
-                color="primary"
-                size="small"
-                prepend-icon="tabler-restore"
-              >
-                Khôi phục bản này
-              </VBtn>
-            </div>
-          </VCardText>
-        </VCard>
-      </VWindowItem>
-    </VWindow>
+            </VCardText>
+          </VCard>
+        </VWindowItem>
+
+        <!-- TAB 9: PHÒNG THỬ DNA — 2 cột: trái Chủ đề thử nghiệm, phải Sandbox sắc thái -->
+        <VWindowItem value="sandbox">
+          <!-- Cảnh báo chống đạo văn — nằm trên cả 2 card -->
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-4 text-caption"
+          >
+            <strong>Cơ chế Snapshot chống đạo văn:</strong> AI chỉ nhận <code>rules_json</code> + <code>style_instructions</code>
+            đã lọc theo cấp độ độ dài — <strong>không bao giờ</strong> thấy câu chữ mẫu (<code>evidence_json</code>)
+            nên không thể đạo văn. Các hiệu chỉnh slider/preset được gửi kèm để thấy ngay thay đổi.
+          </VAlert>
+
+          <VRow>
+            <!-- ===== VCARD TRÁI: CHỦ ĐỀ THỬ NGHIỆM MỚI ===== -->
+            <VCol
+              cols="12"
+              lg="7"
+            >
+              <VCard class="h-100">
+                <VCardItem>
+                  <template #title>
+                    <div class="d-flex align-center">
+                      <VIcon
+                        icon="tabler-flask-2"
+                        color="primary"
+                        size="22"
+                        class="me-2"
+                      />
+                      <span class="text-h6 font-weight-bold text-high-emphasis">Chủ đề thử nghiệm mới</span>
+                    </div>
+                  </template>
+                  <template #subtitle>
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Nhập chủ đề bất kỳ để kiểm chứng khẩu khí DNA của hồ sơ này
+                    </div>
+                  </template>
+                </VCardItem>
+
+                <VCardText>
+                  <AppTextField
+                    v-model="sandboxForm.topic"
+                    label="Chủ đề viết thử"
+                    placeholder="vd: lợi ích của cà phê đen buổi sáng"
+                    class="mb-4"
+                    @keyup.enter="runSandboxDemo"
+                  />
+
+                  <AppSelect
+                    v-model="sandboxForm.targetTier"
+                    :items="['micro','short','medium','long'].map(t => ({ title: t, value: t }))"
+                    label="Cấp độ độ dài mục tiêu (Target Tier)"
+                    class="mb-4"
+                  />
+
+                  <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-4">
+                    <span class="text-caption text-success d-flex align-center">
+                      <VIcon
+                        icon="tabler-dna"
+                        size="15"
+                        class="me-1"
+                      />
+                      Profile: {{ profileData.name }} ({{ profileData.version }})
+                    </span>
+
+                    <VBtn
+                      variant="flat"
+                      color="primary"
+                      size="small"
+                      prepend-icon="tabler-player-play"
+                      :loading="store.sandboxing"
+                      :disabled="store.sandboxing || !profile"
+                      @click="runSandboxDemo"
+                    >
+                      Viết thử với DNA này
+                    </VBtn>
+                  </div>
+
+                  <!-- Kết quả sinh văn bản -->
+                  <div class="prompt-box pa-4 rounded">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                      <div class="d-flex align-center gap-2">
+                        <span class="text-body-2 font-weight-medium text-high-emphasis">
+                          Văn bản sinh thử nghiệm
+                        </span>
+                        <VChip
+                          size="x-small"
+                          color="primary"
+                          variant="tonal"
+                          label
+                        >
+                          Tier: {{ (sandboxForm.targetTier || 'medium').toUpperCase() }}
+                        </VChip>
+                      </div>
+
+                      <VBtn
+                        variant="text"
+                        color="primary"
+                        size="x-small"
+                        prepend-icon="tabler-copy"
+                        :disabled="!activeSandboxSample"
+                        @click="copyText(activeSandboxSample, 'Đã sao chép văn bản viết thử')"
+                      >
+                        Sao chép
+                      </VBtn>
+                    </div>
+
+                    <div class="text-body-2 text-high-emphasis sandbox-output">
+                      <template v-if="!sandboxHasRan && !activeSandboxSample">
+                        <span class="text-caption text-medium-emphasis">
+                          Chưa có văn bản. Nhập chủ đề và bấm "Viết thử với DNA này" để sinh.
+                        </span>
+                      </template>
+                      <template v-else-if="sandboxHasRan && !activeSandboxSample">
+                        <span class="text-caption text-warning">
+                          AI chưa sinh được nội dung — thử chủ đề khác hoặc đợi vài giây rồi gọi lại.
+                        </span>
+                      </template>
+                      <template v-else>
+                        {{ activeSandboxSample }}
+                      </template>
+                    </div>
+                  </div>
+
+                  <!-- Snapshot System Prompt đã gửi AI (xem để kiểm chứng) -->
+                  <div
+                    v-if="sandboxSnapshotPrompt"
+                    class="mt-4"
+                  >
+                    <div class="text-caption text-medium-emphasis mb-2 d-flex align-center">
+                      <VIcon
+                        icon="tabler-terminal-2"
+                        size="14"
+                        class="me-1"
+                      />
+                      System Prompt đã gửi cho AI (snapshot đã strip evidence):
+                    </div>
+                    <div class="prompt-box pa-3 rounded font-mono text-caption">
+                      <pre style="white-space: pre-wrap; margin: 0;">{{ sandboxSnapshotPrompt }}</pre>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <!-- ===== VCARD PHẢI: SANDBOX SẮC THÁI ===== -->
+            <VCol
+              cols="12"
+              lg="5"
+            >
+              <VCard class="h-100">
+                <VCardItem>
+                  <template #title>
+                    <div class="d-flex align-center">
+                      <VIcon
+                        icon="tabler-adjustments-heart"
+                        color="primary"
+                        size="22"
+                        class="me-2"
+                      />
+                      <span class="text-h6 font-weight-bold text-high-emphasis">Sandbox sắc thái</span>
+                    </div>
+                  </template>
+                  <template #subtitle>
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Gạt slider hoặc chọn preset — phản ánh NGAY vào prompt khi viết thử, không cần Lưu
+                    </div>
+                  </template>
+                  <template #append>
+                    <VBtn
+                      size="x-small"
+                      variant="text"
+                      color="secondary"
+                      prepend-icon="tabler-refresh"
+                      :disabled="activeTonePreset === 'default'"
+                      @click="resetToneToBaseline"
+                    >
+                      Khôi phục
+                    </VBtn>
+                  </template>
+                </VCardItem>
+
+                <VCardText>
+                  <!-- Preset nhanh -->
+                  <div class="mb-4">
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Mẫu phối âm nhanh (Preset)
+                    </div>
+                    <div class="d-flex flex-wrap gap-1">
+                      <VBtn
+                        v-for="preset in TONE_PRESETS"
+                        :key="preset.value"
+                        size="x-small"
+                        :variant="activeTonePreset === preset.value ? 'flat' : 'tonal'"
+                        :color="activeTonePreset === preset.value ? 'primary' : 'secondary'"
+                        @click="applyTonePreset(preset.value)"
+                      >
+                        {{ preset.title }}
+                      </VBtn>
+                    </div>
+                  </div>
+
+                  <!-- 8 slider sắc thái -->
+                  <div class="d-flex flex-column gap-3">
+                    <div
+                      v-for="slider in toneSliders"
+                      :key="slider.key"
+                      class="pa-3 rounded border"
+                    >
+                      <div class="d-flex align-center justify-space-between mb-2">
+                        <div class="d-flex align-center">
+                          <VAvatar
+                            :color="slider.color"
+                            variant="tonal"
+                            size="28"
+                            rounded
+                            class="me-2 flex-shrink-0"
+                          >
+                            <VIcon
+                              :icon="slider.icon"
+                              size="15"
+                            />
+                          </VAvatar>
+                          <span class="text-body-2 font-weight-medium">{{ slider.label }}</span>
+                        </div>
+                        <span
+                          class="text-body-2 font-weight-bold"
+                          :class="`text-${slider.color}`"
+                        >
+                          {{ slider.value }}%
+                        </span>
+                      </div>
+                      <VSlider
+                        v-model="slider.value"
+                        :min="0"
+                        :max="100"
+                        :step="1"
+                        :color="slider.color"
+                        hide-details
+                        density="compact"
+                      />
+                      <div class="text-caption text-medium-emphasis mt-1">
+                        {{ slider.hint }}
+                      </div>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+      </VWindow>
+    </template>
+
+    <!-- Snackbar -->
+    <VSnackbar
+      v-model="snack.show"
+      :color="snack.color"
+      :timeout="3500"
+      location="top right"
+    >
+      {{ snack.text }}
+    </VSnackbar>
   </div>
 </template>
 
 <style scoped lang="scss">
-/* Nút cây bút nhỏ góc avatar. */
-.avatar-edit-btn {
-  position: absolute;
-  inset-block-end: -4px;
-  inset-inline-end: -4px;
-  border: 2px solid rgb(var(--v-theme-surface));
-}
-
-/* Biểu đồ Radar SVG — màu theo biến theme. */
-.radar-chart {
-  inline-size: 100%;
-  max-inline-size: 320px;
-  overflow: visible;
-}
-.radar-ring {
-  fill: none;
-  stroke: rgba(var(--v-theme-on-surface), 0.12);
-}
-.radar-ring--outer {
-  fill: rgba(var(--v-theme-primary), 0.04);
-}
-.radar-ring--inner {
-  stroke: rgba(var(--v-theme-on-surface), 0.08);
-}
-.radar-axis {
-  stroke: rgba(var(--v-theme-on-surface), 0.12);
-}
-.radar-data {
-  fill: rgba(var(--v-theme-primary), 0.24);
-  stroke: rgb(var(--v-theme-primary));
-  stroke-width: 2;
-}
-.radar-dot {
-  fill: rgb(var(--v-theme-primary));
-}
-.radar-label-bold {
-  font-size: 9.5px;
-  font-weight: 700;
-  fill: rgb(var(--v-theme-on-surface));
-}
-.radar-label-sub {
-  font-size: 9px;
-  font-weight: 600;
-  fill: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-/* Hộp trích dẫn ví dụ văn phong — tông primary nhạt. */
-.quote-showcase-box {
-  background: rgba(var(--v-theme-primary), 0.05);
-  border: 1px solid rgba(var(--v-theme-primary), 0.16);
-}
-
-/* Chấm chuyển slide. */
-.quote-dot {
-  inline-size: 6px;
-  block-size: 6px;
-  border-radius: 50%;
-  background: rgba(var(--v-theme-on-surface), 0.2);
-  transition: all 0.2s ease;
-}
-.quote-dot--active {
-  inline-size: 8px;
-  block-size: 8px;
-  background: rgb(var(--v-theme-primary));
+/* Mở rộng vùng padding-box của VWindow thêm 16px (bù bằng margin -16px)
+ * để vừa giữ nguyên hiệu ứng trượt ngang khi chuyển tab, vừa không cắt
+ * mất box-shadow (elevation 6) ở 4 cạnh của các VCard bên trong tab. */
+.profile-tab-window {
+  padding: 16px;
+  margin: -16px;
 }
 
 /* Ô bật/tắt kênh hiển thị. */

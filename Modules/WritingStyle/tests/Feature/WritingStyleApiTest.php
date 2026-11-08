@@ -77,6 +77,93 @@ class WritingStyleApiTest extends TestCase
         $this->assertNull(WritingProfile::find($id));
     }
 
+    public function test_store_khong_analysis_id_origin_manual(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Manual Profile',
+            'rules_json' => ['tone' => 'ấm áp và thân thiện'],
+        ], $this->token($u));
+
+        $res->assertCreated();
+        $profile = WritingProfile::find($res->json('data.id'));
+        $this->assertSame('manual', $profile->origin);
+        $this->assertNull($profile->source_hash);
+        $this->assertNull($profile->analysis_metadata_json);
+    }
+
+    public function test_store_co_analysis_id_gan_ket_va_origin_reference(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+
+        // Giả analysis đã succeeded — đúng dữ liệu mà phân tích thật để lại.
+        $analysis = WritingProfileAnalysis::create([
+            'name'           => 'Mẫu đã giải mã',
+            'source_type'    => 'paste',
+            'reference_text' => 'Câu mẫu văn phong cần lưu.',
+            'status'         => 'succeeded',
+            'result_json'    => [
+                'detected_tier'      => 'medium',
+                'rules_json'         => ['tone' => 'ấm áp'],
+                'evidence_json'      => [],
+                'style_instructions' => 'Mở bằng câu hỏi.',
+                'metadata'           => ['word_count' => 12, 'sentence_count' => 3, 'detected_tier' => 'medium'],
+            ],
+        ]);
+
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'Saved Profile',
+            'analysis_id' => $analysis->id,
+            'rules_json'  => ['tone' => 'ấm áp'],
+            'style_instructions' => 'Mở bằng câu hỏi.',
+        ], $this->token($u));
+
+        $res->assertCreated();
+        $profile = WritingProfile::find($res->json('data.id'));
+        $this->assertSame('reference', $profile->origin);
+        $this->assertSame($analysis->source_hash, $profile->source_hash);
+        $this->assertSame(12, $profile->analysis_metadata_json['word_count']);
+
+        // Analysis được gắn vào profile (lịch sử phân tích hiển thị lại).
+        $this->assertSame($profile->id, $analysis->fresh()->draft_profile_id);
+    }
+
+    public function test_store_analysis_id_pending_khong_gan(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+
+        // Analysis chưa xong (pending) -> không được gắn; origin vẫn manual.
+        $analysis = WritingProfileAnalysis::create([
+            'source_type'    => 'paste',
+            'reference_text' => 'Đang chạy.',
+            'status'         => 'pending',
+        ]);
+
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'Bad Link',
+            'analysis_id' => $analysis->id,
+            'rules_json'  => ['tone' => 'ấm áp và thân thiện'],
+        ], $this->token($u));
+
+        $res->assertCreated();
+        $profile = WritingProfile::find($res->json('data.id'));
+        $this->assertSame('manual', $profile->origin);
+        $this->assertNull($profile->source_hash);
+        $this->assertNull($analysis->fresh()->draft_profile_id);
+    }
+
+    public function test_store_analysis_id_khong_ton_tai_422(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'X',
+            'analysis_id' => '00000000-0000-0000-0000-000000000000',
+            'rules_json'  => ['tone' => 'ấm áp và thân thiện'],
+        ], $this->token($u));
+
+        $res->assertUnprocessable();
+    }
+
     public function test_profile_slug_tu_sinh_tu_name_va_ghi_de_tuy_bien(): void
     {
         $u = $this->admin(['writing.profile.view', 'writing.profile.create']);

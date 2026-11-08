@@ -180,6 +180,36 @@ Phần này là **bản tóm tắt thực chiến** đã áp dụng khi chuẩn 
 | `title`/`subtitle` | prop của VCard | ❌ `<div>` + class thủ công |
 | spacing giữa card | `class="mb-6"` | 24px đồng nhất |
 
+> [!IMPORTANT]
+> **Quy tắc VCard nằm trong Tabs (`VWindow` / `VTabs`):**
+> Mặc định thẻ `<VWindow>` của Vuetify có `overflow: hidden` để phục vụ hiệu ứng trượt (transition). Nếu đặt `<VCard>` trực tiếp bên trong `<VWindowItem>` (đặc biệt khi không có đệm `<VRow><VCol>`), **bóng đổ (`box-shadow`) ở 4 cạnh sẽ bị cắt phẳng lì 100%**.
+> Để xử lý, bắt buộc áp dụng 1 trong 2 phương án chuẩn sau:
+> 
+> * **Phương án 1 (Khuyến nghị — Giữ 100% hiệu ứng trượt ngang mượt mà):**
+>   Thêm class mở rộng padding-box bù trừ margin trên `<VWindow>`:
+>   ```vue
+>   <VWindow v-model="activeTab" class="tab-window-overflow-fix">
+>     ...
+>   </VWindow>
+>   ```
+>   ```scss
+>   /* Scoped SCSS: Nới rộng vùng hiển thị 16px ở 4 cạnh để bóng tỏa tự nhiên, 
+>    * margin -16px bù lại để card vẫn thẳng hàng tuyệt đối với layout bên ngoài */
+>   .tab-window-overflow-fix {
+>     padding: 16px;
+>     margin: -16px;
+>   }
+>   ```
+> 
+> * **Phương án 2 (Khi không cần hiệu ứng trượt chuyển tab):**
+>   Dùng class dựng sẵn của Vuexy:
+>   ```vue
+>   <VWindow v-model="activeTab" class="disable-tab-transition">
+>   ```
+>   Class này sẽ áp dụng `overflow: unset !important` nhưng sẽ vô hiệu hóa hoàn toàn animation trượt ngang giữa các tab.
+>
+> * **Lưu ý thêm về border:** Tuyệt đối không gắn prop `border` vào `<VCard>` khi dùng theme đổ bóng (elevation 6). Chỉ dùng class `border` cho các khối `<div>` con phụ bên trong `VCardText`.
+
 #### c) Form & Field
 - `label="..."` prop của `App*` → tự render `VLabel` `text-body-2`; ❌ `<label class="text-caption font-weight-bold">` thủ công.
 - Bỏ `density="compact"`, `hide-details`, `variant="outlined"` trên `App*` → size **normal**.

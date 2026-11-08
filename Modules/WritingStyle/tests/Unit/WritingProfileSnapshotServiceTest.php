@@ -10,7 +10,7 @@ use Tests\TestCase;
 /**
  * Unit test WritingProfileSnapshotService (Task 5, PLAN.md §310).
  * Chứng minh: (1) strip evidence_json, (2) rules lọc theo tier,
- * (3) prompt chứa tier label + lệnh cấm đạo văn.
+ * (3) prompt chứa tier label + lệnh cấm đạo văn + Ô 2 (Chất văn).
  */
 class WritingProfileSnapshotServiceTest extends TestCase
 {
@@ -64,9 +64,10 @@ class WritingProfileSnapshotServiceTest extends TestCase
     {
         $sn = $this->svc()->buildSnapshot($this->profile(), WritingProfile::TIER_MICRO);
 
-        foreach (['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns'] as $k) {
+        foreach (['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns', 'opening', 'transitions', 'technical_terms', 'examples'] as $k) {
             $this->assertArrayNotHasKey($k, $sn->rulesJson, "micro phải bỏ {$k}");
         }
+        $this->assertArrayNotHasKey('uncertainties', $sn->rulesJson, 'uncertainties không được vào prompt sinh bài');
         $this->assertSame('2–3 câu', $sn->sentenceHint);
     }
 
@@ -105,16 +106,78 @@ class WritingProfileSnapshotServiceTest extends TestCase
         $this->assertSame(WritingProfile::TIER_LONG, $sn->targetTier);
         $this->assertArrayHasKey('headings', $sn->rulesJson);
     }
-    public function test_short_bo_3_khoa_giu_paragraph_rhythm(): void
+
+    public function test_short_bo_5_khoa_giu_paragraph_rhythm(): void
     {
         $sn = $this->svc()->buildSnapshot($this->profile(), WritingProfile::TIER_SHORT);
 
-        // short: headings/bullets/structure_patterns bị đẩy uncertainties,
-        // paragraph_rhythm vẫn giữ.
-        foreach (['headings', 'bullets', 'structure_patterns'] as $k) {
+        foreach (['headings', 'bullets', 'structure_patterns', 'technical_terms', 'examples'] as $k) {
             $this->assertArrayNotHasKey($k, $sn->rulesJson, "short phải bỏ {$k}");
         }
         $this->assertArrayHasKey('paragraph_rhythm', $sn->rulesJson);
         $this->assertSame('3–4 câu', $sn->sentenceHint);
+    }
+
+    public function test_medium_chi_bo_headings(): void
+    {
+        $sn = $this->svc()->buildSnapshot($this->profile(), WritingProfile::TIER_MEDIUM);
+
+        $this->assertArrayNotHasKey('headings', $sn->rulesJson, 'medium bỏ headings');
+        foreach (['bullets', 'paragraph_rhythm', 'structure_patterns'] as $k) {
+            $this->assertArrayHasKey($k, $sn->rulesJson, "medium giữ {$k}");
+        }
+        $this->assertSame('20–30 câu', $sn->sentenceHint);
+    }
+
+    public function test_snapshot_khong_chua_uncertainties(): void
+    {
+        $p = $this->profile();
+        $rules = $p->rules_json;
+        $rules['uncertainties'] = ['headings: không áp dụng ở văn bản micro'];
+        $p->rules_json = $rules;
+
+        foreach ([WritingProfile::TIER_MICRO, WritingProfile::TIER_SHORT, WritingProfile::TIER_MEDIUM, WritingProfile::TIER_LONG] as $tier) {
+            $sn = $this->svc()->buildSnapshot($p, $tier);
+            $this->assertArrayNotHasKey('uncertainties', $sn->rulesJson, "{$tier} không có uncertainties trong rules");
+            $this->assertStringNotContainsString('uncertainties', $sn->systemPrompt, "{$tier} prompt không chứa uncertainties");
+            $this->assertStringNotContainsString('không áp dụng ở văn bản', $sn->systemPrompt);
+        }
+    }
+
+    public function test_snapshot_chua_voice_texture_o2_va_5_thanh_truot(): void
+    {
+        $p = $this->profile([
+            'voice_texture_instructions' => 'Giọng thủ thỉ trầm ấm, lướt nhanh ý phụ và nhấn sâu chi tiết giác quan.',
+            'voice_texture_sliders_json' => [
+                'voice_timbre'     => 85,
+                'vernacular_flow'  => 75,
+                'emotional_nuance' => 80,
+                'rhythm_variation' => 70,
+                'emphasis_glide'   => 90,
+            ],
+        ]);
+
+        $sn = $this->svc()->buildSnapshot($p, WritingProfile::TIER_MEDIUM);
+
+        $this->assertStringContainsString('Giọng thủ thỉ trầm ấm', $sn->systemPrompt);
+        $this->assertStringContainsString('THÔNG SỐ CHẤT VĂN & ĐỘ TỰ NHIÊN (VOICE TEXTURE CALIBRATION):', $sn->systemPrompt);
+        $this->assertStringContainsString('Giọng văn: 85%', $sn->systemPrompt);
+        $this->assertStringContainsString('Tính nhấn và lướt: 90%', $sn->systemPrompt);
+    }
+
+    public function test_snapshot_tu_dong_chua_tone_sliders_json_tu_db(): void
+    {
+        $p = $this->profile([
+            'tone_sliders_json' => [
+                'humor'         => 60,
+                'empathy'       => 85,
+                'assertiveness' => 50,
+            ],
+        ]);
+
+        $sn = $this->svc()->buildSnapshot($p, WritingProfile::TIER_MEDIUM);
+
+        $this->assertStringContainsString('HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):', $sn->systemPrompt);
+        $this->assertStringContainsString('Trân trọng & Đồng cảm: 85% (+35% so với điểm cân bằng)', $sn->systemPrompt);
     }
 }

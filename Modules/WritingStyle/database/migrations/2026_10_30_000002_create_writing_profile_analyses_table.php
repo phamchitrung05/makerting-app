@@ -17,7 +17,8 @@ use Illuminate\Support\Facades\Schema;
  *   `ai_run_id` (ai_runs), `error_code/message`.
  * - Kết quả: `result_json` (rules + evidence + instructions thô),
  *   `detected_tier` cấp độ độ dài tự phát hiện, `draft_profile_id` trỏ tới
- *   WritingProfile draft được tạo ra (người dùng duyệt → active).
+ *   WritingProfile người dùng LƯU (phân tích không tự tạo profile — cột này
+ *   được điền bởi WritingProfileController@store khi payload kèm analysis_id).
  * - `expires_at` — bản ghi phân tích có thể tự hủy sau N ngày (bảo mật text
  *   mẫu) — cleanup job sẽ xóa.
  *
@@ -67,7 +68,8 @@ return new class extends Migration
             // metadata) trước khi biên dịch thành draft profile.
             $table->json('result_json')->nullable();
 
-            // WritingProfile draft được tạo ra — người dùng duyệt → 'active'.
+            // WritingProfile người dùng LƯU (phân tích không tự tạo —
+            // WritingProfileController@store gắn khi payload kèm analysis_id).
             $table->foreignId('draft_profile_id')
                 ->nullable()
                 ->constrained('writing_profiles')

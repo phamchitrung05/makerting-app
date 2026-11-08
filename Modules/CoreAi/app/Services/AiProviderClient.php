@@ -73,6 +73,7 @@ class AiProviderClient extends SafeRemoteFetcher
     ): RemoteFetchResultDto {
         $method = strtoupper($method);
         $timeout = (int) ($options['timeout'] ?? $provider->request_timeout ?? 120);
+        @set_time_limit(max(180, $timeout + 30));
         $maxBytes = (int) ($options['maxBytes'] ?? $this->maxBytes);
         $keyIndex = (int) ($options['keyIndex'] ?? 0);
 

@@ -132,11 +132,14 @@ class WritingProfileDefinition
      * =====================================================================
      * CHỨC NĂNG: Khóa áp dụng cho 1 cấp độ độ dài.
      * =====================================================================
-     * - micro : bỏ `headings`/`bullets`/`paragraph_rhythm`/`structure_patterns`
-     *   (đẩy vào `uncertainties` — không ép AI bịa).
-     * - short : còn lại trừ `headings`/`bullets`/`structure_patterns`
-     *   (paragraph_rhythm đã kích hoạt theo §305).
-     * - medium/long : đủ 16 (long = trọn vẹn).
+     * Lọc theo config('writingstyle.tier_drop_rules') — mỗi tier khai báo
+     * danh sách rule_keys được lược bỏ (PLAN-WRITING-STYLE-PROMPT-V2 §3):
+     *   micro  : bỏ 8 khóa (giữ 7 lõi + uncertainties).
+     *   short  : bỏ 5 khóa (giữ 10 + uncertainties).
+     *   medium : bỏ headings (giữ 14 + uncertainties).
+     *   long   : đủ 16 (trọn vẹn).
+     * Khóa bị bỏ không được hỏi ở phân tích lẫn dùng khi sinh bài — AI báo
+     * lại qua `uncertainties` (báo cáo cho người đọc, không đưa vào prompt).
      *
      * INPUT: tier. OUTPUT: string[] rule_keys áp dụng.
      * =====================================================================
@@ -144,17 +147,10 @@ class WritingProfileDefinition
     public static function applicableKeys(string $tier): array
     {
         $all = self::ruleKeys();
-        $longOnly = config('writingstyle.long_only_rule_keys', [
-            'headings', 'bullets', 'paragraph_rhythm', 'structure_patterns',
-        ]);
+        $dropMap = config('writingstyle.tier_drop_rules', []);
+        $drop = $dropMap[$tier] ?? [];
 
-        return match ($tier) {
-            WritingProfile::TIER_MICRO =>
-                array_values(array_diff($all, $longOnly)),
-            WritingProfile::TIER_SHORT =>
-                array_values(array_diff($all, ['headings', 'bullets', 'structure_patterns'])),
-            default => $all, // medium | long — đủ 16.
-        };
+        return array_values(array_diff($all, $drop));
     }
 
     /**

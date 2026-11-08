@@ -49,7 +49,7 @@ class WritingStyleAnalyzerServiceTest extends TestCase
             "Đây là câu bốn để đủ tier short. Câu năm tiếp theo. Câu sáu nữa. Câu bảy. Câu tám. Câu chín. Câu mười. Câu mười một.";
     }
 
-    public function test_analyze_tao_analysis_va_draft_profile(): void
+    public function test_analyze_khong_tao_profile_chi_ghi_result(): void
     {
         $this->fakeGateway([
             'rules_json' => ['tone' => 'trang trọng', 'pronouns' => 'tôi/bạn'],
@@ -70,14 +70,9 @@ class WritingStyleAnalyzerServiceTest extends TestCase
         $this->assertCount(1, $a->result_json['evidence_json']);
         $this->assertSame('nội dung là vua', $a->result_json['evidence_json'][0]['excerpt']);
 
-        // Draft profile được tạo + liên kết.
-        $this->assertNotNull($a->draft_profile_id);
-        $profile = WritingProfile::find($a->draft_profile_id);
-        $this->assertNotNull($profile);
-        $this->assertSame(WritingProfile::ORIGIN_REFERENCE, $profile->origin);
-        $this->assertSame(WritingProfile::STATUS_DRAFT, $profile->status);
-        $this->assertSame('medium', $profile->dominant_tier);
-        $this->assertSame('trang trọng', $profile->rules_json['tone']);
+        // Phân tích KHÔNG tạo WritingProfile (chỉ khi Lưu mới tạo).
+        $this->assertNull($a->draft_profile_id);
+        $this->assertSame(0, WritingProfile::count());
     }
 
     public function test_analyze_ghi_ai_run_id(): void

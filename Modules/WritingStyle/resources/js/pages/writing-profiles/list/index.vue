@@ -153,15 +153,47 @@
 
     <!-- ================= ITEMS (không card bao) ================= -->
     <div>
-      <!-- Loading -->
+      <!-- Loading (Skeleton Grid - 10 card mô phỏng lưới 5 cột x 2 hàng) -->
       <div
         v-if="store.loadingProfiles && !profileCards.length"
-        class="d-flex justify-center py-12"
+        class="profile-grid"
       >
-        <VProgressCircular
-          indeterminate
-          color="primary"
-        />
+        <VCard
+          v-for="n in 10"
+          :key="`skeleton-${n}`"
+          class="profile-grid-card pa-4 d-flex flex-column justify-space-between"
+          style="min-height: 260px;"
+        >
+          <div>
+            <div class="d-flex justify-space-between align-start mb-4">
+              <VSkeletonLoader
+                type="avatar"
+                class="bg-transparent"
+              />
+              <VSkeletonLoader
+                type="chip"
+                class="bg-transparent"
+                style="width: 70px;"
+              />
+            </div>
+
+            <VSkeletonLoader
+              type="heading"
+              class="bg-transparent mb-2"
+            />
+            <VSkeletonLoader
+              type="paragraph"
+              class="bg-transparent mb-4"
+            />
+          </div>
+
+          <div class="pt-3 border-t">
+            <VSkeletonLoader
+              type="text"
+              class="bg-transparent"
+            />
+          </div>
+        </VCard>
       </div>
 
       <!-- Empty state -->

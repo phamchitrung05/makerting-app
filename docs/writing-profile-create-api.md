@@ -237,9 +237,10 @@ Mỗi giai đoạn tự chạy được và kiểm chứng được độc lập
 **Việc cần làm**
 
 1. Viết lại `saveWritingProfile(openEditor)`:
-   - **Hai nhánh, phân biệt rõ:**
-     - Đã chạy analyze xong → đã có `draft_profile_id` (job tự tạo draft trong [WritingStyleAnalyzerService::createDraft](../Modules/WritingStyle/app/Services/WritingStyleAnalyzerService.php:160)). Dùng `PUT /writing-profiles/{draft_profile_id}` để cập nhật tên/mô tả/status người dùng sửa — **không `POST`**, nếu không sẽ sinh profile trùng cho cùng một lần giải mã.
-     - Chưa analyze → `POST /writing-profiles` tạo mới (`origin=manual`).
+   - **[CẬP NHẬT PLAN-V3] Phân tích KHÔNG tạo profile nữa** (`WritingStyleAnalyzerService::createDraft` đã bỏ). Lưu phân 2 nhánh theo `savedProfileId` (id profile đã Lưu trong phiên, không reset khi re-analyze):
+     - Chưa Lưu lần nào → `POST /writing-profiles` kèm `analysis_id` (phiên phân tích succeeded gần nhất) → backend gắn `analysis.draft_profile_id`, copy `source_hash` + metadata, suy `origin=reference`.
+     - Đã Lưu >= 1 lần → `PUT /writing-profiles/{savedProfileId}` cập nhật cùng profile — dù có re-analyze bao nhiêu lần giữa các lần Lưu.
+     - Chưa analyze → `POST` không kèm `analysis_id` (`origin=manual`).
    - Map camelCase → snake_case: `dominantTier→dominant_tier`, `isEnabled→is_enabled`.
    - `profileForm.slug` và `profileForm.taxonomyTags` hiện **không có trong `StoreWritingProfileRequest`** — bỏ khỏi payload (gửi lên sẽ bị validate loại bỏ im lặng), hoặc chờ `G11`.
    - Điều hướng bằng id thật: `router.push({ name: '...-edit-id', params: { id: res.id } })`.
@@ -370,7 +371,7 @@ G11,G12 ──► GĐ6 (dọn khối không backend)   (độc lập, làm lúc 
 | :--- | :--- | :--- |
 | Job `ai-text` cần worker chạy | Không có worker thì analyze treo mãi ở `pending`, người dùng tưởng hỏng | `waitForAnalysis` có timeout 300s khớp `$timeout` của job; snackbar nói rõ "cần queue worker" |
 | Dedupe `source_hash` gây bối rối | Dán lại cùng nội dung khi job trước đang chạy → trả về analysis cũ, người dùng tưởng không chạy | Nhận biết `analysis_id` trùng với lần trước → snackbar *"Đang giải mã nội dung này rồi"* |
-| Analyze tự tạo draft profile | `POST` thêm lần nữa khi lưu sẽ sinh profile trùng | GĐ4 phân nhánh `PUT` khi đã có `draft_profile_id` |
+| Analyze tự tạo draft profile | ~~`POST` thêm lần nữa khi lưu sẽ sinh profile trùng~~ **[ĐÃ SỬA]** — phân tích không tự tạo profile nữa (PLAN-V3); chỉ ghi result_json, profile chỉ tạo khi Lưu |
 | `uncertainties` là mảng, 15 khóa kia là chuỗi | Render `[object Object]` hoặc crash | Xử lý riêng khi map `rules_json` |
 | Tier client lệch tier backend | Chip hiện `medium` nhưng DNA giải mã theo `short` | Sau analyze lấy `detected_tier` của backend làm chuẩn |
 | SSRF ở fetcher URL | Đọc được dịch vụ nội bộ, metadata cloud | GĐ5 bắt buộc chặn IP nội bộ sau resolve DNS + giới hạn redirect/size/timeout |
