@@ -587,4 +587,206 @@ class WritingStyleApiTest extends TestCase
             ->assertJsonPath('data.slug', 'giong-x')
             ->assertJsonPath('data.available', true);
     }
+
+    /* =====================================================================
+     * SANDBOX PIPELINE (PLAN-WRITING-STYLE-SANDBOX-PIPELINE)
+     * ===================================================================== */
+
+    public function test_options_tra_pipelines_cho_4_tier(): void
+    {
+        $u = $this->admin(['writing.profile.view']);
+        $res = $this->getJson('/api/v1/admin/writing-style/writing-profiles/options', $this->token($u));
+
+        $res->assertOk()
+            ->assertJsonStructure([
+                'data' => ['tiers', 'rules', 'pipelines'],
+            ])
+            ->assertJsonStructure([
+                'data' => ['pipelines' => ['long' => ['steps']]],
+            ]);
+
+        // Long phải có 2 bước: topic_outline -> article_writer.
+        $longSteps = collect($res->json('data.pipelines.long.steps') ?? [])
+            ->pluck('step')->all();
+        $this->assertSame(['topic_outline', 'article_writer'], $longSteps);
+    }
+
+    public function test_sandbox_step_topic_outline_tra_artifact(): void
+    {
+        $u = $this->admin(['writing.evaluate']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Giọng Long', 'dominant_tier' => 'long', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'], 'evidence_json' => [],
+        ]);
+
+        // Mock AI trả kết quả phân tích chủ đề.
+        $this->app->instance(\Modules\CoreAi\Contracts\CoreAiGatewayContract::class, new class implements \Modules\CoreAi\Contracts\CoreAiGatewayContract {
+            public function executeStructured(\Modules\CoreAi\DTOs\AiStructuredRequest $r): \Modules\CoreAi\DTOs\AiStructuredResponse {
+                return new \Modules\CoreAi\DTOs\AiStructuredResponse(
+                    text: '{"thesis":"x"}',
+                    data: [
+                        'thesis'       => 'Luận điểm cốt lõi test',
+                        'target_angle' => 'Góc tiếp cận độc giả mục tiêu',
+                        'outline'      => [
+                            ['tag' => 'H2', 'title' => 'Mở bài', 'key_points' => ['Đặt vấn đề'], 'suggested_evidence' => 'Ví dụ X'],
+                            ['tag' => 'H3', 'title' => 'Phân tích', 'key_points' => ['Dẫn chứng'], 'suggested_evidence' => ''],
+                        ],
+                    ],
+                    remoteModelId: 'fake',
+                );
+            }
+            public function generateImage(\Modules\CoreAi\DTOs\AiImageRequest $r): \Modules\CoreAi\DTOs\AiImageResponse { throw new \LogicException; }
+            public function synthesizeSpeech(\Modules\CoreAi\DTOs\AiSpeechRequest $r): \Modules\CoreAi\DTOs\AiSpeechResponse { throw new \LogicException; }
+            public function transcribeAudio(\Modules\CoreAi\DTOs\AiTranscribeRequest $r): \Modules\CoreAi\DTOs\AiTranscribeResponse { throw new \LogicException; }
+            public function lastRun() { return (object) ['id' => 'run-1']; }
+        });
+
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/steps/topic_outline",
+            ['topic' => 'chủ đề X', 'target_tier' => 'long'],
+            $t,
+        );
+
+        $res->assertOk()
+            ->assertJsonPath('data.step', 'topic_outline')
+            ->assertJsonPath('data.artifact.thesis', 'Luận điểm cốt lõi test')
+            ->assertJsonCount(2, 'data.artifact.outline');
+    }
+
+    public function test_sandbox_step_article_writer_long_thieu_artifact_bi_chan_422(): void
+    {
+        $u = $this->admin(['writing.evaluate']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Giọng Long', 'dominant_tier' => 'long', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'], 'evidence_json' => [],
+        ]);
+
+        // Gọi article_writer ở tier long mà KHÔNG truyền artifacts.topic_outline.
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/steps/article_writer",
+            ['topic' => 'chủ đề X', 'target_tier' => 'long'],
+            $t,
+        );
+
+        $res->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonStructure(['message']);
+    }
+
+    public function test_sandbox_step_article_writer_long_du_artifact_tra_200(): void
+    {
+        $u = $this->admin(['writing.evaluate']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Giọng Long', 'dominant_tier' => 'long', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'], 'evidence_json' => [],
+        ]);
+
+        // Mock AI trả text viết bài.
+        $this->app->instance(\Modules\CoreAi\Contracts\CoreAiGatewayContract::class, new class implements \Modules\CoreAi\Contracts\CoreAiGatewayContract {
+            public function executeStructured(\Modules\CoreAi\DTOs\AiStructuredRequest $r): \Modules\CoreAi\DTOs\AiStructuredResponse {
+                return new \Modules\CoreAi\DTOs\AiStructuredResponse(
+                    text: 'Bài viết hoàn chỉnh theo DNA + dàn ý.',
+                    remoteModelId: 'fake',
+                );
+            }
+            public function generateImage(\Modules\CoreAi\DTOs\AiImageRequest $r): \Modules\CoreAi\DTOs\AiImageResponse { throw new \LogicException; }
+            public function synthesizeSpeech(\Modules\CoreAi\DTOs\AiSpeechRequest $r): \Modules\CoreAi\DTOs\AiSpeechResponse { throw new \LogicException; }
+            public function transcribeAudio(\Modules\CoreAi\DTOs\AiTranscribeRequest $r): \Modules\CoreAi\DTOs\AiTranscribeResponse { throw new \LogicException; }
+            public function lastRun() { return (object) ['id' => 'run-2']; }
+        });
+
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/steps/article_writer",
+            [
+                'topic' => 'chủ đề X',
+                'target_tier' => 'long',
+                'artifacts' => [
+                    'topic_outline' => [
+                        'thesis'       => 'Luận điểm đã duyệt',
+                        'target_angle' => 'Góc độc giả',
+                        'outline'      => [
+                            ['tag' => 'H2', 'title' => 'Mở bài', 'key_points' => ['Đặt vấn đề'], 'suggested_evidence' => ''],
+                        ],
+                    ],
+                ],
+            ],
+            $t,
+        );
+
+        $res->assertOk()
+            ->assertJsonPath('data.step', 'article_writer')
+            ->assertJsonPath('data.artifact.text', 'Bài viết hoàn chỉnh theo DNA + dàn ý.');
+    }
+
+    public function test_save_va_delete_sandbox_sample_luu_db(): void
+    {
+        $u = $this->admin(['writing.evaluate', 'writing.profile.view']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Giọng Lưu Thử Nghiệm', 'dominant_tier' => 'medium', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'], 'evidence_json' => [],
+        ]);
+
+        // 1. Lưu bản thử thứ nhất
+        $res1 = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox-samples",
+            [
+                'topic'         => 'Chủ đề cà phê sáng',
+                'target_tier'   => 'medium',
+                'text'          => 'Nội dung bài viết thử số 1.',
+                'system_prompt' => 'System prompt số 1',
+            ],
+            $t,
+        );
+
+        $res1->assertOk()
+            ->assertJsonPath('data.sample.topic', 'Chủ đề cà phê sáng')
+            ->assertJsonCount(1, 'data.samples');
+
+        $sampleId1 = $res1->json('data.sample.id');
+        $this->assertNotEmpty($sampleId1);
+
+        // 2. Lưu bản thử thứ hai (sẽ đứng đầu danh sách)
+        $res2 = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox-samples",
+            [
+                'topic'       => 'Chủ đề trà chiều',
+                'target_tier' => 'short',
+                'text'        => 'Nội dung bài viết thử số 2.',
+            ],
+            $t,
+        );
+
+        $res2->assertOk()
+            ->assertJsonCount(2, 'data.samples')
+            ->assertJsonPath('data.samples.0.topic', 'Chủ đề trà chiều')
+            ->assertJsonPath('data.samples.1.topic', 'Chủ đề cà phê sáng');
+
+        // 3. Kiểm tra GET profile trả về sandbox_samples_json đầy đủ
+        $showRes = $this->getJson("/api/v1/admin/writing-style/writing-profiles/{$profile->id}", $t);
+        $showRes->assertOk()
+            ->assertJsonCount(2, 'data.sandbox_samples_json');
+
+        // 4. Xóa bản thử thứ nhất
+        $delRes = $this->deleteJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox-samples/{$sampleId1}",
+            [],
+            $t,
+        );
+
+        $delRes->assertOk()
+            ->assertJsonCount(1, 'data.samples')
+            ->assertJsonPath('data.samples.0.topic', 'Chủ đề trà chiều');
+    }
 }

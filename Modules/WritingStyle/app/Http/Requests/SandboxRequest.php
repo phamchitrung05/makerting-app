@@ -32,6 +32,7 @@ class SandboxRequest extends FormRequest
 
             // Ghi đè voice_texture_instructions (Ô 2) và 5 thanh trượt Chất văn runtime.
             'voice_texture_instructions'        => ['nullable', 'string', 'max:10000'],
+            'tone_instructions'                 => ['nullable', 'string', 'max:10000'],
             'voice_texture_sliders_json'        => ['nullable', 'array'],
             'voice_texture_sliders_json.*'      => ['integer', 'min:0', 'max:100'],
         ];

@@ -40,4 +40,14 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/writing-style')->name('wri
 
     Route::post('writing-profiles/{writing_profile}/sandbox', [WritingSandboxController::class, 'store'])
         ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox');
+
+    // Sandbox Pipeline — thực thi 1 step theo tier (PLAN-WRITING-STYLE-SANDBOX-PIPELINE).
+    Route::post('writing-profiles/{writing_profile}/sandbox/steps/{step}', [WritingSandboxController::class, 'runStep'])
+        ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox.steps.run');
+
+    // Lưu & xóa bản viết thử trong Phòng thử DNA (sandbox_samples_json).
+    Route::post('writing-profiles/{writing_profile}/sandbox-samples', [WritingSandboxController::class, 'saveSample'])
+        ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox-samples.store');
+    Route::delete('writing-profiles/{writing_profile}/sandbox-samples/{sampleId}', [WritingSandboxController::class, 'deleteSample'])
+        ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox-samples.destroy');
 });

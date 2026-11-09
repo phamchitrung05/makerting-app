@@ -218,4 +218,22 @@ export const writingStyleApi = {
   sandbox(id, payload) {
     return $api(`${BASE}/writing-profiles/${id}/sandbox`, { method: 'POST', body: payload })
   },
+
+  /**
+   * =====================================================================
+   * CHỨC NĂNG: Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong
+   * =====================================================================
+   */
+  saveSandboxSample(id, payload) {
+    return $api(`${BASE}/writing-profiles/${id}/sandbox-samples`, { method: 'POST', body: payload })
+  },
+
+  /**
+   * =====================================================================
+   * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi hồ sơ văn phong
+   * =====================================================================
+   */
+  deleteSandboxSample(id, sampleId) {
+    return $api(`${BASE}/writing-profiles/${id}/sandbox-samples/${sampleId}`, { method: 'DELETE' })
+  },
 }

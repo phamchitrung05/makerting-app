@@ -180,4 +180,33 @@ class WritingProfileSnapshotServiceTest extends TestCase
         $this->assertStringContainsString('HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):', $sn->systemPrompt);
         $this->assertStringContainsString('Trân trọng & Đồng cảm: 85% (+35% so với điểm cân bằng)', $sn->systemPrompt);
     }
+    public function test_snapshot_chua_day_du_prompt_bo_sung_1_2_3_va_sliders(): void
+    {
+        $p = $this->profile([
+            'style_instructions'         => 'Chân dung người kể chuyện: Người bạn đồng hành sâu sắc.',
+            'voice_texture_instructions' => 'Giọng thủ thỉ trầm ấm, lướt nhanh ý phụ và nhấn sâu chi tiết giác quan.',
+            'tone_instructions'          => 'Luôn giữ sắc thái trân trọng thấu hiểu, hóm hỉnh nhẹ nhàng khi mở đầu.',
+            'voice_texture_sliders_json' => [
+                'voice_timbre'   => 85,
+                'emphasis_glide' => 90,
+            ],
+            'tone_sliders_json' => [
+                'humor'   => 60,
+                'empathy' => 85,
+            ],
+        ]);
+
+        $sn = $this->svc()->buildSnapshot($p, WritingProfile::TIER_MEDIUM);
+
+        // Ô 1: style_instructions
+        $this->assertStringContainsString('Hướng dẫn bổ sung (Ô 1 - Hành văn & Chân dung): Chân dung người kể chuyện', $sn->systemPrompt);
+        // Ô 2: voice_texture_instructions
+        $this->assertStringContainsString('Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt (Ô 2): Giọng thủ thỉ trầm ấm', $sn->systemPrompt);
+        // Ô 3: tone_instructions
+        $this->assertStringContainsString('Chỉ dẫn Sắc thái & Phối âm cảm xúc (Ô 3): Luôn giữ sắc thái trân trọng thấu hiểu', $sn->systemPrompt);
+        // 5 Sliders Chất văn
+        $this->assertStringContainsString('THÔNG SỐ CHẤT VĂN & ĐỘ TỰ NHIÊN (VOICE TEXTURE CALIBRATION):', $sn->systemPrompt);
+        // 8 Sliders Sắc thái cảm xúc
+        $this->assertStringContainsString('HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):', $sn->systemPrompt);
+    }
 }

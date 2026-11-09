@@ -619,5 +619,23 @@ export const useWritingStyleStore = defineStore('writingStyle', {
         this.sandboxing = false
       }
     },
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Lưu 1 bản viết thử vào Database của hồ sơ văn phong
+     * =====================================================================
+     */
+    async saveSandboxSample(id, payload) {
+      return await writingStyleApi.saveSandboxSample(id, payload)
+    },
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database của hồ sơ văn phong
+     * =====================================================================
+     */
+    async deleteSandboxSample(id, sampleId) {
+      return await writingStyleApi.deleteSandboxSample(id, sampleId)
+    },
   },
 })

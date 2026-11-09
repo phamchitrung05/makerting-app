@@ -78,6 +78,7 @@ class StoreWritingProfileRequest extends FormRequest
             'voice_texture_sliders_json.emphasis_glide' => ['nullable', 'integer', 'min:0', 'max:100'],
             'tone_sliders_json'     => ['nullable', 'array'],
             'tone_sliders_json.*'   => ['nullable', 'integer', 'min:0', 'max:100'],
+            'tone_instructions'     => ['nullable', 'string', 'max:10000'],
             'status'                => ['nullable', 'in:draft,active'],
             'is_enabled'            => ['nullable', 'boolean'],
 

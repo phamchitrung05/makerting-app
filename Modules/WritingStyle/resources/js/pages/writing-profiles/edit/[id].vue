@@ -7,19 +7,19 @@
 
   Nối API thật:
   - onMounted: store.fetchProfile(id) -> GET /writing-profiles/{id}
-    (kèm categories/tags/analyses eager-load từ controller show()).
+  (kèm categories/tags/analyses eager-load từ controller show()).
   - Map vào 8 tab theo rule_key:
-    Banner+Tổng quan: name/version/description/is_enabled/slug/status
-    Đặc điểm văn phong: rules_json.tone|emotion|pronouns|vocabulary + style_instructions
-    Cấu trúc nội dung: rules_json.opening|structure_patterns|transitions|ending
-    Quy tắc ngôn ngữ: rules_json.pronouns + editorialRules(avoid+vocabulary)
-    Mẫu nội dung: evidence_json
-    Từ vựng & CTA: rules_json.vocabulary/avoid
-    Cài đặt nâng cao: style_instructions + ai_model_used (hiển thị)
-    Lịch sử: analyses (đã load) + version hiện tại
+  Banner+Tổng quan: name/version/description/is_enabled/slug/status
+  Đặc điểm văn phong: rules_json.tone|emotion|pronouns|vocabulary + style_instructions
+  Cấu trúc nội dung: rules_json.opening|structure_patterns|transitions|ending
+  Quy tắc ngôn ngữ: rules_json.pronouns + editorialRules(avoid+vocabulary)
+  Mẫu nội dung: evidence_json
+  Từ vựng & CTA: rules_json.vocabulary/avoid
+  Cài đặt nâng cao: style_instructions + ai_model_used (hiển thị)
+  Lịch sử: analyses (đã load) + version hiện tại
   - saveProfile() -> PUT /writing-profiles/{id}: chỉ merge các khóa rules_json
-    user được chỉnh trên UI (không đè 9 khóa còn lại) + categories/tags +
-    status/is_enabled + slug + description + style_instructions.
+  user được chỉnh trên UI (không đè 9 khóa còn lại) + categories/tags +
+  status/is_enabled + slug + description + style_instructions.
 
   UI-only giữ nguyên (KHÔNG map, không lưu — doc §10.3):
   radar 6 trục, expressionLevel, sampleQuotes, displayChannels,
@@ -33,7 +33,7 @@
 -->
 <script setup>
 /* eslint-disable camelcase */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
 import TaxonomyField from '@modules/Taxonomy/resources/js/components/TaxonomyField.vue'
@@ -197,6 +197,7 @@ function addNegativeWord() {
 const advancedConfig = reactive({
   systemPrompt: '',
   voiceTexturePrompt: '',
+  tonePrompt: '', // Ô 3 - Chỉ dẫn Sắc thái & Phối âm cảm xúc (tone_instructions)
   preferredModel: '',
   temperature: 0.75,
   autoScoreCheck: true,
@@ -354,6 +355,39 @@ const VOICE_STYLE_OPTIONS = [
 
 const selectedVoiceOptionIds = ref([])
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG COMPUTED: Danh sách items cho AppSelect gợi ý chất văn & nhịp điệu
+ * =====================================================================
+ * Chuyển đổi 8 dạng hành văn VOICE_STYLE_OPTIONS thành format item cho AppSelect.
+ *
+ * INPUT/OUTPUT:
+ * - INPUT : Hằng số VOICE_STYLE_OPTIONS
+ * - OUTPUT: Mảng item [{ value, title, attributeLabel, desc, icon, color }]
+ * =====================================================================
+ */
+const voiceStyleSelectItems = computed(() =>
+  VOICE_STYLE_OPTIONS.map(opt => ({
+    value: opt.id,
+    title: opt.title,
+    attributeLabel: opt.attributeLabel,
+    desc: opt.desc,
+    icon: opt.icon,
+    color: opt.color,
+  })),
+)
+
+/** Tab dọc đang chọn trong Tab 7 (Cài đặt nâng cao): 'prompt1' | 'prompt2' | 'prompt3' */
+const activeAdvancedPromptTab = ref('prompt1')
+
+/** Quản lý trạng thái đóng / mở của collapse 5 thanh trượt Chất văn (mặc định đóng null) */
+const voiceTexturePanel = ref(null)
+
+/** Kiểm tra xem có thanh trượt Chất văn nào đang khác baseline (50%) hay không */
+const hasModifiedVoiceSliders = computed(() =>
+  voiceTextureSliders.some(s => s.value !== s.baseline),
+)
+
 function recalculateVoiceTextureFromCheckboxes() {
   const checkedItems = VOICE_STYLE_OPTIONS.filter(opt =>
     selectedVoiceOptionIds.value.includes(opt.id),
@@ -364,23 +398,28 @@ function recalculateVoiceTextureFromCheckboxes() {
     const base = typeof slider.baseline === 'number' ? slider.baseline : 50
     if (!checkedItems.length) {
       slider.value = base
+      
       return
     }
+
     const totalDelta = checkedItems.reduce(
       (sum, item) => sum + (Number(item.deltas?.[slider.key]) || 0),
       0,
     )
+
     slider.value = Math.max(5, Math.min(100, base + totalDelta))
   })
 
   // 2. Đồng bộ các dòng chỉ đạo đã tích chọn vào Ô 2 (giữ nguyên phần văn bản gốc của AI)
   const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+
   const currentLines = String(advancedConfig.voiceTexturePrompt || '')
     .split('\n')
     .map(l => l.trim())
     .filter(l => l !== '' && !allDirectives.has(l))
 
   const selectedLines = checkedItems.map(o => `- ${o.directive}`)
+
   advancedConfig.voiceTexturePrompt = [...currentLines, ...selectedLines].join('\n')
 }
 
@@ -394,12 +433,203 @@ function toggleVoiceStyleOption(optId) {
   recalculateVoiceTextureFromCheckboxes()
 }
 
+
+/* Danh sách Gợi ý Sắc thái & Phối âm cảm xúc xoay quanh 8 trục cảm xúc (Ô 3).
+ * Khi người dùng chọn / bỏ chọn -> tự động cộng hưởng tính điểm cho 8 thanh trượt
+ * và đồng bộ gợi ý vào Ô 3 (tone_instructions). */
+const TONE_STYLE_OPTIONS = [
+  {
+    id: 'humorous',
+    title: 'Hóm hỉnh & Gần gũi',
+    attributeLabel: 'Vui vẻ & Hóm hỉnh',
+    color: 'warning',
+    icon: 'tabler-mood-smile',
+    desc: 'Chêm xen ví dụ dí dỏm, chơi chữ tinh tế, tạo không khí nhẹ nhàng.',
+    deltas: { humor: 30, formality: -15, empathy: 20 },
+    directive: 'Giữ sắc thái vui vẻ, dí dỏm; đan cài ví dụ hóm hỉnh và chơi chữ tinh tế để kéo gần khoảng cách với người đọc.',
+  },
+  {
+    id: 'empathy',
+    title: 'Đồng cảm & Trân trọng',
+    attributeLabel: 'Trân trọng & Đồng cảm',
+    color: 'error',
+    icon: 'tabler-heart',
+    desc: 'Ghi nhận nỗ lực độc giả, thấu hiểu khó khăn, giọng điệu ấm áp.',
+    deltas: { empathy: 40, candor: 30, formality: -5 },
+    directive: 'Sắc thái trân trọng, giàu lòng trắc ẩn; luôn ghi nhận trăn trở và khó khăn của độc giả trước khi đưa ra gợi ý.',
+  },
+  {
+    id: 'assertive',
+    title: 'Sắc sảo & Quyết đoán',
+    attributeLabel: 'Sắc sảo & Quyết đoán',
+    color: 'primary',
+    icon: 'tabler-bolt',
+    desc: 'Luận điểm đanh thép, lập trường dứt khoát, giảm từ ngập ngừng.',
+    deltas: { assertiveness: 40, depth: 40, urgency: 20 },
+    directive: 'Khẩu khí dứt khoát, sắc bén; khẳng định quan điểm mạnh mẽ bằng lý lẽ thuyết phục, không dùng từ ngữ do dự.',
+  },
+  {
+    id: 'formality_academic',
+    title: 'Trang trọng & Chuẩn mực học thuật',
+    attributeLabel: 'Trang trọng',
+    color: 'info',
+    icon: 'tabler-scale',
+    desc: 'Văn phong đĩnh đạc, chuẩn mực báo chí/nghiên cứu, khách quan.',
+    deltas: { formality: 35, depth: 25, humor: -20 },
+    directive: 'Duy trì sắc thái trang trọng, điềm tĩnh; phân tích có tính hệ thống và dẫn chứng minh bạch chuẩn mực.',
+  },
+  {
+    id: 'inspiring',
+    title: 'Truyền lửa & Thôi thúc',
+    attributeLabel: 'Nhiệt huyết & Truyền lửa',
+    color: 'warning',
+    icon: 'tabler-flame',
+    desc: 'Tiết tấu hào sảng, thắp sáng động lực, khơi gợi niềm tin bứt phá.',
+    deltas: { inspiration: 40, urgency: 25, humor: 10 },
+    directive: 'Giọng văn tràn đầy năng lượng, thôi thúc hành động; khơi gợi khát vọng và tinh thần dám nghĩ dám làm.',
+  },
+  {
+    id: 'candor_authentic',
+    title: 'Chân thực, Gai góc & Bộc trực',
+    attributeLabel: 'Chân thực & Bộc trực',
+    color: 'success',
+    icon: 'tabler-shield-check',
+    desc: 'Kể chuyện thực tế, dám nói sự thật góc khuất, không né tránh.',
+    deltas: { candor: 40, empathy: 20, formality: -15 },
+    directive: 'Thẳng thắn bộc trực, dám nhìn thẳng vào thực tế gai góc và mặt trái của vấn đề, không tô hồng hay sáo rỗng.',
+  },
+  {
+    id: 'intellectual_depth',
+    title: 'Trí tuệ, Chuyên sâu & Bản chất',
+    attributeLabel: 'Trí tuệ & Chuyên sâu',
+    color: 'primary',
+    icon: 'tabler-brain',
+    desc: 'Phân tích bản chất, cơ chế hoạt động ngầm, kiến trúc, số liệu.',
+    deltas: { depth: 45, assertiveness: 20, formality: 10 },
+    directive: 'Tư duy sắc sảo, giải phẫu vấn đề tới tận tầng bản chất cốt lõi; ưu tiên số liệu và mô hình hóa tư duy.',
+  },
+  {
+    id: 'urgent_call',
+    title: 'Khẩn thiết & Kêu gọi hành động ngay',
+    attributeLabel: 'Khẩn thiết & Kêu gọi',
+    color: 'error',
+    icon: 'tabler-alarm',
+    desc: 'Nhấn mạnh tính cấp thiết của thời điểm, thôi thúc quyết định.',
+    deltas: { urgency: 45, assertiveness: 25, inspiration: 15 },
+    directive: 'Tạo cảm giác cấp bách, nhấn mạnh cơ hội và rủi ro nếu chần chừ; hướng độc giả tới hành động cụ thể ngay lập tức.',
+  },
+]
+
+/** ID các tùy chọn sắc thái / phối âm cảm xúc đang được chọn trong AppSelect */
+const selectedToneOptionIds = ref([])
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG COMPUTED: Danh sách items cho AppSelect gợi ý sắc thái cảm xúc
+ * =====================================================================
+ * Chuyển đổi 8 dạng sắc thái TONE_STYLE_OPTIONS thành format item cho AppSelect.
+ *
+ * INPUT/OUTPUT:
+ * - INPUT : Hằng số TONE_STYLE_OPTIONS
+ * - OUTPUT: Mảng item [{ value, title, attributeLabel, desc, icon, color }]
+ * =====================================================================
+ */
+const toneStyleSelectItems = computed(() =>
+  TONE_STYLE_OPTIONS.map(opt => ({
+    value: opt.id,
+    title: opt.title,
+    attributeLabel: opt.attributeLabel,
+    desc: opt.desc,
+    icon: opt.icon,
+    color: opt.color,
+  })),
+)
+
+/** Quản lý trạng thái đóng / mở của collapse 8 thanh trượt Cảm xúc (mặc định đóng null) */
+const toneSlidersPanel = ref(null)
+
+/** Kiểm tra xem có thanh trượt Cảm xúc nào đang khác baseline (50%) hay không */
+const hasModifiedToneSliders = computed(() =>
+  toneSliders.some(t => t.value !== t.baseline),
+)
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG HÀM: Tính lại điểm 8 thanh trượt và đồng bộ chỉ đạo vào Ô 3
+ * =====================================================================
+ * Được gọi khi người dùng chọn / bỏ chọn sắc thái trong AppSelect gợi ý.
+ *
+ * INPUT/OUTPUT:
+ * - INPUT : selectedToneOptionIds (ref mảng ID đã chọn)
+ * - OUTPUT: Cập nhật trực tiếp toneSliders (8 sliders) và advancedConfig.tonePrompt
+ * =====================================================================
+ */
+function recalculateToneFromSelect() {
+  const checkedItems = TONE_STYLE_OPTIONS.filter(opt =>
+    selectedToneOptionIds.value.includes(opt.id),
+  )
+
+  // 1. Tính lại điểm 8 thanh trượt từ baseline + tổng delta các ô đã chọn
+  toneSliders.forEach(slider => {
+    const base = typeof slider.baseline === 'number' ? slider.baseline : 50
+    if (!checkedItems.length) {
+      slider.value = base
+      return
+    }
+
+    const totalDelta = checkedItems.reduce(
+      (sum, item) => sum + (Number(item.deltas?.[slider.key]) || 0),
+      0,
+    )
+
+    slider.value = Math.max(0, Math.min(100, base + totalDelta))
+  })
+
+  // 2. Đồng bộ các dòng chỉ đạo đã tích chọn vào Ô 3 (giữ nguyên phần văn bản gốc)
+  const allDirectives = new Set(TONE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+
+  const currentLines = String(advancedConfig.tonePrompt || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '' && !allDirectives.has(l))
+
+  const selectedLines = checkedItems.map(o => `- ${o.directive}`)
+
+  advancedConfig.tonePrompt = [...currentLines, ...selectedLines].join('\n')
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG HÀM: Reset 8 thanh trượt Cảm xúc về baseline và xóa gợi ý đã chọn
+ * =====================================================================
+ */
+function resetToneSliders() {
+  selectedToneOptionIds.value = []
+  toneSliders.forEach(t => {
+    t.value = t.baseline
+  })
+
+  const allDirectives = new Set(TONE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+
+  advancedConfig.tonePrompt = String(advancedConfig.tonePrompt || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '' && !allDirectives.has(l))
+    .join('\n')
+
+  snack.text = 'Đã khôi phục 8 thanh trượt Sắc thái cảm xúc về cân bằng'
+  snack.color = 'info'
+  snack.show = true
+}
+
 function resetVoiceTextureSliders() {
   selectedVoiceOptionIds.value = []
   voiceTextureSliders.forEach(s => {
     s.value = s.baseline
   })
+
   const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+
   advancedConfig.voiceTexturePrompt = String(advancedConfig.voiceTexturePrompt || '')
     .split('\n')
     .map(l => l.trim())
@@ -427,6 +657,19 @@ const sandboxForm = reactive({
 const sandboxGeneratedText = ref('')
 const sandboxSnapshotPrompt = ref('')
 const sandboxHasRan = ref(false)
+
+/** Danh sách các bản viết thử đã lưu trong DB của hồ sơ này (sandbox_samples_json) */
+const savedSandboxSamples = ref([])
+const savingSandboxSample = ref(false)
+const deletingSandboxSampleId = ref(null)
+const expandedSamplePrompts = reactive({})
+
+/** Quản lý trạng thái mở/đóng các panel trong Tab 9 Phòng thử DNA (chế độ accordion đơn, mặc định đóng cả 2):
+ * null: Đóng cả 2 panel mặc định
+ * 'tone': Mở Sandbox sắc thái (tự đóng Chất văn)
+ * 'voice': Mở Chất văn & Nghệ thuật Nhấn – Lướt (tự đóng Sandbox sắc thái)
+ */
+const sandboxPanels = ref(null)
 
 /* Chỉ render văn bản THẬT sandbox sinh — KHÔNG có fallback mẫu. */
 const activeSandboxSample = computed(() => sandboxGeneratedText.value)
@@ -458,6 +701,8 @@ const toneSliders = reactive([
 
 function applyTonePreset(presetKey) {
   activeTonePreset.value = presetKey
+  selectedToneOptionIds.value = presetKey === 'default' ? [] : [presetKey]
+  recalculateToneFromSelect()
   if (presetKey === 'default') {
     toneSliders.forEach(t => { t.value = t.baseline })
     snack.text = 'Đã khôi phục phổ cảm xúc về mặc định'
@@ -544,6 +789,7 @@ async function runSandboxDemo() {
       // style_instructions (Ô 1) + voice_texture_instructions (Ô 2) + 5 sliders Chất văn
       style_instructions: sandboxStyleInstructions.value || undefined,
       voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || undefined,
+      tone_instructions: advancedConfig.tonePrompt?.trim() || undefined,
       voice_texture_sliders_json: voiceSlidersPayload,
       tone_overrides: toneOverrides,
       temperature: Number(advancedConfig.temperature),
@@ -565,6 +811,65 @@ async function runSandboxDemo() {
     snack.text = firstErrorMessage(e)
     snack.color = 'error'
     snack.show = true
+  }
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lưu (Ghim) bản viết thử hiện tại vào Database của hồ sơ
+ * =====================================================================
+ */
+async function saveCurrentSandboxSample() {
+  if (!profile.value?.id || !activeSandboxSample.value) return
+
+  savingSandboxSample.value = true
+  try {
+    const res = await store.saveSandboxSample(profile.value.id, {
+      topic: sandboxForm.topic.trim() || 'Chủ đề thử nghiệm',
+      target_tier: sandboxForm.targetTier || profile.value.dominant_tier || 'medium',
+      text: activeSandboxSample.value,
+      system_prompt: sandboxSnapshotPrompt.value || '',
+    })
+
+    if (Array.isArray(res?.samples)) {
+      savedSandboxSamples.value = res.samples
+    }
+
+    snack.text = 'Đã lưu bản viết thử vào hồ sơ để so sánh'
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  } finally {
+    savingSandboxSample.value = false
+  }
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database
+ * =====================================================================
+ */
+async function removeSandboxSample(sampleId) {
+  if (!profile.value?.id || !sampleId) return
+
+  deletingSandboxSampleId.value = sampleId
+  try {
+    const res = await store.deleteSandboxSample(profile.value.id, sampleId)
+    if (Array.isArray(res?.samples)) {
+      savedSandboxSamples.value = res.samples
+    }
+    snack.text = 'Đã xóa bản viết thử'
+    snack.color = 'info'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  } finally {
+    deletingSandboxSampleId.value = null
   }
 }
 
@@ -679,22 +984,26 @@ function applyProfileToForm(p) {
 
   advancedConfig.systemPrompt = p.style_instructions ?? ''
   advancedConfig.voiceTexturePrompt = p.voice_texture_instructions ?? ''
+  advancedConfig.tonePrompt = p.tone_instructions ?? ''
   advancedConfig.preferredModel = p.analysis_metadata_json?.ai_model_used ?? 'Chưa rõ (tạo tay)'
   advancedConfig.temperature = typeof p.temperature === 'number' ? p.temperature : 0.7
 
   const savedVoiceSliders = p.voice_texture_sliders_json && typeof p.voice_texture_sliders_json === 'object'
     ? p.voice_texture_sliders_json
     : {}
+
   voiceTextureSliders.forEach(s => {
     const val = typeof savedVoiceSliders[s.key] === 'number'
       ? savedVoiceSliders[s.key]
       : s.defaultVal
+
     s.baseline = val
     s.value = val
   })
 
   // Đồng bộ trạng thái checkbox nếu trong Ô 2 đã có các dòng gợi ý tương ứng
   const currentVoiceText = String(p.voice_texture_instructions ?? '')
+
   selectedVoiceOptionIds.value = VOICE_STYLE_OPTIONS
     .filter(opt => currentVoiceText.includes(opt.directive))
     .map(opt => opt.id)
@@ -703,10 +1012,12 @@ function applyProfileToForm(p) {
   const savedToneSliders = p.tone_sliders_json && typeof p.tone_sliders_json === 'object'
     ? p.tone_sliders_json
     : {}
+
   toneSliders.forEach(t => {
     const val = typeof savedToneSliders[t.key] === 'number'
       ? savedToneSliders[t.key]
       : 50
+
     t.baseline = val
     t.value = val
   })
@@ -774,7 +1085,7 @@ function applyProfileToForm(p) {
 
   // Từ vựng & CTA
   let vocabDesc = String(rules.vocabulary ?? '').trim()
-  const kwMatch = vocabDesc.search(/[;.]\s*Từ ngữ ưu tiên[:]/i)
+  const kwMatch = vocabDesc.search(/[;.]\s*Từ ngữ ưu tiên:/i)
   if (kwMatch > 0) {
     vocabDesc = vocabDesc.substring(0, kwMatch).trim()
   }
@@ -787,6 +1098,9 @@ function applyProfileToForm(p) {
   categories.value = (p.categories ?? []).map(c => c.id)
   tags.value = (p.tags ?? []).map(t => t.id)
   newTags.value = []
+
+  // Danh sách bản viết thử đã lưu trong Phòng thử DNA
+  savedSandboxSamples.value = Array.isArray(p.sandbox_samples_json) ? p.sandbox_samples_json : []
 
   // Lịch sử — mỗi lần giải mã 1 dòng + entry hiện tại trên đầu.
   const analyses = Array.isArray(p.analyses) ? p.analyses : []
@@ -827,6 +1141,8 @@ function buildRulesJsonPayload() {
 
   if (structureSections.value.length >= 3) {
     current.opening = structureSections.value[0]?.sample ?? current.opening
+
+
     // structure_patterns & transitions gộp trong section 2 — giữ chuỗi gộp,
     // không tách lại (vì UI chỉ hiển thị 1 sample gộp).
     const s2 = structureSections.value[1]?.sample ?? ''
@@ -847,13 +1163,14 @@ function buildRulesJsonPayload() {
 
   // 1. Vocabulary + Power Words (ghép vào rules_json.vocabulary)
   let finalVocab = (vocabConfig.vocabularyDesc ?? '').trim()
-  const kwIdx = finalVocab.search(/[;.]\s*Từ ngữ ưu tiên[:]/i)
+  const kwIdx = finalVocab.search(/[;.]\s*Từ ngữ ưu tiên:/i)
   if (kwIdx > 0) {
     finalVocab = finalVocab.substring(0, kwIdx).trim()
   }
 
   if (Array.isArray(vocabConfig.powerWords) && vocabConfig.powerWords.length > 0) {
     const quotedList = vocabConfig.powerWords.map(w => `"${w.trim()}"`).join(', ')
+
     finalVocab = finalVocab
       ? `${finalVocab}. Từ ngữ ưu tiên: ${quotedList}.`
       : `Từ ngữ ưu tiên: ${quotedList}.`
@@ -908,6 +1225,7 @@ async function saveProfile() {
     evidence_json: buildEvidenceJsonPayload(),
     style_instructions: advancedConfig.systemPrompt?.trim() || null,
     voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || null,
+    tone_instructions: advancedConfig.tonePrompt?.trim() || null,
     voice_texture_sliders_json: voiceSlidersPayload,
     tone_sliders_json: toneSlidersPayload,
     temperature: Number(advancedConfig.temperature),
@@ -954,6 +1272,7 @@ async function runSlugSuggest(source) {
       sluggable_type: 'writing_profile',
       sluggable_id: profile.value?.id,
     })
+
     if (!res) return
     if (res?.slug) profileData.slug = res.slug
     slugAvailable.value = res?.available ?? null
@@ -974,9 +1293,71 @@ function onSlugInput(v) {
 }
 
 /* ===================================================================
+ * TÍNH CHIỀU CAO VCARD BÊN PHẢI Ở TAB 7 ĐỂ VỪA KHÍT VIEWPORT (GIỮ FOOTER, KHÔNG CÓ SCROLL TRÌNH DUYỆT)
+ * =================================================================== */
+const advancedCardHeight = ref('calc(100vh - 435px)')
+const sliderScrollHeight = ref('220px')
+
+function updateAdvancedCardHeight() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+  const isAdvanced = activeTab.value === 'advanced' && !loading.value
+
+  document.body.classList.toggle('writing-profile-advanced-no-scroll', isAdvanced)
+
+  if (!isAdvanced) return
+
+  nextTick(() => {
+    const el = document.querySelector('.advanced-prompt-window')
+    if (!el) return
+
+    if (window.scrollY > 0) {
+      window.scrollTo({ top: 0, behavior: 'instant' })
+    }
+
+    const rect = el.getBoundingClientRect()
+    if (rect.top > 0) {
+      const footerEl = document.querySelector('.layout-footer')
+      const footerHeight = footerEl ? footerEl.getBoundingClientRect().height : 54
+      const pageContentEl = document.querySelector('.layout-page-content')
+      const padBottom = pageContentEl ? (parseFloat(window.getComputedStyle(pageContentEl).paddingBottom) || 0) : 16
+
+      // Trừ chiều cao của phần trên (rect.top) + khoảng đệm + chiều cao footer để giữ nguyên dòng "© 2026 Made With By Pixinvent" mà không sinh thanh cuộn trình duyệt
+      const available = Math.max(340, Math.floor(window.innerHeight - rect.top - footerHeight - padBottom - 4))
+
+      advancedCardHeight.value = `${available}px`
+
+      // Tính chiều cao cố định cho vùng cuộn thanh trượt (.slider-scroll-box) để khi đóng/mở VExpansionPanel có hiệu ứng trượt mượt và thanh cuộn không bị giật biến mất
+      nextTick(() => {
+        const activeCard = el.querySelector('.v-window-item--active .advanced-prompt-card') || el.querySelector('.advanced-prompt-card')
+        if (!activeCard) return
+
+        const cardItemEl = activeCard.querySelector('.v-card-item')
+        const topPanelEl = activeCard.querySelector('.advanced-prompt-right-col > .tonal-panel')
+        const titleEl = activeCard.querySelector('.advanced-slider-panels .v-expansion-panel-title')
+
+        const cardItemH = cardItemEl ? cardItemEl.getBoundingClientRect().height : 68
+        const topPanelH = topPanelEl ? topPanelEl.getBoundingClientRect().height + 12 : 155
+        const titleH = titleEl ? titleEl.getBoundingClientRect().height : 56
+
+        // 15px cách đáy card + 48px (padding wrapper + dòng chú thích phía trên danh sách slider)
+        const scrollH = Math.max(120, Math.floor(available - cardItemH - 15 - topPanelH - titleH - 48))
+
+        sliderScrollHeight.value = `${scrollH}px`
+      })
+    }
+  })
+}
+
+watch([activeTab, activeAdvancedPromptTab, loading, selectedVoiceOptionIds, selectedToneOptionIds], () => {
+  updateAdvancedCardHeight()
+}, { deep: true })
+
+/* ===================================================================
  * LOAD
  * =================================================================== */
 onMounted(async () => {
+  window.addEventListener('resize', updateAdvancedCardHeight)
   loading.value = true
   loadError.value = ''
   try {
@@ -990,6 +1371,16 @@ onMounted(async () => {
     loadError.value = firstErrorMessage(e)
   } finally {
     loading.value = false
+    updateAdvancedCardHeight()
+  }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateAdvancedCardHeight)
+  }
+  if (typeof document !== 'undefined') {
+    document.body.classList.remove('writing-profile-advanced-no-scroll')
   }
 })
 </script>
@@ -1047,16 +1438,76 @@ onMounted(async () => {
       </template>
     </VAlert>
 
-    <!-- Loading -->
-    <div
-      v-else-if="loading"
-      class="d-flex justify-center py-12"
-    >
-      <VProgressCircular
-        indeterminate
-        color="primary"
-      />
-    </div>
+    <!-- Loading (skeleton giống trang list: VSkeletonLoader thay spinner) -->
+    <template v-else-if="loading">
+      <!-- Khung Banner + thanh tabs -->
+      <VCard class="mb-6">
+        <VCardText>
+          <div class="d-flex align-center gap-x-4">
+            <VSkeletonLoader
+              type="avatar"
+              class="bg-transparent flex-shrink-0"
+              style="width: 72px; height: 72px;"
+            />
+            <div class="flex-grow-1">
+              <VSkeletonLoader
+                type="heading"
+                class="bg-transparent mb-2"
+                style="max-width: 340px;"
+              />
+              <VSkeletonLoader
+                type="text"
+                class="bg-transparent"
+                style="max-width: 520px;"
+              />
+            </div>
+            <VSkeletonLoader
+              type="chip"
+              class="bg-transparent"
+              style="width: 90px;"
+            />
+          </div>
+        </VCardText>
+        <VDivider />
+        <div class="d-flex gap-3 flex-wrap px-4 py-3">
+          <VSkeletonLoader
+            v-for="n in 6"
+            :key="`edit-tab-skel-${n}`"
+            type="chip"
+            class="bg-transparent"
+            style="width: 118px;"
+          />
+        </div>
+      </VCard>
+
+      <!-- Khung nội dung tab: 2 card giống lưới form -->
+      <VRow>
+        <VCol
+          v-for="n in 2"
+          :key="`edit-card-skel-${n}`"
+          cols="12"
+          lg="6"
+        >
+          <VCard class="mb-6">
+            <VCardText>
+              <VSkeletonLoader
+                type="heading"
+                class="bg-transparent mb-4"
+                style="max-width: 260px;"
+              />
+              <VSkeletonLoader
+                type="paragraph"
+                class="bg-transparent mb-3"
+              />
+              <VSkeletonLoader
+                type="paragraph"
+                class="bg-transparent"
+              />
+            </VCardText>
+          </VCard>
+        </VCol>
+      </VRow>
+    </template>
 
     <template v-else>
       <!-- ================= 2. BANNER HỒ SƠ + THANH TABS ================= -->
@@ -1425,7 +1876,7 @@ onMounted(async () => {
             <VCardText>
               <VRow>
                 <VCol
-                  v-for="(sec, idx) in structureSections"
+                  v-for="sec in structureSections"
                   :key="sec.title"
                   cols="12"
                   md="4"
@@ -1445,7 +1896,7 @@ onMounted(async () => {
                     </div>
                     <AppTextarea
                       v-model="sec.sample"
-                      :label="`Nội dung rules_json`"
+                      label="Nội dung rules_json"
                       rows="6"
                       class="flex-grow-1"
                     />
@@ -1599,6 +2050,7 @@ onMounted(async () => {
                       v-model="vocabConfig.vocabularyDesc"
                       rows="3"
                       placeholder="Mô tả nguyên lý sử dụng từ vựng, từ tượng thanh, tính từ giác quan..."
+                      persistent-placeholder
                     />
                   </div>
 
@@ -1735,6 +2187,7 @@ onMounted(async () => {
                       v-model="vocabConfig.ctaPhilosophy"
                       rows="6"
                       placeholder="Mô tả phong cách kết bài và cách thức kêu gọi hành động..."
+                      persistent-placeholder
                     />
                   </div>
 
@@ -1761,22 +2214,79 @@ onMounted(async () => {
           </VRow>
         </VWindowItem>
 
-        <!-- TAB 7: CÀI ĐẶT NÂNG CAO -->
+        <!-- TAB 7: CÀI ĐẶT NÂNG CAO (Quản lý 3 mục Prompt bổ sung qua Tab dọc) -->
         <VWindowItem value="advanced">
-          <!-- ===== VCARD 1: PROMPT BỔ SUNG 1 & THAM SỐ MODEL / ĐỘ BAY BỔNG ===== -->
-          <VCard
-            title="Prompt bổ sung 1 & Tham số Mô hình"
-            subtitle="Hướng dẫn hành văn tổng thể (style_instructions) và Độ bay bổng (temperature) lưu vào DB"
-            class="mb-6"
-          >
+          <VRow align="start">
+            <!-- CỘT TRÁI: TAB DỌC NHỎ GỌN NẰM TRÊN 1 VCARD -->
+            <VCol
+              cols="12"
+              md="auto"
+              class="advanced-nav-col"
+            >
+              <VCard class="pa-3">
+                <div class="text-caption text-uppercase text-disabled font-weight-bold mb-2 px-2">
+                  Prompt bổ sung
+                </div>
+                <VTabs
+                  v-model="activeAdvancedPromptTab"
+                  direction="vertical"
+                  density="compact"
+                  class="v-tabs-pill disable-tab-transition advanced-vertical-tabs"
+                >
+                  <VTab
+                    value="prompt1"
+                    prepend-icon="tabler-user-edit"
+                    class="text-caption font-weight-medium"
+                  >
+                    1. Hành văn & Mô hình
+                  </VTab>
+                  <VTab
+                    value="prompt2"
+                    prepend-icon="tabler-signature"
+                    class="text-caption font-weight-medium"
+                  >
+                    2. Chất văn & Nhấn – Lướt
+                  </VTab>
+                  <VTab
+                    value="prompt3"
+                    prepend-icon="tabler-mood-heart"
+                    class="text-caption font-weight-medium"
+                  >
+                    3. Sắc thái & Cảm xúc
+                  </VTab>
+                </VTabs>
+              </VCard>
+            </VCol>
+
+            <!-- CỘT PHẢI: NỘI DUNG TỪNG MỤC PROMPT BỔ SUNG -->
+            <VCol
+              cols="12"
+              md=""
+              class="flex-grow-1"
+              style="min-width: 0;"
+            >
+              <VWindow
+                v-model="activeAdvancedPromptTab"
+                class="disable-tab-transition advanced-prompt-window"
+                :style="{ '--advanced-card-height': advancedCardHeight, '--slider-scroll-height': sliderScrollHeight }"
+                :touch="false"
+              >
+                <!-- MỤC 1: PROMPT BỔ SUNG 1 & THAM SỐ MODEL / ĐỘ BAY BỔNG -->
+                <VWindowItem value="prompt1">
+                  <VCard
+                    title="Prompt bổ sung 1 & Tham số Mô hình"
+                    subtitle="Hướng dẫn hành văn tổng thể (style_instructions) và Độ bay bổng (temperature) lưu vào DB"
+                    class="advanced-prompt-card"
+                  >
             <VCardText>
-              <VRow>
+              <VRow class="advanced-prompt-row">
                 <!-- Cột trái: Ô 1 (style_instructions) -->
                 <VCol
                   cols="12"
                   md="7"
+                  class="advanced-prompt-left-col"
                 >
-                  <div class="d-flex align-center gap-2 mb-1">
+                  <div class="d-flex align-center gap-2 mb-1 flex-shrink-0">
                     <VChip
                       size="x-small"
                       color="primary"
@@ -1789,15 +2299,16 @@ onMounted(async () => {
                       Hướng dẫn hành văn &amp; Chân dung biên tập (style_instructions)
                     </span>
                   </div>
-                  <div class="text-caption text-medium-emphasis mb-2">
+                  <div class="text-caption text-medium-emphasis mb-2 flex-shrink-0">
                     Định hình chân dung người kể chuyện (Persona), thủ pháp gợi tả giác quan và bố cục tổng thể.
                   </div>
                   <AppTextarea
                     v-model="advancedConfig.systemPrompt"
-                    rows="9"
+                    rows="6"
                     counter="10000"
                     placeholder="Nhập hướng dẫn hành văn tổng thể (Ô 1)..."
-                    class="font-mono"
+                    persistent-placeholder
+                    class="font-mono advanced-flex-textarea"
                   />
                 </VCol>
 
@@ -1805,15 +2316,16 @@ onMounted(async () => {
                 <VCol
                   cols="12"
                   md="5"
+                  class="advanced-prompt-right-col justify-start"
                 >
                   <AppTextField
                     :model-value="advancedConfig.preferredModel"
                     label="Model đã dùng khi giải mã"
                     readonly
                     disabled
-                    class="mb-6"
+                    class="mb-3 flex-grow-0"
                   />
-                  <div class="mb-4">
+                  <div class="mb-4 flex-shrink-0">
                     <div class="d-flex justify-space-between text-body-2 font-weight-medium mb-1">
                       <span>Độ bay bổng / Sáng tạo (Temperature)</span>
                       <span class="text-primary">{{ advancedConfig.temperature }}</span>
@@ -1845,21 +2357,25 @@ onMounted(async () => {
                 </VCol>
               </VRow>
             </VCardText>
-          </VCard>
+                  </VCard>
+                </VWindowItem>
 
-          <!-- ===== VCARD 2: PROMPT BỔ SUNG 2 (CHẤT VĂN) — TRÁI: Ô TEXT, PHẢI: GỢI Ý CHECKBOX & 5 THANH TRƯỢT ===== -->
-          <VCard
-            title="Prompt bổ sung 2 — Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt"
+                <!-- MỤC 2: PROMPT BỔ SUNG 2 (CHẤT VĂN) — TRÁI: Ô TEXT, PHẢI: GỢI Ý CHECKBOX & 5 THANH TRƯỢT -->
+                <VWindowItem value="prompt2">
+                  <VCard
+                    title="Prompt bổ sung 2 — Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt"
             subtitle="Bóc tách và canh chỉnh 5 thuộc tính Chất văn: Giọng văn, Tính dân dã tự nhiên, Màu sắc cảm xúc, Biến thiên nhịp điệu, Tính nhấn và lướt"
+            class="advanced-prompt-card"
           >
             <VCardText>
-              <VRow>
+              <VRow class="advanced-prompt-row">
                 <!-- Cột trái: Ô Text Prompt bổ sung 2 + Tóm tắt chỉ số -->
                 <VCol
                   cols="12"
                   md="6"
+                  class="advanced-prompt-left-col"
                 >
-                  <div class="d-flex align-center justify-space-between mb-1">
+                  <div class="d-flex align-center justify-space-between mb-1 flex-shrink-0">
                     <div class="d-flex align-center gap-2">
                       <VChip
                         size="x-small"
@@ -1874,41 +2390,39 @@ onMounted(async () => {
                       </span>
                     </div>
                   </div>
-                  <div class="text-caption text-medium-emphasis mb-2">
+                  <div class="text-caption text-medium-emphasis mb-2 flex-shrink-0">
                     Khi giải mã bài mẫu, AI tự động phân tích Ô 2 này. Bạn có thể tự do chỉnh sửa văn bản hoặc tích chọn các gợi ý bên phải để đồng bộ vào đây.
                   </div>
                   <AppTextarea
                     v-model="advancedConfig.voiceTexturePrompt"
-                    rows="16"
+                    rows="6"
                     counter="10000"
                     placeholder="Nhập chỉ dẫn về giọng văn, tính dân dã tự nhiên, màu sắc cảm xúc, biến thiên nhịp điệu, tính nhấn và lướt..."
-                    class="font-mono mb-4"
+                    persistent-placeholder
+                    class="font-mono mb-3 advanced-flex-textarea"
                   />
 
                   <!-- Tóm tắt trực quan cấu hình Chất văn hiện tại -->
-                  <div class="tonal-panel pa-4 rounded">
-                    <div class="d-flex align-center gap-2 mb-2">
+                  <div class="tonal-panel pa-3 rounded flex-shrink-0">
+                    <div class="d-flex align-center gap-2 mb-1">
                       <VIcon
                         icon="tabler-dna"
                         color="primary"
-                        size="18"
+                        size="16"
                       />
-                      <span class="text-body-2 font-weight-bold text-high-emphasis">
+                      <span class="text-caption font-weight-bold text-high-emphasis">
                         Tóm tắt chỉ số Chất văn đang áp dụng
                       </span>
                     </div>
-                    <div class="text-caption text-medium-emphasis mb-3">
-                      Các thông số dưới đây sẽ được biên dịch trực tiếp vào System Prompt cùng với Ô 1 và Ô 2 khi tạo bài viết:
-                    </div>
-                    <div class="d-flex flex-column gap-2">
+                    <div class="summary-grid-2col">
                       <div
                         v-for="slider in voiceTextureSliders"
                         :key="`summary-${slider.key}`"
                         class="d-flex align-center justify-space-between text-caption"
                       >
-                        <span class="text-medium-emphasis">{{ slider.label }}:</span>
-                        <span class="font-weight-bold text-high-emphasis">
-                          {{ slider.value }}% ({{ slider.value >= 70 ? slider.highPole : (slider.value <= 35 ? slider.lowPole : 'Cân bằng') }})
+                        <span class="text-medium-emphasis text-truncate me-1">{{ slider.label }}:</span>
+                        <span class="font-weight-bold text-high-emphasis flex-shrink-0">
+                          {{ slider.value }}%
                         </span>
                       </div>
                     </div>
@@ -1919,123 +2433,32 @@ onMounted(async () => {
                 <VCol
                   cols="12"
                   md="6"
+                  class="advanced-prompt-right-col"
                 >
-                  <!-- 1. Hộp Checkbox Gợi ý cách hành văn xoay quanh 5 thuộc tính Chất văn -->
-                  <div class="tonal-panel pa-4 rounded mb-4">
-                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
-                      <div>
-                        <div class="d-flex align-center gap-2">
-                          <VIcon
-                            icon="tabler-checkbox"
-                            color="primary"
-                            size="20"
-                          />
-                          <span class="text-body-2 font-weight-bold text-high-emphasis">
-                            Gợi ý cách hành văn xoay quanh 5 thuộc tính Chất văn
-                          </span>
-                          <VChip
-                            v-if="selectedVoiceOptionIds.length"
-                            size="x-small"
-                            color="primary"
-                            variant="flat"
-                            label
-                          >
-                            Đã chọn {{ selectedVoiceOptionIds.length }} dạng
-                          </VChip>
-                        </div>
-                        <div class="text-caption text-medium-emphasis mt-1">
-                          Tích chọn các dạng hành văn — 5 thanh trượt bên dưới sẽ tự động chạy tính điểm và đồng bộ gợi ý sang Ô 2 bên trái
-                        </div>
+                  <!-- 1. Ô Select gợi ý phong cách & nhịp điệu hành văn (thay thế nhóm checkbox cũ) -->
+                  <div class="tonal-panel pa-3 rounded mb-3 flex-shrink-0">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                      <div class="d-flex align-center gap-2">
+                        <VIcon
+                          icon="tabler-select"
+                          color="primary"
+                          size="20"
+                        />
+                        <span class="text-body-2 font-weight-bold text-high-emphasis">
+                          Gợi ý phong cách &amp; Nhịp điệu hành văn
+                        </span>
+                        <VChip
+                          v-if="selectedVoiceOptionIds.length"
+                          size="x-small"
+                          color="primary"
+                          variant="flat"
+                          label
+                        >
+                          Đã chọn {{ selectedVoiceOptionIds.length }}
+                        </VChip>
                       </div>
                       <VBtn
                         v-if="selectedVoiceOptionIds.length"
-                        size="x-small"
-                        variant="text"
-                        color="secondary"
-                        prepend-icon="tabler-refresh"
-                        @click="resetVoiceTextureSliders"
-                      >
-                        Bỏ chọn &amp; Khôi phục
-                      </VBtn>
-                    </div>
-
-                    <VRow dense>
-                      <VCol
-                        v-for="opt in VOICE_STYLE_OPTIONS"
-                        :key="opt.id"
-                        cols="12"
-                        sm="6"
-                      >
-                        <div
-                          class="pa-3 rounded border h-100 cursor-pointer d-flex align-start gap-2 transition-all"
-                          :class="selectedVoiceOptionIds.includes(opt.id) ? 'ver-item--current' : 'bg-surface'"
-                          @click="toggleVoiceStyleOption(opt.id)"
-                        >
-                          <VCheckboxBtn
-                            :model-value="selectedVoiceOptionIds.includes(opt.id)"
-                            :color="opt.color"
-                            density="compact"
-                            class="mt-n1"
-                            @click.stop="toggleVoiceStyleOption(opt.id)"
-                          />
-                          <div class="flex-grow-1">
-                            <div class="d-flex align-center justify-space-between flex-wrap gap-1 mb-1">
-                              <span class="text-body-2 font-weight-bold text-high-emphasis">
-                                {{ opt.title }}
-                              </span>
-                              <VChip
-                                size="x-small"
-                                :color="opt.color"
-                                variant="tonal"
-                                label
-                              >
-                                {{ opt.attributeLabel }}
-                              </VChip>
-                            </div>
-                            <div class="text-caption text-medium-emphasis mb-2">
-                              {{ opt.desc }}
-                            </div>
-                            <div class="d-flex flex-wrap gap-1">
-                              <template
-                                v-for="slider in voiceTextureSliders"
-                                :key="`delta-${opt.id}-${slider.key}`"
-                              >
-                                <VChip
-                                  v-if="opt.deltas[slider.key]"
-                                  size="x-small"
-                                  :color="opt.deltas[slider.key] > 0 ? 'success' : 'warning'"
-                                  variant="outlined"
-                                  label
-                                >
-                                  {{ slider.label.replace(/^\d+\.\s*/, '') }}: {{ opt.deltas[slider.key] > 0 ? `+${opt.deltas[slider.key]}%` : `${opt.deltas[slider.key]}%` }}
-                                </VChip>
-                              </template>
-                            </div>
-                          </div>
-                        </div>
-                      </VCol>
-                    </VRow>
-                  </div>
-
-                  <!-- 2. Khung 5 Thanh trượt canh chỉnh Chất văn (0% - 100%) -->
-                  <div class="tonal-panel pa-4 rounded">
-                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
-                      <div>
-                        <div class="d-flex align-center gap-2">
-                          <VIcon
-                            icon="tabler-adjustments-heart"
-                            color="primary"
-                            size="20"
-                          />
-                          <span class="text-body-2 font-weight-bold text-high-emphasis">
-                            5 Thanh trượt canh chỉnh Chất văn (0% – 100%)
-                          </span>
-                        </div>
-                        <div class="text-caption text-medium-emphasis mt-1">
-                          Tự động chạy tính điểm khi tích chọn ở trên, hoặc kéo thanh trượt để tinh chỉnh thủ công
-                        </div>
-                      </div>
-                      <VBtn
                         size="x-small"
                         variant="text"
                         color="secondary"
@@ -2046,74 +2469,465 @@ onMounted(async () => {
                       </VBtn>
                     </div>
 
-                    <div class="d-flex flex-column gap-3">
-                      <div
-                        v-for="slider in voiceTextureSliders"
-                        :key="slider.key"
-                        class="pa-3 rounded border bg-surface"
-                      >
-                        <div class="d-flex align-center justify-space-between mb-2">
-                          <div class="d-flex align-center">
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      Chọn phong cách hoặc nhịp văn để tự động cộng hưởng tính điểm 5 thanh trượt và đồng bộ chỉ đạo sang Ô 2 bên trái.
+                    </div>
+
+                    <AppSelect
+                      v-model="selectedVoiceOptionIds"
+                      :items="voiceStyleSelectItems"
+                      item-title="title"
+                      item-value="value"
+                      label="Chọn phong cách / nhịp văn gợi ý"
+                      placeholder="Nhấn để chọn phong cách gợi ý..."
+                      multiple
+                      chips
+                      closable-chips
+                      clearable
+                      class="mb-1"
+                      @update:model-value="recalculateVoiceTextureFromCheckboxes"
+                    >
+                      <template #item="{ props, item }">
+                        <VListItem
+                          v-bind="props"
+                          :title="undefined"
+                        >
+                          <template #prepend>
+                            <VIcon
+                              :icon="item.raw.icon"
+                              :color="item.raw.color"
+                              size="18"
+                              class="me-2"
+                            />
+                          </template>
+                          <VListItemTitle class="text-body-2 font-weight-medium">
+                            {{ item.raw.title }}
+                          </VListItemTitle>
+                          <VListItemSubtitle class="text-caption text-medium-emphasis">
+                            {{ item.raw.attributeLabel }} — {{ item.raw.desc }}
+                          </VListItemSubtitle>
+                        </VListItem>
+                      </template>
+                    </AppSelect>
+                  </div>
+
+                  <!-- 2. Khung 5 Thanh trượt canh chỉnh Chất văn đặt trong Collapse (Expansion Panel) -->
+                  <VExpansionPanels
+                    v-model="voiceTexturePanel"
+                    variant="accordion"
+                    class="expansion-panels-width-border advanced-slider-panels"
+                    :class="{ 'is-panel-open': voiceTexturePanel === 0 }"
+                  >
+                    <VExpansionPanel elevation="0">
+                      <VExpansionPanelTitle class="py-3 px-4">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2 w-100 me-2">
+                          <div class="d-flex align-center gap-2">
                             <VAvatar
-                              :color="slider.color"
+                              color="primary"
                               variant="tonal"
-                              size="28"
+                              size="32"
                               rounded
-                              class="me-2 flex-shrink-0"
                             >
                               <VIcon
-                                :icon="slider.icon"
-                                size="15"
+                                icon="tabler-adjustments-heart"
+                                size="18"
                               />
                             </VAvatar>
-                            <span class="text-body-2 font-weight-medium text-high-emphasis">
-                              {{ slider.label }}
-                            </span>
+                            <div class="text-start">
+                              <div class="text-body-2 font-weight-bold text-high-emphasis">
+                                5 Thanh trượt canh chỉnh Chất văn (0% – 100%)
+                              </div>
+                              <div class="text-caption text-medium-emphasis">
+                                Giọng văn, Dân dã, Cảm xúc, Nhịp điệu, Nhấn – Lướt
+                              </div>
+                            </div>
                           </div>
+
                           <div class="d-flex align-center gap-2">
                             <VChip
-                              v-if="slider.value !== slider.baseline"
+                              v-if="hasModifiedVoiceSliders"
                               size="x-small"
-                              :color="slider.value > slider.baseline ? 'success' : 'warning'"
+                              color="warning"
                               variant="tonal"
                               label
                             >
-                              {{ slider.value > slider.baseline ? `+${slider.value - slider.baseline}%` : `${slider.value - slider.baseline}%` }} so với gốc
+                              Đã tinh chỉnh
                             </VChip>
-                            <span
-                              class="text-body-2 font-weight-bold"
-                              :class="`text-${slider.color}`"
+                            <VBtn
+                              size="x-small"
+                              variant="text"
+                              color="secondary"
+                              prepend-icon="tabler-refresh"
+                              @click.stop="resetVoiceTextureSliders"
                             >
-                              {{ slider.value }}%
-                            </span>
+                              Khôi phục gốc
+                            </VBtn>
                           </div>
                         </div>
+                      </VExpansionPanelTitle>
 
-                        <div class="d-flex justify-space-between text-caption text-medium-emphasis mb-1">
-                          <span>0%: {{ slider.lowPole }}</span>
-                          <span>100%: {{ slider.highPole }}</span>
+                      <VExpansionPanelText>
+                        <div class="text-caption text-medium-emphasis mb-3 px-2">
+                          Kéo thanh trượt để tinh chỉnh thủ công từng thuộc tính Chất văn (cuộn bên trong khung):
                         </div>
 
-                        <VSlider
-                          v-model="slider.value"
-                          :min="0"
-                          :max="100"
-                          :step="1"
-                          :color="slider.color"
-                          hide-details
-                          density="compact"
-                        />
+                        <div class="d-flex flex-column gap-3 slider-scroll-box">
+                          <div
+                            v-for="slider in voiceTextureSliders"
+                            :key="slider.key"
+                            class="pa-3 rounded border bg-surface"
+                          >
+                            <div class="d-flex align-center justify-space-between mb-2">
+                              <div class="d-flex align-center">
+                                <VAvatar
+                                  :color="slider.color"
+                                  variant="tonal"
+                                  size="28"
+                                  rounded
+                                  class="me-2 flex-shrink-0"
+                                >
+                                  <VIcon
+                                    :icon="slider.icon"
+                                    size="15"
+                                  />
+                                </VAvatar>
+                                <span class="text-body-2 font-weight-medium text-high-emphasis">
+                                  {{ slider.label }}
+                                </span>
+                              </div>
+                              <div class="d-flex align-center gap-2">
+                                <VChip
+                                  v-if="slider.value !== slider.baseline"
+                                  size="x-small"
+                                  :color="slider.value > slider.baseline ? 'success' : 'warning'"
+                                  variant="tonal"
+                                  label
+                                >
+                                  {{ slider.value > slider.baseline ? `+${slider.value - slider.baseline}%` : `${slider.value - slider.baseline}%` }} so với gốc
+                                </VChip>
+                                <span
+                                  class="text-body-2 font-weight-bold"
+                                  :class="`text-${slider.color}`"
+                                >
+                                  {{ slider.value }}%
+                                </span>
+                              </div>
+                            </div>
 
-                        <div class="text-caption text-medium-emphasis mt-1">
-                          {{ slider.hint }}
+                            <div class="d-flex justify-space-between text-caption text-medium-emphasis mb-1">
+                              <span>0%: {{ slider.lowPole }}</span>
+                              <span>100%: {{ slider.highPole }}</span>
+                            </div>
+
+                            <VSlider
+                              v-model="slider.value"
+                              :min="0"
+                              :max="100"
+                              :step="1"
+                              :color="slider.color"
+                              hide-details
+                              density="compact"
+                            />
+
+                            <div class="text-caption text-medium-emphasis mt-1">
+                              {{ slider.hint }}
+                            </div>
+                          </div>
                         </div>
+                      </VExpansionPanelText>
+                    </VExpansionPanel>
+                  </VExpansionPanels>
+                </VCol>
+              </VRow>
+                    </VCardText>
+                  </VCard>
+                </VWindowItem>
+
+                <!-- MỤC 3: PROMPT BỔ SUNG 3 (SẮC THÁI CẢM XÚC) — TRÁI: Ô TEXT, PHẢI: GỢI Ý PRESET SELECT & 8 THANH TRƯỢT -->
+                <VWindowItem value="prompt3">
+                  <VCard
+                    title="Prompt bổ sung 3 — Chỉ dẫn Sắc thái & Phối âm cảm xúc"
+                    subtitle="Bóc tách và hiệu chỉnh 8 trục sắc thái cảm xúc: Vui vẻ, Đồng cảm, Sắc sảo, Trang trọng, Nhiệt huyết, Chân thực, Trí tuệ, Khẩn thiết"
+                    class="advanced-prompt-card"
+                  >
+            <VCardText>
+              <VRow class="advanced-prompt-row">
+                <!-- Cột trái: Ô Text Prompt bổ sung 3 + Tóm tắt chỉ số Sắc thái -->
+                <VCol
+                  cols="12"
+                  md="6"
+                  class="advanced-prompt-left-col"
+                >
+                  <div class="d-flex align-center justify-space-between mb-1 flex-shrink-0">
+                    <div class="d-flex align-center gap-2">
+                      <VChip
+                        size="x-small"
+                        color="warning"
+                        variant="flat"
+                        label
+                      >
+                        Prompt bổ sung 3
+                      </VChip>
+                      <span class="text-body-2 font-weight-bold text-high-emphasis">
+                        Chỉ dẫn Sắc thái &amp; Cảm xúc (tone_instructions)
+                      </span>
+                    </div>
+                  </div>
+                  <div class="text-caption text-medium-emphasis mb-2 flex-shrink-0">
+                    Khi giải mã bài mẫu, AI tự động phân tích Ô 3 này. Bạn có thể tự do chỉnh sửa văn bản hoặc chọn các gợi ý bên phải để đồng bộ vào đây.
+                  </div>
+                  <AppTextarea
+                    v-model="advancedConfig.tonePrompt"
+                    rows="6"
+                    counter="10000"
+                    placeholder="Nhập chỉ dẫn về sắc thái đối thoại, độ đồng cảm, độ hóm hỉnh, khí chất đĩnh đạc, tính khẩn thiết..."
+                    persistent-placeholder
+                    class="font-mono mb-3 advanced-flex-textarea"
+                  />
+
+                  <!-- Tóm tắt trực quan cấu hình Sắc thái cảm xúc hiện tại -->
+                  <div class="tonal-panel pa-3 rounded flex-shrink-0">
+                    <div class="d-flex align-center gap-2 mb-1">
+                      <VIcon
+                        icon="tabler-adjustments-heart"
+                        color="warning"
+                        size="16"
+                      />
+                      <span class="text-caption font-weight-bold text-high-emphasis">
+                        Tóm tắt 8 trục Sắc thái cảm xúc đang áp dụng
+                      </span>
+                    </div>
+                    <div class="summary-grid-2col">
+                      <div
+                        v-for="slider in toneSliders"
+                        :key="`summary-tone-${slider.key}`"
+                        class="d-flex align-center justify-space-between text-caption"
+                      >
+                        <span class="text-medium-emphasis text-truncate me-1">{{ slider.label }}:</span>
+                        <span class="font-weight-bold text-high-emphasis flex-shrink-0">
+                          {{ slider.value }}%
+                        </span>
                       </div>
                     </div>
                   </div>
                 </VCol>
+
+                <!-- Cột phải: Ô Select gợi ý sắc thái cảm xúc & Collapse 8 Thanh trượt -->
+                <VCol
+                  cols="12"
+                  md="6"
+                  class="advanced-prompt-right-col"
+                >
+                  <!-- 1. Ô Select gợi ý sắc thái & phối âm cảm xúc -->
+                  <div class="tonal-panel pa-3 rounded mb-3 flex-shrink-0">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                      <div class="d-flex align-center gap-2">
+                        <VIcon
+                          icon="tabler-select"
+                          color="warning"
+                          size="20"
+                        />
+                        <span class="text-body-2 font-weight-bold text-high-emphasis">
+                          Gợi ý sắc thái &amp; Phối âm cảm xúc
+                        </span>
+                        <VChip
+                          v-if="selectedToneOptionIds.length"
+                          size="x-small"
+                          color="warning"
+                          variant="flat"
+                          label
+                        >
+                          Đã chọn {{ selectedToneOptionIds.length }}
+                        </VChip>
+                      </div>
+                      <VBtn
+                        v-if="selectedToneOptionIds.length"
+                        size="x-small"
+                        variant="text"
+                        color="secondary"
+                        prepend-icon="tabler-refresh"
+                        @click="resetToneSliders"
+                      >
+                        Khôi phục gốc
+                      </VBtn>
+                    </div>
+
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      Chọn các mẫu phối âm sắc thái để tự động tính điểm 8 thanh trượt và đồng bộ chỉ đạo sang Ô 3 bên trái.
+                    </div>
+
+                    <AppSelect
+                      v-model="selectedToneOptionIds"
+                      :items="toneStyleSelectItems"
+                      item-title="title"
+                      item-value="value"
+                      label="Chọn sắc thái / phối âm gợi ý"
+                      placeholder="Nhấn để chọn sắc thái cảm xúc..."
+                      multiple
+                      chips
+                      closable-chips
+                      clearable
+                      class="mb-1"
+                      @update:model-value="recalculateToneFromSelect"
+                    >
+                      <template #item="{ props, item }">
+                        <VListItem
+                          v-bind="props"
+                          :title="undefined"
+                        >
+                          <template #prepend>
+                            <VIcon
+                              :icon="item.raw.icon"
+                              :color="item.raw.color"
+                              size="18"
+                              class="me-2"
+                            />
+                          </template>
+                          <VListItemTitle class="text-body-2 font-weight-medium">
+                            {{ item.raw.title }}
+                          </VListItemTitle>
+                          <VListItemSubtitle class="text-caption text-medium-emphasis">
+                            {{ item.raw.attributeLabel }} — {{ item.raw.desc }}
+                          </VListItemSubtitle>
+                        </VListItem>
+                      </template>
+                    </AppSelect>
+                  </div>
+
+                  <!-- 2. Khung 8 Thanh trượt canh chỉnh Cảm xúc đặt trong Collapse (Expansion Panel) -->
+                  <VExpansionPanels
+                    v-model="toneSlidersPanel"
+                    variant="accordion"
+                    class="expansion-panels-width-border advanced-slider-panels"
+                    :class="{ 'is-panel-open': toneSlidersPanel === 0 }"
+                  >
+                    <VExpansionPanel elevation="0">
+                      <VExpansionPanelTitle class="py-3 px-4">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2 w-100 me-2">
+                          <div class="d-flex align-center gap-2">
+                            <VAvatar
+                              color="warning"
+                              variant="tonal"
+                              size="32"
+                              rounded
+                            >
+                              <VIcon
+                                icon="tabler-mood-heart"
+                                size="18"
+                              />
+                            </VAvatar>
+                            <div class="text-start">
+                              <div class="text-body-2 font-weight-bold text-high-emphasis">
+                                8 Thanh trượt Sắc thái cảm xúc (0% – 100%)
+                              </div>
+                              <div class="text-caption text-medium-emphasis">
+                                Vui vẻ, Đồng cảm, Sắc sảo, Trang trọng, Nhiệt huyết, Chân thực, Trí tuệ, Khẩn thiết
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="d-flex align-center gap-2">
+                            <VChip
+                              v-if="hasModifiedToneSliders"
+                              size="x-small"
+                              color="warning"
+                              variant="tonal"
+                              label
+                            >
+                              Đã tinh chỉnh
+                            </VChip>
+                            <VBtn
+                              size="x-small"
+                              variant="text"
+                              color="secondary"
+                              prepend-icon="tabler-refresh"
+                              @click.stop="resetToneSliders"
+                            >
+                              Khôi phục gốc
+                            </VBtn>
+                          </div>
+                        </div>
+                      </VExpansionPanelTitle>
+
+                      <VExpansionPanelText>
+                        <div class="text-caption text-medium-emphasis mb-3 px-2">
+                          Kéo thanh trượt để tinh chỉnh thủ công từng trục cảm xúc (cuộn bên trong khung):
+                        </div>
+
+                        <div class="d-flex flex-column gap-3 slider-scroll-box slider-scroll-box--tone">
+                          <div
+                            v-for="slider in toneSliders"
+                            :key="`edit-tone-${slider.key}`"
+                            class="pa-3 rounded border bg-surface"
+                          >
+                            <div class="d-flex align-center justify-space-between mb-2">
+                              <div class="d-flex align-center">
+                                <VAvatar
+                                  :color="slider.color"
+                                  variant="tonal"
+                                  size="28"
+                                  rounded
+                                  class="me-2 flex-shrink-0"
+                                >
+                                  <VIcon
+                                    :icon="slider.icon"
+                                    size="15"
+                                  />
+                                </VAvatar>
+                                <span class="text-body-2 font-weight-medium text-high-emphasis">
+                                  {{ slider.label }}
+                                </span>
+                              </div>
+                              <div class="d-flex align-center gap-2">
+                                <VChip
+                                  v-if="slider.value !== slider.baseline"
+                                  size="x-small"
+                                  :color="slider.value > slider.baseline ? 'success' : 'warning'"
+                                  variant="tonal"
+                                  label
+                                >
+                                  {{ slider.value > slider.baseline ? `+${slider.value - slider.baseline}%` : `${slider.value - slider.baseline}%` }} so với gốc
+                                </VChip>
+                                <span
+                                  class="text-body-2 font-weight-bold"
+                                  :class="`text-${slider.color}`"
+                                >
+                                  {{ slider.value }}%
+                                </span>
+                              </div>
+                            </div>
+
+                            <div class="d-flex justify-space-between text-caption text-medium-emphasis mb-1">
+                              <span>0%: Tiết chế tối đa</span>
+                              <span>100%: Bộc lộ mãnh liệt</span>
+                            </div>
+
+                            <VSlider
+                              v-model="slider.value"
+                              :min="0"
+                              :max="100"
+                              :step="1"
+                              :color="slider.color"
+                              hide-details
+                              density="compact"
+                            />
+
+                            <div class="text-caption text-medium-emphasis mt-1">
+                              {{ slider.hint }}
+                            </div>
+                          </div>
+                        </div>
+                      </VExpansionPanelText>
+                    </VExpansionPanel>
+                  </VExpansionPanels>
+                </VCol>
               </VRow>
-            </VCardText>
-          </VCard>
+                    </VCardText>
+                  </VCard>
+                </VWindowItem>
+              </VWindow>
+            </VCol>
+          </VRow>
         </VWindowItem>
 
         <!-- TAB 8: LỊCH SỬ -->
@@ -2153,7 +2967,9 @@ onMounted(async () => {
                       </VChip>
                     </div>
                     <div class="text-caption text-medium-emphasis">
-                      {{ ver.date }}<template v-if="ver.author"> • {{ ver.author }}</template>
+                      {{ ver.date }}<template v-if="ver.author">
+                        • {{ ver.author }}
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -2176,13 +2992,13 @@ onMounted(async () => {
             nên không thể đạo văn. Các hiệu chỉnh slider/preset được gửi kèm để thấy ngay thay đổi.
           </VAlert>
 
-          <VRow>
+          <VRow align="start">
             <!-- ===== VCARD TRÁI: CHỦ ĐỀ THỬ NGHIỆM MỚI ===== -->
             <VCol
               cols="12"
               lg="7"
             >
-              <VCard class="h-100">
+              <VCard>
                 <VCardItem>
                   <template #title>
                     <div class="d-flex align-center">
@@ -2207,6 +3023,7 @@ onMounted(async () => {
                     v-model="sandboxForm.topic"
                     label="Chủ đề viết thử"
                     placeholder="vd: lợi ích của cà phê đen buổi sáng"
+                    persistent-placeholder
                     class="mb-4"
                     @keyup.enter="runSandboxDemo"
                   />
@@ -2258,16 +3075,30 @@ onMounted(async () => {
                         </VChip>
                       </div>
 
-                      <VBtn
-                        variant="text"
-                        color="primary"
-                        size="x-small"
-                        prepend-icon="tabler-copy"
-                        :disabled="!activeSandboxSample"
-                        @click="copyText(activeSandboxSample, 'Đã sao chép văn bản viết thử')"
-                      >
-                        Sao chép
-                      </VBtn>
+                      <div class="d-flex align-center gap-2">
+                        <VBtn
+                          variant="tonal"
+                          color="success"
+                          size="x-small"
+                          prepend-icon="tabler-bookmark-plus"
+                          :loading="savingSandboxSample"
+                          :disabled="!activeSandboxSample || savingSandboxSample"
+                          @click="saveCurrentSandboxSample"
+                        >
+                          Lưu bản thử
+                        </VBtn>
+
+                        <VBtn
+                          variant="text"
+                          color="primary"
+                          size="x-small"
+                          prepend-icon="tabler-copy"
+                          :disabled="!activeSandboxSample"
+                          @click="copyText(activeSandboxSample, 'Đã sao chép văn bản viết thử')"
+                        >
+                          Sao chép
+                        </VBtn>
+                      </div>
                     </div>
 
                     <div class="text-body-2 text-high-emphasis sandbox-output">
@@ -2304,113 +3135,402 @@ onMounted(async () => {
                       <pre style="white-space: pre-wrap; margin: 0;">{{ sandboxSnapshotPrompt }}</pre>
                     </div>
                   </div>
+
+                  <!-- Danh sách các bản viết thử đã lưu trong DB để đọc và so sánh -->
+                  <div class="mt-6 pt-4 border-t">
+                    <div class="d-flex align-center justify-space-between mb-3">
+                      <div class="d-flex align-center gap-2">
+                        <VIcon
+                          icon="tabler-bookmarks"
+                          color="primary"
+                          size="18"
+                        />
+                        <span class="text-subtitle-2 font-weight-bold text-high-emphasis">
+                          Các bản viết thử đã lưu ({{ savedSandboxSamples.length }})
+                        </span>
+                      </div>
+                      <span class="text-caption text-medium-emphasis">
+                        Lưu cố định vào Database của hồ sơ
+                      </span>
+                    </div>
+
+                    <div
+                      v-if="!savedSandboxSamples.length"
+                      class="pa-4 rounded border border-dashed text-center text-caption text-medium-emphasis"
+                    >
+                      Chưa có bản viết thử nào được lưu. Sau khi chạy viết thử, bấm nút <strong>"Lưu bản thử"</strong> ở trên để ghim lại và đọc đối chiếu.
+                    </div>
+
+                    <div
+                      v-else
+                      class="d-flex flex-column gap-3"
+                    >
+                      <div
+                        v-for="(sample, idx) in savedSandboxSamples"
+                        :key="sample.id || idx"
+                        class="pa-4 rounded border bg-surface"
+                      >
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                          <div class="d-flex align-center flex-wrap gap-2">
+                            <VChip
+                              size="x-small"
+                              color="secondary"
+                              variant="tonal"
+                              label
+                            >
+                              #{{ savedSandboxSamples.length - idx }}
+                            </VChip>
+                            <span class="text-body-2 font-weight-bold text-high-emphasis">
+                              {{ sample.topic }}
+                            </span>
+                            <VChip
+                              size="x-small"
+                              color="primary"
+                              variant="tonal"
+                              label
+                            >
+                              {{ (sample.target_tier || 'medium').toUpperCase() }}
+                            </VChip>
+                            <span
+                              v-if="sample.created_at"
+                              class="text-caption text-disabled"
+                            >
+                              {{ new Date(sample.created_at).toLocaleString('vi-VN') }}
+                            </span>
+                          </div>
+
+                          <div class="d-flex align-center gap-1">
+                            <VBtn
+                              v-if="sample.system_prompt"
+                              variant="text"
+                              color="secondary"
+                              size="x-small"
+                              :prepend-icon="expandedSamplePrompts[sample.id] ? 'tabler-eye-off' : 'tabler-terminal-2'"
+                              @click="expandedSamplePrompts[sample.id] = !expandedSamplePrompts[sample.id]"
+                            >
+                              {{ expandedSamplePrompts[sample.id] ? 'Ẩn Prompt' : 'Xem Prompt' }}
+                            </VBtn>
+
+                            <VBtn
+                              variant="text"
+                              color="primary"
+                              size="x-small"
+                              prepend-icon="tabler-copy"
+                              @click="copyText(sample.text, 'Đã sao chép bản viết thử')"
+                            >
+                              Sao chép
+                            </VBtn>
+
+                            <VBtn
+                              variant="text"
+                              color="error"
+                              size="x-small"
+                              icon="tabler-trash"
+                              :loading="deletingSandboxSampleId === sample.id"
+                              @click="removeSandboxSample(sample.id)"
+                            />
+                          </div>
+                        </div>
+
+                        <div
+                          class="text-body-2 text-high-emphasis pa-3 rounded prompt-box"
+                          style="white-space: pre-wrap;"
+                        >{{ sample.text }}</div>
+
+                        <div
+                          v-if="sample.system_prompt && expandedSamplePrompts[sample.id]"
+                          class="mt-2 pa-3 rounded prompt-box font-mono text-caption"
+                        >
+                          <div class="text-caption text-medium-emphasis mb-1 font-weight-bold">
+                            System Prompt lúc chạy bản này:
+                          </div>
+                          <pre style="white-space: pre-wrap; margin: 0;">{{ sample.system_prompt }}</pre>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </VCardText>
               </VCard>
             </VCol>
 
-            <!-- ===== VCARD PHẢI: SANDBOX SẮC THÁI ===== -->
+            <!-- ===== CỘT PHẢI: HIỆU CHỈNH THỜI GIAN THỰC (SANDBOX SẮC THÁI + CHẤT VĂN) ===== -->
             <VCol
               cols="12"
               lg="5"
             >
-              <VCard class="h-100">
-                <VCardItem>
-                  <template #title>
-                    <div class="d-flex align-center">
-                      <VIcon
-                        icon="tabler-adjustments-heart"
-                        color="primary"
-                        size="22"
-                        class="me-2"
-                      />
-                      <span class="text-h6 font-weight-bold text-high-emphasis">Sandbox sắc thái</span>
-                    </div>
-                  </template>
-                  <template #subtitle>
-                    <div class="text-caption text-medium-emphasis mt-1">
-                      Gạt slider hoặc chọn preset — phản ánh NGAY vào prompt khi viết thử, không cần Lưu
-                    </div>
-                  </template>
-                  <template #append>
-                    <VBtn
-                      size="x-small"
-                      variant="text"
-                      color="secondary"
-                      prepend-icon="tabler-refresh"
-                      :disabled="activeTonePreset === 'default'"
-                      @click="resetToneToBaseline"
-                    >
-                      Khôi phục
-                    </VBtn>
-                  </template>
-                </VCardItem>
-
-                <VCardText>
-                  <!-- Preset nhanh -->
-                  <div class="mb-4">
-                    <div class="text-caption text-medium-emphasis mb-2">
-                      Mẫu phối âm nhanh (Preset)
-                    </div>
-                    <div class="d-flex flex-wrap gap-1">
-                      <VBtn
-                        v-for="preset in TONE_PRESETS"
-                        :key="preset.value"
-                        size="x-small"
-                        :variant="activeTonePreset === preset.value ? 'flat' : 'tonal'"
-                        :color="activeTonePreset === preset.value ? 'primary' : 'secondary'"
-                        @click="applyTonePreset(preset.value)"
-                      >
-                        {{ preset.title }}
-                      </VBtn>
-                    </div>
-                  </div>
-
-                  <!-- 8 slider sắc thái -->
-                  <div class="d-flex flex-column gap-3">
-                    <div
-                      v-for="slider in toneSliders"
-                      :key="slider.key"
-                      class="pa-3 rounded border"
-                    >
-                      <div class="d-flex align-center justify-space-between mb-2">
-                        <div class="d-flex align-center">
-                          <VAvatar
-                            :color="slider.color"
-                            variant="tonal"
-                            size="28"
-                            rounded
-                            class="me-2 flex-shrink-0"
-                          >
-                            <VIcon
-                              :icon="slider.icon"
-                              size="15"
-                            />
-                          </VAvatar>
-                          <span class="text-body-2 font-weight-medium">{{ slider.label }}</span>
-                        </div>
-                        <span
-                          class="text-body-2 font-weight-bold"
-                          :class="`text-${slider.color}`"
+              <VExpansionPanels
+                v-model="sandboxPanels"
+                variant="accordion"
+                class="expansion-panels-width-border"
+              >
+                <!-- ===== PANEL 1: SANDBOX SẮC THÁI (COLLAPSIBLE) ===== -->
+                <VExpansionPanel
+                  value="tone"
+                  elevation="0"
+                >
+                  <VExpansionPanelTitle class="py-3 px-4">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 w-100 me-2">
+                      <div class="d-flex align-center gap-2">
+                        <VAvatar
+                          color="warning"
+                          variant="tonal"
+                          size="32"
+                          rounded
                         >
-                          {{ slider.value }}%
-                        </span>
+                          <VIcon
+                            icon="tabler-adjustments-heart"
+                            size="18"
+                          />
+                        </VAvatar>
+                        <div class="text-start">
+                          <div class="text-body-2 font-weight-bold text-high-emphasis">
+                            Sandbox sắc thái
+                          </div>
+                          <div class="text-caption text-medium-emphasis">
+                            8 thanh trượt phối âm cảm xúc & preset nhanh
+                          </div>
+                        </div>
                       </div>
-                      <VSlider
-                        v-model="slider.value"
-                        :min="0"
-                        :max="100"
-                        :step="1"
-                        :color="slider.color"
-                        hide-details
-                        density="compact"
-                      />
-                      <div class="text-caption text-medium-emphasis mt-1">
-                        {{ slider.hint }}
+
+                      <div class="d-flex align-center gap-2">
+                        <VChip
+                          v-if="hasModifiedToneSliders"
+                          size="x-small"
+                          color="warning"
+                          variant="tonal"
+                          label
+                        >
+                          Đã tinh chỉnh
+                        </VChip>
+                        <VBtn
+                          size="x-small"
+                          variant="text"
+                          color="secondary"
+                          prepend-icon="tabler-refresh"
+                          :disabled="activeTonePreset === 'default' && !hasModifiedToneSliders"
+                          @click.stop="resetToneToBaseline"
+                        >
+                          Khôi phục
+                        </VBtn>
                       </div>
                     </div>
-                  </div>
-                </VCardText>
-              </VCard>
+                  </VExpansionPanelTitle>
+
+                  <VExpansionPanelText>
+                    <div class="text-caption text-medium-emphasis mb-3 px-2">
+                      Gạt slider hoặc chọn preset — phản ánh <strong>NGAY</strong> vào prompt khi viết thử:
+                    </div>
+
+                    <!-- Preset nhanh -->
+                    <div class="mb-4 px-2">
+                      <div class="text-caption text-medium-emphasis mb-2 font-weight-medium">
+                        Mẫu phối âm nhanh (Preset)
+                      </div>
+                      <div class="d-flex flex-wrap gap-1">
+                        <VBtn
+                          v-for="preset in TONE_PRESETS"
+                          :key="preset.value"
+                          size="x-small"
+                          :variant="activeTonePreset === preset.value ? 'flat' : 'tonal'"
+                          :color="activeTonePreset === preset.value ? 'primary' : 'secondary'"
+                          @click="applyTonePreset(preset.value)"
+                        >
+                          {{ preset.title }}
+                        </VBtn>
+                      </div>
+                    </div>
+
+                    <!-- 8 slider sắc thái -->
+                    <div class="d-flex flex-column gap-3 px-2">
+                      <div
+                        v-for="slider in toneSliders"
+                        :key="slider.key"
+                        class="pa-3 rounded border bg-surface"
+                      >
+                        <div class="d-flex align-center justify-space-between mb-2">
+                          <div class="d-flex align-center">
+                            <VAvatar
+                              :color="slider.color"
+                              variant="tonal"
+                              size="28"
+                              rounded
+                              class="me-2 flex-shrink-0"
+                            >
+                              <VIcon
+                                :icon="slider.icon"
+                                size="15"
+                              />
+                            </VAvatar>
+                            <span class="text-body-2 font-weight-medium">{{ slider.label }}</span>
+                          </div>
+                          <span
+                            class="text-body-2 font-weight-bold"
+                            :class="`text-${slider.color}`"
+                          >
+                            {{ slider.value }}%
+                          </span>
+                        </div>
+                        <VSlider
+                          v-model="slider.value"
+                          :min="0"
+                          :max="100"
+                          :step="1"
+                          :color="slider.color"
+                          hide-details
+                          density="compact"
+                        />
+                        <div class="text-caption text-medium-emphasis mt-1">
+                          {{ slider.hint }}
+                        </div>
+                      </div>
+                    </div>
+                  </VExpansionPanelText>
+                </VExpansionPanel>
+
+                <!-- ===== PANEL 2: CHẤT VĂN & NGHỆ THUẬT NHẤN – LƯỚT (COLLAPSIBLE) ===== -->
+                <VExpansionPanel
+                  value="voice"
+                  elevation="0"
+                >
+                  <VExpansionPanelTitle class="py-3 px-4">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 w-100 me-2">
+                      <div class="d-flex align-center gap-2">
+                        <VAvatar
+                          color="primary"
+                          variant="tonal"
+                          size="32"
+                          rounded
+                        >
+                          <VIcon
+                            icon="tabler-signature"
+                            size="18"
+                          />
+                        </VAvatar>
+                        <div class="text-start">
+                          <div class="text-body-2 font-weight-bold text-high-emphasis">
+                            Chất văn & Nghệ thuật Nhấn – Lướt
+                          </div>
+                          <div class="text-caption text-medium-emphasis">
+                            5 thanh trượt chất văn & mẫu nhịp văn gợi ý
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="d-flex align-center gap-2">
+                        <VChip
+                          v-if="hasModifiedVoiceSliders"
+                          size="x-small"
+                          color="warning"
+                          variant="tonal"
+                          label
+                        >
+                          Đã tinh chỉnh
+                        </VChip>
+                        <VBtn
+                          size="x-small"
+                          variant="text"
+                          color="secondary"
+                          prepend-icon="tabler-refresh"
+                          :disabled="!hasModifiedVoiceSliders && selectedVoiceOptionIds.length === 0"
+                          @click.stop="resetVoiceTextureSliders"
+                        >
+                          Khôi phục gốc
+                        </VBtn>
+                      </div>
+                    </div>
+                  </VExpansionPanelTitle>
+
+                  <VExpansionPanelText>
+                    <div class="text-caption text-medium-emphasis mb-3 px-2">
+                      Hiệu chỉnh khẩu ngữ, nhịp buông bắt và độ tự nhiên để kiểm chứng khẩu khí DNA:
+                    </div>
+
+                    <!-- Mẫu phong cách / nhịp văn gợi ý -->
+                    <div class="mb-4 px-2">
+                      <AppSelect
+                        v-model="selectedVoiceOptionIds"
+                        :items="VOICE_STYLE_OPTIONS"
+                        item-title="title"
+                        item-value="id"
+                        label="Chọn phong cách / nhịp văn gợi ý"
+                        placeholder="vd: Giọng thủ thỉ tâm tình, Nhấn lướt gắt..."
+                        multiple
+                        chips
+                        closable-chips
+                        clearable
+                        @update:model-value="recalculateVoiceTextureFromCheckboxes"
+                      >
+                        <template #item="{ props, item }">
+                          <VListItem
+                            v-bind="props"
+                            :title="undefined"
+                          >
+                            <template #prepend>
+                              <VIcon
+                                :icon="item.raw.icon"
+                                :color="item.raw.color"
+                                size="18"
+                                class="me-2"
+                              />
+                            </template>
+                            <VListItemTitle class="text-body-2 font-weight-medium">
+                              {{ item.raw.title }}
+                            </VListItemTitle>
+                            <VListItemSubtitle class="text-caption text-medium-emphasis">
+                              {{ item.raw.attributeLabel }} — {{ item.raw.desc }}
+                            </VListItemSubtitle>
+                          </VListItem>
+                        </template>
+                      </AppSelect>
+                    </div>
+
+                    <!-- 5 slider chất văn -->
+                    <div class="d-flex flex-column gap-3 px-2">
+                      <div
+                        v-for="slider in voiceTextureSliders"
+                        :key="slider.key"
+                        class="pa-3 rounded border bg-surface"
+                      >
+                        <div class="d-flex align-center justify-space-between mb-2">
+                          <div class="d-flex align-center">
+                            <VAvatar
+                              :color="slider.color"
+                              variant="tonal"
+                              size="28"
+                              rounded
+                              class="me-2 flex-shrink-0"
+                            >
+                              <VIcon
+                                :icon="slider.icon"
+                                size="15"
+                              />
+                            </VAvatar>
+                            <span class="text-body-2 font-weight-medium">{{ slider.label }}</span>
+                          </div>
+                          <span
+                            class="text-body-2 font-weight-bold"
+                            :class="`text-${slider.color}`"
+                          >
+                            {{ slider.value }}%
+                          </span>
+                        </div>
+                        <VSlider
+                          v-model="slider.value"
+                          :min="0"
+                          :max="100"
+                          :step="1"
+                          :color="slider.color"
+                          hide-details
+                          density="compact"
+                        />
+                        <div class="text-caption text-medium-emphasis mt-1">
+                          {{ slider.hint }}
+                        </div>
+                      </div>
+                    </div>
+                  </VExpansionPanelText>
+                </VExpansionPanel>
+              </VExpansionPanels>
             </VCol>
           </VRow>
         </VWindowItem>
@@ -2436,6 +3556,209 @@ onMounted(async () => {
 .profile-tab-window {
   padding: 16px;
   margin: -16px;
+  overflow-anchor: none;
+}
+
+@media (min-width: 960px) {
+  .advanced-nav-col {
+    width: 285px;
+    flex: 0 0 285px;
+  }
+}
+
+.advanced-vertical-tabs {
+  :deep(.v-btn) {
+    min-height: 40px !important;
+    padding-inline: 12px !important;
+    justify-content: flex-start;
+    white-space: nowrap;
+  }
+}
+
+/* Khi đang ở Tab 7 (Cài đặt nâng cao), ẩn thanh cuộn dọc của trình duyệt nhưng vẫn giữ nguyên Footer hiển thị bên dưới */
+:global(html:has(body.writing-profile-advanced-no-scroll)),
+:global(body.writing-profile-advanced-no-scroll) {
+  overflow-y: hidden !important;
+}
+
+:global(body.writing-profile-advanced-no-scroll .layout-page-content) {
+  padding-bottom: 8px !important;
+  padding-block-end: 8px !important;
+}
+
+/* Card Prompt ở Tab 7: chiều cao tự khớp phần màn hình phía trên Footer (không xuất hiện scroll trình duyệt) */
+.advanced-prompt-card {
+  height: var(--advanced-card-height, calc(100vh - 435px)) !important;
+  max-height: var(--advanced-card-height, calc(100vh - 435px)) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+
+  :deep(.v-card-item) {
+    flex-shrink: 0;
+    padding-top: 14px !important;
+    padding-bottom: 10px !important;
+  }
+
+  :deep(.v-card-text) {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-top: 0 !important;
+    padding-bottom: 15px !important; /* Các thanh trượt cách đáy card đúng 15px */
+    overflow: hidden !important;
+  }
+}
+
+.advanced-prompt-row {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  height: 100%;
+}
+
+@media (min-width: 960px) {
+  .advanced-prompt-row {
+    flex-wrap: nowrap !important;
+  }
+}
+
+.advanced-prompt-left-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  overflow: hidden;
+}
+
+.advanced-prompt-right-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  overflow: hidden;
+
+  :deep(.app-text-field) {
+    flex-grow: 0 !important;
+  }
+}
+
+/* Textarea co giãn linh hoạt theo chiều cao còn lại của cột trái, cuộn nội bộ bên trong ô */
+.advanced-flex-textarea {
+  flex: 1 1 0;
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+
+  :deep(.v-input),
+  :deep(.v-input__control),
+  :deep(.v-field),
+  :deep(.v-field__field) {
+    flex: 1 1 0;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  :deep(textarea.v-field__input) {
+    flex: 1 1 0;
+    min-height: 0 !important;
+    height: 100% !important;
+    overflow-y: auto !important;
+    resize: none;
+  }
+}
+
+.summary-grid-2col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+}
+
+/* Khung expansion panel thanh trượt: giữ nguyên hiệu ứng trượt v-expand-transition mượt mà và không làm giật/mất thanh cuộn khi thu gọn */
+.advanced-slider-panels {
+  width: 100%;
+  flex: 0 0 auto;
+
+  :deep(.v-expansion-panel) {
+    overflow: hidden;
+  }
+
+  :deep(.v-expansion-panel-text) {
+    overflow: hidden !important;
+
+    .v-expansion-panel-text__wrapper {
+      padding: 8px 12px 12px 12px !important;
+    }
+  }
+
+  :deep(.slider-scroll-box) {
+    height: var(--slider-scroll-height, 220px);
+    max-height: var(--slider-scroll-height, 220px);
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+    padding-right: 6px;
+
+    > div {
+      flex-shrink: 0 !important;
+    }
+  }
+}
+
+.slider-scroll-box {
+  overflow-y: auto;
+  padding-right: 6px;
+  overscroll-behavior: contain;
+}
+
+/* Chống giật (jitter) khi đóng/mở VExpansionPanel và khi cuộn trang lên/xuống */
+:deep(.v-expansion-panels) {
+  overflow-anchor: none;
+}
+
+:deep(.v-expansion-panel-title),
+:deep(.v-expansion-panel-title--active) {
+  min-height: 54px !important;
+  transition: background-color 0.15s ease !important;
+}
+
+/* Triệt tiêu hiện tượng bóng ma (ghosting) khi kéo chuột trực tiếp (.v-slider--pressed), nhưng giữ hiệu ứng trượt mượt khi click hoặc chọn preset */
+:deep(.v-slider) {
+  contain: layout style;
+
+  &.v-slider--pressed {
+    .v-slider-track__fill,
+    .v-slider-thumb {
+      transition: none !important;
+    }
+  }
+
+  /* Vô hiệu hóa ripple và halo ::before gây vệt mờ/dư ảnh subpixel khi di chuột nhanh */
+  .v-slider-thumb__ripple,
+  .v-slider-thumb__surface::before {
+    display: none !important;
+  }
+
+  .v-slider-thumb__surface {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25) !important;
+  }
+}
+
+/* Đảm bảo placeholder hiển thị liên tục, không cần click/focus mới hiện */
+:deep(.v-field--persistent-placeholder) input::placeholder,
+:deep(.v-field--persistent-placeholder) textarea::placeholder,
+:deep(.persistent-placeholder) textarea::placeholder {
+  opacity: 0.6 !important;
 }
 
 /* Ô bật/tắt kênh hiển thị. */

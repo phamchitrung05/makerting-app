@@ -254,6 +254,10 @@ class WritingStyleAnalyzerService
                 ],
                 'style_instructions' => ['type' => 'string'],
                 'voice_texture_instructions' => ['type' => 'string'],
+                // KHÔNG có 'tone_instructions': Ô 3 do người dùng soạn tay
+                // theo mục đích viết bài — không phải thứ AI giải mã ra.
+                // Trước đây khai property lỏng (không required, không đọc,
+                // không lưu) nên bị bỏ rơi — xóa để schema strict hợp lệ.
                 'voice_texture_sliders_json' => [
                     'type' => 'object',
                     'properties' => $sliderProps,

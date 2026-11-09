@@ -6,15 +6,15 @@
   Màn phân tích bài viết mẫu và đóng gói thành hồ sơ văn phong (WritingProfile):
   - Card 0 (Thông tin văn phong): field Tên văn phong và Slug định danh.
   - Card 1 (Nguồn bài viết): 3 tab nguồn đầu vào (Từ URL / Dán nội dung /
-    Từ file), tích hợp TiptapEditor, tự động đếm từ, đếm câu và nhận diện
-    cấp độ độ dài LengthTier (micro | short | medium | long) realtime.
+  Từ file), tích hợp TiptapEditor, tự động đếm từ, đếm câu và nhận diện
+  cấp độ độ dài LengthTier (micro | short | medium | long) realtime.
   - Card 2 (Giải mã DNA & Phân tích chi tiết): 3 tab dữ liệu thật từ AI:
-    1. Văn phong (4 chỉ số DNA, danh sách các quy tắc DNA thực tế trích xuất
-       được theo cấp độ độ dài — có quy tắc nào hiển thị quy tắc đó).
-    2. Cấu trúc (các quy tắc cấu trúc trích xuất được từ bài mẫu).
-    3. Bằng chứng trích dẫn (các câu trích nguyên văn từ bài mẫu đã kiểm chứng).
+  1. Văn phong (4 chỉ số DNA, danh sách các quy tắc DNA thực tế trích xuất
+  được theo cấp độ độ dài — có quy tắc nào hiển thị quy tắc đó).
+  2. Cấu trúc (các quy tắc cấu trúc trích xuất được từ bài mẫu).
+  3. Bằng chứng trích dẫn (các câu trích nguyên văn từ bài mẫu đã kiểm chứng).
   - Cột phải: System Prompt DNA (style_instructions) và Card Đóng gói & Lưu
-    thành Writing Profile.
+  thành Writing Profile.
   =====================================================================
 -->
 <script setup>
@@ -215,6 +215,7 @@ const selectedDnaTierFilter = ref('long')
  * không tự tạo profile nào. */
 const savedProfileId = ref(null)
 const lastSubmittedAnalysisId = ref(null)
+
 /* Phiên phân tích thành công gần nhất — gửi kèm payload Lưu để backend gắn
  * profile vào run log (analysis.draft_profile_id) + suy origin=reference. */
 const lastSucceededAnalysisId = ref(null)
@@ -298,6 +299,7 @@ const styleDnaMetrics = computed(() => [
 /* System prompt cơ sở — nạp từ analysis.style_instructions (Ô 1) & voice_texture_instructions (Ô 2) */
 const styleInstructionsBase = ref('')
 const voiceTextureInstructionsBase = ref('')
+
 const voiceTextureSliders = reactive({
   voice_timbre: 70,
   vernacular_flow: 65,
@@ -305,6 +307,7 @@ const voiceTextureSliders = reactive({
   rhythm_variation: 70,
   emphasis_glide: 80,
 })
+
 const toneSliders = reactive({
   humor: 50,
   empathy: 50,
@@ -315,6 +318,7 @@ const toneSliders = reactive({
   depth: 50,
   urgency: 50,
 })
+
 const VOICE_TEXTURE_LABELS = {
   voice_timbre: 'Giọng văn',
   vernacular_flow: 'Tính dân dã tự nhiên',
@@ -322,6 +326,7 @@ const VOICE_TEXTURE_LABELS = {
   rhythm_variation: 'Biến thiên nhịp điệu',
   emphasis_glide: 'Tính nhấn và lướt',
 }
+
 const displayedDnaPrompt = computed(() => styleInstructionsBase.value)
 
 /* Form đóng gói kết quả phân tích thành bản ghi WritingProfile mới. */
@@ -704,6 +709,7 @@ async function saveWritingProfile(openEditor = false) {
     tone_sliders_json: { ...toneSliders },
     status: profileForm.status,
     is_enabled: profileForm.isEnabled,
+
     // Phiên phân tích thành công — backend gắn profile vào run log
     // (analysis.draft_profile_id, source_hash, metadata) + origin=reference.
     ...(lastSucceededAnalysisId.value ? { analysis_id: lastSucceededAnalysisId.value } : {}),

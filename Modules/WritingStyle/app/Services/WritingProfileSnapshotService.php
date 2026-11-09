@@ -53,6 +53,11 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
             ? trim((string) ($overrides['voice_texture_instructions'] ?? ''))
             : trim((string) ($profile->voice_texture_instructions ?? ''));
 
+        // Ô 3: tone_instructions (Prompt bổ sung 3 - Chỉ dẫn Sắc thái cảm xúc)
+        $toneInstructionsText = array_key_exists('tone_instructions', $overrides)
+            ? trim((string) ($overrides['tone_instructions'] ?? ''))
+            : trim((string) ($profile->tone_instructions ?? ''));
+
         // 5 Thanh trượt Chất văn: voice_texture_sliders_json
         $voiceTextureSliders = array_key_exists('voice_texture_sliders_json', $overrides) && is_array($overrides['voice_texture_sliders_json'])
             ? $overrides['voice_texture_sliders_json']
@@ -66,6 +71,7 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
             $styleText,
             $voiceTextureText,
             $voiceTextureSliders,
+            $toneInstructionsText,
         );
 
         // 8 Thanh trượt Sắc thái cảm xúc (Sandbox cảm xúc): ưu tiên runtime override,
@@ -105,6 +111,7 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         string $styleText,
         string $voiceTextureText = '',
         array $voiceTextureSliders = [],
+        string $toneInstructionsText = '',
     ): string {
         $cfg = config('writingstyle.prompts.compiler', []);
 
@@ -147,6 +154,13 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         if ($voiceExtra !== '') {
             $lines[] = '';
             $lines[] = (string) ($cfg['voice_texture_label'] ?? 'Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt (Ô 2):') . ' ' . $voiceExtra;
+        }
+
+        // Ô 3: Chỉ dẫn Sắc thái & Phối âm cảm xúc (tone_instructions)
+        $toneExtra = trim($toneInstructionsText);
+        if ($toneExtra !== '') {
+            $lines[] = '';
+            $lines[] = (string) ($cfg['tone_instructions_label'] ?? 'Chỉ dẫn Sắc thái & Phối âm cảm xúc (Ô 3):') . ' ' . $toneExtra;
         }
 
         // 5 Thanh trượt Chất văn (voice_texture_sliders_json)

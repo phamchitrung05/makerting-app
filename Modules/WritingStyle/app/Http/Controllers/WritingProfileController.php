@@ -9,6 +9,7 @@ use Modules\WritingStyle\Http\Requests\StoreWritingProfileRequest;
 use Modules\WritingStyle\Http\Resources\WritingProfileResource;
 use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Models\WritingProfileAnalysis;
+use Modules\WritingStyle\Pipelines\SandboxPipelineRunner;
 use Modules\WritingStyle\Services\WritingProfileDefinition;
 
 /**
@@ -75,6 +76,9 @@ class WritingProfileController extends Controller
         return BaseResponse::success([
             'tiers' => $tiers,
             'rules' => $rules,
+            // Sơ đồ Pipeline của 4 tier — FE render Pipeline Stepper biết trước
+            // các bước + trạng thái phụ thuộc (PLAN-WRITING-STYLE-SANDBOX-PIPELINE).
+            'pipelines' => app(SandboxPipelineRunner::class)->describePipelines(),
         ]);
     }
 
@@ -106,6 +110,10 @@ class WritingProfileController extends Controller
                 ?? ($analysisResult['voice_texture_sliders_json'] ?? null),
             'tone_sliders_json'          => $data['tone_sliders_json']
                 ?? ($analysisResult['tone_sliders_json'] ?? null),
+            // Ô 3 - Chỉ dẫn Sắc thái & Phối âm cảm xúc: do NGƯỜI DÙNG soạn
+            // tay theo mục đích viết bài (không do AI giải mã) — POST nhận
+            // trực tiếp giống PUT để hai verb đối xứng.
+            'tone_instructions'          => $data['tone_instructions'] ?? '',
             'origin'                     => $linkedAnalysis !== null
                 ? WritingProfile::ORIGIN_REFERENCE
                 : WritingProfile::ORIGIN_MANUAL,
@@ -156,6 +164,7 @@ class WritingProfileController extends Controller
             'voice_texture_instructions',
             'voice_texture_sliders_json',
             'tone_sliders_json',
+            'tone_instructions',
             'status',
             'is_enabled',
         ];

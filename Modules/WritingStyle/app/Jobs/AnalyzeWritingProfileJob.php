@@ -96,7 +96,9 @@ class AnalyzeWritingProfileJob implements ShouldQueue
                 $done->error_message ?? 'Giải mã văn phong thất bại',
             );
         }
-    }    /**
+    }
+
+    /**
      * =====================================================================
      * CHỨC NĂNG: Hook khi job hết lượt retry ($tries) mà vẫn lỗi.
      * =====================================================================

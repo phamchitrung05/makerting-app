@@ -56,6 +56,8 @@ class WritingProfileResource extends JsonResource
                 'depth'         => 50,
                 'urgency'       => 50,
             ],
+            'tone_instructions'          => $this->tone_instructions ?? '',
+            'sandbox_samples_json'       => $this->sandbox_samples_json ?? [],
             'origin'                     => $this->origin,
             'status'                     => $this->status,
             'is_enabled'                 => $this->is_enabled,

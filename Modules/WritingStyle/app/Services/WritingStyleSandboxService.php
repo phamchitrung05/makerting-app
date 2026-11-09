@@ -3,10 +3,8 @@
 namespace Modules\WritingStyle\Services;
 
 use Modules\CoreAi\Contracts\CoreAiGatewayContract;
-use Modules\CoreAi\DTOs\AiStructuredRequest;
 use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
 use Modules\WritingStyle\DTOs\SandboxResultDto;
-use Modules\WritingStyle\DTOs\WritingProfileSnapshotDto;
 use Modules\WritingStyle\Models\WritingProfile;
 
 /**
@@ -23,8 +21,19 @@ class WritingStyleSandboxService
     public function __construct(
         protected readonly CoreAiGatewayContract $ai,
         protected readonly WritingStyleCompilerContract $compiler,
+        protected readonly \Modules\WritingStyle\Pipelines\Steps\ArticleWriterStep $articleWriter,
     ) {}
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Viết thử — tương đương pipeline 1 bước `article_writer`.
+     * =====================================================================
+     * Giữ tương thích ngược với API cũ POST /sandbox (FE gọi 1 lần, không
+     * qua bước phân tích). Bên trong gọi `ArticleWriterStep::execute` với
+     * `$upstreamPromptBlocks = []` — đúng semantics của terminal step khi
+     * không có bước phân tích nào đứng trước (tier micro/short/medium).
+     * =====================================================================
+     */
     public function sandbox(
         WritingProfile $profile,
         string $topic,
@@ -32,57 +41,21 @@ class WritingStyleSandboxService
         int $targetSentences = 0,
         array $overrides = [],
     ): SandboxResultDto {
-        // 1. Snapshot an toàn (đã strip evidence + prompt theo tier +
-        //    tone_overrides/style_instructions/voice_texture runtime nếu có).
-        $snapshot = $this->compiler->buildSnapshot(
+        $result = $this->articleWriter->execute(
             $profile,
+            $topic,
             $targetTier,
-            $targetSentences,
-            $overrides,
-        );
-
-        // 2. Gọi AI viết thử — ưu tiên temperature runtime > profile > config mặc định.
-        $temperature = isset($overrides['temperature'])
-            ? (float) $overrides['temperature']
-            : ($profile->temperature !== null
-                ? (float) $profile->temperature
-                : (float) config('writingstyle.prompts.sandbox.temperature', 0.85));
-
-        $resp = $this->ai->executeStructured(
-            AiStructuredRequest::fromPrompt(
-                $this->buildUserPrompt($topic, $snapshot),
-                system: $snapshot->systemPrompt,
-                schema: null,
-                options: ['temperature' => $temperature],
-                module: 'writingstyle',
-                operation: 'sandbox',
-            )
+            [], // upstreamPromptBlocks rỗng — không có step phân tích trước
+            array_merge($overrides, ['target_sentences' => $targetSentences]),
         );
 
         return new SandboxResultDto(
-            profileId: (int) $profile->id,
-            topic: $topic,
-            targetTier: $snapshot->targetTier,
-            text: trim($resp->text ?? ''),
-            snapshot: [
-                'system_prompt' => $snapshot->systemPrompt,
-                'rules'         => $snapshot->rulesJson,
-                'sentence_hint' => $snapshot->sentenceHint,
-            ],
-            aiRunId: $this->ai->lastRun()?->id,
+            profileId: (int) $result['profile_id'],
+            topic: (string) $result['topic'],
+            targetTier: (string) $result['target_tier'],
+            text: (string) $result['text'],
+            snapshot: (array) ($result['snapshot'] ?? []),
+            aiRunId: $result['ai_run_id'] ?? null,
         );
-    }
-
-    protected function buildUserPrompt(string $topic, WritingProfileSnapshotDto $snapshot): string
-    {
-        $template = (string) config(
-            'writingstyle.prompts.sandbox.user_prompt_template',
-            "Chủ đề: {topic}\n\nHãy viết {sentence_hint} về chủ đề trên, đúng khẩu khí và cách hành văn đã mô tả trong hướng dẫn hệ thống. Chỉ trả văn bản, không thêm lời dẫn hay chú thích."
-        );
-
-        return strtr($template, [
-            '{topic}' => $topic,
-            '{sentence_hint}' => $snapshot->sentenceHint,
-        ]);
     }
 }
