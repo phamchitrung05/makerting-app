@@ -1,0 +1,246 @@
+{
+  "voice": [
+    {
+      "id": "intimate_whisper",
+      "title": "Thủ thỉ tâm tình & Kể chuyện gần gũi",
+      "attributeLabel": "Giọng văn",
+      "color": "primary",
+      "icon": "tabler-microphone-2",
+      "desc": "Hạ thấp khoảng cách với người đọc, trò chuyện ấm áp như tri kỷ bên tách trà.",
+      "deltas": {
+        "voice_timbre": 25,
+        "emotional_nuance": 15,
+        "vernacular_flow": 10,
+        "rhythm_variation": 0,
+        "emphasis_glide": 5
+      },
+      "directive": "Giọng văn trầm ấm, thủ thỉ như một người bạn tri kỷ đang kể chuyện 1-1, không lên gân thuyết giáo."
+    },
+    {
+      "id": "sharp_poised",
+      "title": "Đĩnh đạc, sắc sảo & Chuẩn mực chuyên gia",
+      "attributeLabel": "Giọng văn",
+      "color": "primary",
+      "icon": "tabler-award",
+      "desc": "Khẩu khí chững chạc, lập luận gãy gọn, tạo độ tin cậy cao và tiết chế cảm tính.",
+      "deltas": {
+        "voice_timbre": -20,
+        "vernacular_flow": -15,
+        "emotional_nuance": -15,
+        "rhythm_variation": 5,
+        "emphasis_glide": 15
+      },
+      "directive": "Giọng văn đĩnh đạc, điềm tĩnh và sắc sảo; ưu tiên nhận định gãy gọn, xác đáng của người có trải nghiệm sâu."
+    },
+    {
+      "id": "vernacular_natural",
+      "title": "Dân dã đời thường & Thuận tai người Việt",
+      "attributeLabel": "Tính dân dã tự nhiên",
+      "color": "success",
+      "icon": "tabler-message-circle",
+      "desc": "Từ thuần Việt dung dị, mở câu bằng từ nối cảm xúc tự nhiên, thoát mùi văn dịch AI.",
+      "deltas": {
+        "voice_timbre": 15,
+        "vernacular_flow": 30,
+        "emotional_nuance": 10,
+        "rhythm_variation": 10,
+        "emphasis_glide": 0
+      },
+      "directive": "Ưu tiên từ thuần Việt dung dị, thuận tai; cho phép mở câu bằng từ nối cảm xúc đời thường (Mà thật ra, Ấy vậy mà, Đôi khi...)."
+    },
+    {
+      "id": "quiet_luxury_polish",
+      "title": "Trau chuốt tinh tế & Tiết chế (Quiet Luxury)",
+      "attributeLabel": "Tính dân dã tự nhiên",
+      "color": "success",
+      "icon": "tabler-diamond",
+      "desc": "Từ vựng chọn lọc kỹ lưỡng, sang trọng kín đáo, tuyệt đối tránh khẩu ngữ suồng sã.",
+      "deltas": {
+        "voice_timbre": 5,
+        "vernacular_flow": -20,
+        "emotional_nuance": 15,
+        "rhythm_variation": 0,
+        "emphasis_glide": 20
+      },
+      "directive": "Câu chữ gọt giũa tinh tế theo tinh thần Quiet Luxury; chọn lọc từ ngữ giàu sức gợi, tránh khẩu ngữ suồng sã."
+    },
+    {
+      "id": "deep_resonance",
+      "title": "Sâu lắng, giàu dư âm & Gợi tả giác quan",
+      "attributeLabel": "Màu sắc cảm xúc",
+      "color": "error",
+      "icon": "tabler-heart-spark",
+      "desc": "Không dùng tính từ sáo rỗng, để chi tiết ánh sáng/âm thanh/xúc giác tự gợi nỗi niềm.",
+      "deltas": {
+        "voice_timbre": 15,
+        "vernacular_flow": 5,
+        "emotional_nuance": 30,
+        "rhythm_variation": 10,
+        "emphasis_glide": 15
+      },
+      "directive": "Màu sắc cảm xúc lắng đọng, giàu dư âm; truyền tải qua chi tiết giác quan và khoảng lặng thay vì tính từ cảm thán sáo rỗng."
+    },
+    {
+      "id": "dynamic_cadence",
+      "title": "Co giãn nhịp thở (Câu dài xen câu cực ngắn)",
+      "attributeLabel": "Biến thiên nhịp điệu",
+      "color": "warning",
+      "icon": "tabler-wave-sine",
+      "desc": "Sau 2–3 câu ghép dài miêu tả liên hoàn sẽ đặt 1 câu đơn 3–6 chữ để chốt nhịp.",
+      "deltas": {
+        "voice_timbre": 0,
+        "vernacular_flow": 10,
+        "emotional_nuance": 10,
+        "rhythm_variation": 30,
+        "emphasis_glide": 15
+      },
+      "directive": "Thay đổi độ dài câu theo mạch ý. Dùng một câu ngắn đứng riêng khi cần điểm rơi."
+    },
+    {
+      "id": "steady_calm_flow",
+      "title": "Nhịp văn đều đặn, êm ả & Thư thái",
+      "attributeLabel": "Biến thiên nhịp điệu",
+      "color": "warning",
+      "icon": "tabler-ripple",
+      "desc": "Duy trì nhịp thở chậm rãi, liền mạch, dẫn dắt người đọc tuần tự không giật cục.",
+      "deltas": {
+        "voice_timbre": 10,
+        "vernacular_flow": 0,
+        "emotional_nuance": 5,
+        "rhythm_variation": -25,
+        "emphasis_glide": -10
+      },
+      "directive": "Duy trì nhịp điệu hành văn êm ả, khoan thai; các câu nối tiếp nhau mượt mà, không ngắt nhịp đột ngột."
+    },
+    {
+      "id": "zoom_in_glide",
+      "title": "Lướt nhanh ý phụ – Zoom-in nhấn sâu chi tiết đắt",
+      "attributeLabel": "Tính nhấn và lướt",
+      "color": "info",
+      "icon": "tabler-focus-2",
+      "desc": "Gói gọn thông tin nền trong 1 câu lướt nhanh, dừng lại khắc họa cận cảnh điểm sáng.",
+      "deltas": {
+        "voice_timbre": 0,
+        "vernacular_flow": 0,
+        "emotional_nuance": 15,
+        "rhythm_variation": 15,
+        "emphasis_glide": 30
+      },
+      "directive": "Áp dụng triệt để nghệ thuật Nhấn – Lướt: lướt nhanh thông tin nền phụ trong 1 câu ngắn, dừng lại zoom-in khắc họa sâu 1 chi tiết đắt giá nhất."
+    }
+  ],
+  "tone": [
+    {
+      "id": "humorous",
+      "title": "Hóm hỉnh & Gần gũi",
+      "attributeLabel": "Vui vẻ & Hóm hỉnh",
+      "color": "warning",
+      "icon": "tabler-mood-smile",
+      "desc": "Chêm xen ví dụ dí dỏm, chơi chữ tinh tế, tạo không khí nhẹ nhàng.",
+      "deltas": {
+        "humor": 30,
+        "formality": -15,
+        "empathy": 20
+      },
+      "directive": "Giữ sắc thái vui vẻ, dí dỏm; đan cài ví dụ hóm hỉnh và chơi chữ tinh tế để kéo gần khoảng cách với người đọc."
+    },
+    {
+      "id": "empathy",
+      "title": "Đồng cảm & Trân trọng",
+      "attributeLabel": "Trân trọng & Đồng cảm",
+      "color": "error",
+      "icon": "tabler-heart",
+      "desc": "Ghi nhận nỗ lực độc giả, thấu hiểu khó khăn, giọng điệu ấm áp.",
+      "deltas": {
+        "empathy": 40,
+        "candor": 30,
+        "formality": -5
+      },
+      "directive": "Thể hiện sự đồng cảm khi liên quan đến tình huống của người đọc."
+    },
+    {
+      "id": "assertive",
+      "title": "Sắc sảo & Quyết đoán",
+      "attributeLabel": "Sắc sảo & Quyết đoán",
+      "color": "primary",
+      "icon": "tabler-bolt",
+      "desc": "Luận điểm đanh thép, lập trường dứt khoát, giảm từ ngập ngừng.",
+      "deltas": {
+        "assertiveness": 40,
+        "depth": 40,
+        "urgency": 20
+      },
+      "directive": "Nêu quan điểm dứt khoát khi đủ căn cứ. Diễn đạt rõ mức độ chắc chắn khi thông tin còn thiếu."
+    },
+    {
+      "id": "formality_academic",
+      "title": "Trang trọng & Chuẩn mực học thuật",
+      "attributeLabel": "Trang trọng",
+      "color": "info",
+      "icon": "tabler-scale",
+      "desc": "Văn phong đĩnh đạc, chuẩn mực báo chí/nghiên cứu, khách quan.",
+      "deltas": {
+        "formality": 35,
+        "depth": 25,
+        "humor": -20
+      },
+      "directive": "Duy trì sắc thái trang trọng, điềm tĩnh; phân tích có tính hệ thống và dẫn chứng minh bạch chuẩn mực."
+    },
+    {
+      "id": "inspiring",
+      "title": "Truyền lửa & Thôi thúc",
+      "attributeLabel": "Nhiệt huyết & Truyền lửa",
+      "color": "warning",
+      "icon": "tabler-flame",
+      "desc": "Tiết tấu hào sảng, thắp sáng động lực, khơi gợi niềm tin bứt phá.",
+      "deltas": {
+        "inspiration": 40,
+        "urgency": 25,
+        "humor": 10
+      },
+      "directive": "Giọng văn tràn đầy năng lượng, thôi thúc hành động; khơi gợi khát vọng và tinh thần dám nghĩ dám làm."
+    },
+    {
+      "id": "candor_authentic",
+      "title": "Chân thực, Gai góc & Bộc trực",
+      "attributeLabel": "Chân thực & Bộc trực",
+      "color": "success",
+      "icon": "tabler-shield-check",
+      "desc": "Kể chuyện thực tế, dám nói sự thật góc khuất, không né tránh.",
+      "deltas": {
+        "candor": 40,
+        "empathy": 20,
+        "formality": -15
+      },
+      "directive": "Thẳng thắn bộc trực, dám nhìn thẳng vào thực tế gai góc và mặt trái của vấn đề, không tô hồng hay sáo rỗng."
+    },
+    {
+      "id": "intellectual_depth",
+      "title": "Trí tuệ, Chuyên sâu & Bản chất",
+      "attributeLabel": "Trí tuệ & Chuyên sâu",
+      "color": "primary",
+      "icon": "tabler-brain",
+      "desc": "Phân tích bản chất, cơ chế hoạt động ngầm, kiến trúc, số liệu.",
+      "deltas": {
+        "depth": 45,
+        "assertiveness": 20,
+        "formality": 10
+      },
+      "directive": "Giải thích nguyên nhân và hệ quả trong giới hạn độ dài. Chỉ dùng số liệu được cung cấp."
+    },
+    {
+      "id": "urgent_call",
+      "title": "Khẩn thiết & Kêu gọi hành động ngay",
+      "attributeLabel": "Khẩn thiết & Kêu gọi",
+      "color": "error",
+      "icon": "tabler-alarm",
+      "desc": "Nhấn mạnh tính cấp thiết của thời điểm, thôi thúc quyết định.",
+      "deltas": {
+        "urgency": 45,
+        "assertiveness": 25,
+        "inspiration": 15
+      },
+      "directive": "Viết lời kêu gọi rõ ràng. Chỉ nhấn hạn chót hoặc số lượng giới hạn khi brief cung cấp thông tin đó."
+    }
+  ]
+}

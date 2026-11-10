@@ -393,6 +393,8 @@ declare module 'vue' {
     ReferAndEarnDialog: typeof import('./resources/js/components/dialogs/ReferAndEarnDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SandboxSampleDetailDialog: typeof import('./Modules/WritingStyle/resources/js/components/SandboxSampleDetailDialog.vue')['default']
+    SandboxWritingBrief: typeof import('./Modules/WritingStyle/resources/js/components/SandboxWritingBrief.vue')['default']
     ScrollToTop: typeof import('./resources/js/@core/components/ScrollToTop.vue')['default']
     SecurityTab: typeof import('./Modules/Settings/resources/js/components/tabs/SecurityTab.vue')['default']
     SeoMetaCard: typeof import('./Modules/Seo/resources/js/components/SeoMetaCard.vue')['default']

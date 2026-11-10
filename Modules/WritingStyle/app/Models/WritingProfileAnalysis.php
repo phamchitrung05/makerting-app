@@ -62,6 +62,7 @@ class WritingProfileAnalysis extends Model
         'status',
         'ai_run_id',
         'result_json',
+        'prompt_version',
         'draft_profile_id',
         'error_code',
         'error_message',
@@ -72,6 +73,7 @@ class WritingProfileAnalysis extends Model
     {
         return [
             'result_json' => 'array',
+            'prompt_version' => 'integer',
             'expires_at'  => 'datetime',
         ];
     }

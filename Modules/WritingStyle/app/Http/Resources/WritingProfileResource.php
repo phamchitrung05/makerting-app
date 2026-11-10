@@ -62,6 +62,8 @@ class WritingProfileResource extends JsonResource
             'status'                     => $this->status,
             'is_enabled'                 => $this->is_enabled,
             'analysis_metadata_json'     => $this->analysis_metadata_json,
+            'style_analysis_json'        => $this->style_analysis_json,
+            'slider_preferences_json'    => $this->slider_preferences_json,
             'version'                    => $this->version,
             'categories'                 => $this->whenLoaded('categories', fn () => $this->categories->map(fn ($c) => [
                 'id'   => $c->id,

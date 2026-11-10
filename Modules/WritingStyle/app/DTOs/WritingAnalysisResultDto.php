@@ -23,6 +23,7 @@ final readonly class WritingAnalysisResultDto
         public string $voiceTextureInstructions = '',
         public array $voiceTextureSlidersJson = [],
         public array $toneSlidersJson = [],
+        public ?array $styleAnalysisJson = null,
     ) {}
 
     public function toResultJson(): array
@@ -35,6 +36,7 @@ final readonly class WritingAnalysisResultDto
             'voice_texture_instructions' => $this->voiceTextureInstructions,
             'voice_texture_sliders_json' => $this->voiceTextureSlidersJson,
             'tone_sliders_json'          => $this->toneSlidersJson,
+            'style_analysis_json'        => $this->styleAnalysisJson,
             'metadata'                   => $this->metadata,
             'ai_run_id'                  => $this->aiRunId,
         ];

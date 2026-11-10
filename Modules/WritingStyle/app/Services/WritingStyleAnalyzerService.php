@@ -65,6 +65,7 @@ class WritingStyleAnalyzerService
             'source_type'     => $sourceType,
             'source_url'      => $sourceUrl,
             'reference_text'  => $referenceText,
+            'prompt_version'  => PromptV3::enabled() ? 3 : 2,
             'status'          => WritingProfileAnalysis::STATUS_PENDING,
             'expires_at'      => now()->addDays((int) config('writingstyle.analysis_retention_days', 30)),
         ]);
@@ -73,8 +74,9 @@ class WritingStyleAnalyzerService
         try {
             $tier = WritingProfileDefinition::detectTier($referenceText);
 
+            $v3 = $analysis->prompt_version === 3 ? new WritingStyleAnalysisV3($referenceText) : null;
             $resp = $this->ai->executeStructured(
-                AiStructuredRequest::fromPrompt(
+                $v3?->request() ?? AiStructuredRequest::fromPrompt(
                     $this->buildPrompt($referenceText, $tier),
                     system: (string) config(
                         'writingstyle.prompts.analyzer.system',
@@ -87,10 +89,14 @@ class WritingStyleAnalyzerService
                 )
             );
             $data = $resp->data ?? [];
+            if ($v3 !== null) {
+                PromptV3::requireComplete($resp);
+                $data = $v3->normalize($data);
+            }
             $aiRunId = $this->ai->lastRun()?->id;
 
             $rawEvidence = is_array($data['evidence_json'] ?? null) ? $data['evidence_json'] : [];
-            $evidence = WritingProfileDefinition::filterValidEvidence($referenceText, $rawEvidence);
+            $evidence = $v3 !== null ? $rawEvidence : WritingProfileDefinition::filterValidEvidence($referenceText, $rawEvidence);
             $rules = is_array($data['rules_json'] ?? null) ? $data['rules_json'] : [];
             $styleInstructions = trim((string) ($data['style_instructions'] ?? ''));
             $voiceTextureInstructions = trim((string) ($data['voice_texture_instructions'] ?? ''));
@@ -104,7 +110,7 @@ class WritingStyleAnalyzerService
             foreach (WritingProfile::VOICE_TEXTURE_KEYS as $axisKey) {
                 $defaultVal = (int) ($axesConfig[$axisKey]['default'] ?? 70);
                 $val = isset($rawSliders[$axisKey]) ? (int) $rawSliders[$axisKey] : $defaultVal;
-                $voiceTextureSliders[$axisKey] = max(0, min(100, $val));
+                $voiceTextureSliders[$axisKey] = $v3 !== null ? $rawSliders[$axisKey] : max(0, min(100, $val));
             }
 
             // Chuẩn hóa 8 thanh trượt Sandbox sắc thái cảm xúc (0..100, mặc định 50).
@@ -114,7 +120,7 @@ class WritingStyleAnalyzerService
             $toneSliders = [];
             foreach (WritingProfile::TONE_AXIS_KEYS as $toneKey) {
                 $val = isset($rawToneSliders[$toneKey]) ? (int) $rawToneSliders[$toneKey] : 50;
-                $toneSliders[$toneKey] = max(0, min(100, $val));
+                $toneSliders[$toneKey] = $v3 !== null ? $rawToneSliders[$toneKey] : max(0, min(100, $val));
             }
 
             $metadata = [
@@ -122,6 +128,8 @@ class WritingStyleAnalyzerService
                 'sentence_count' => WritingProfileDefinition::countSentences($referenceText),
                 'detected_tier'  => $tier,
                 'ai_model_used'  => $resp->remoteModelId,
+                'prompt_version' => $v3 !== null ? 3 : 2,
+                'schema_version' => $v3 !== null ? 3 : 2,
             ];
 
             $result = new WritingAnalysisResultDto(
@@ -134,6 +142,7 @@ class WritingStyleAnalyzerService
                 voiceTextureInstructions: $voiceTextureInstructions,
                 voiceTextureSlidersJson: $voiceTextureSliders,
                 toneSlidersJson: $toneSliders,
+                styleAnalysisJson: $data['style_analysis_json'] ?? null,
             );
 
             // KHÔNG tạo WritingProfile ở đây — phân tích bao nhiêu lần cũng
@@ -296,8 +305,15 @@ class WritingStyleAnalyzerService
         ?int $createdBy = null,
     ): array {
         $hash = WritingProfileAnalysis::sourceHashOf($referenceText);
+        $promptVersion = PromptV3::enabled() ? 3 : 2;
         $existing = WritingProfileAnalysis::query()
             ->where('source_hash', $hash)
+            ->where(function ($query) use ($promptVersion): void {
+                $query->where('prompt_version', $promptVersion);
+                if ($promptVersion === 2) {
+                    $query->orWhereNull('prompt_version');
+                }
+            })
             ->whereIn('status', [WritingProfileAnalysis::STATUS_PENDING, WritingProfileAnalysis::STATUS_RUNNING])
             ->latest('id')
             ->first();
@@ -318,6 +334,7 @@ class WritingStyleAnalyzerService
             'source_type'    => $sourceType,
             'source_url'     => $sourceUrl,
             'reference_text' => $referenceText,
+            'prompt_version' => $promptVersion,
             'status'         => WritingProfileAnalysis::STATUS_PENDING,
             'expires_at'     => now()->addDays((int) config('writingstyle.analysis_retention_days', 30)),
         ]);

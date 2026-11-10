@@ -47,13 +47,19 @@ Tài liệu này ghi lại các lỗi/điểm cần cải tiến đã rà đư�
 
 ---
 
-### L4. `edit` page: `buildRulesJsonPayload` tách `structure_patterns`/`transitions` bằng `' • '` có thể lệch dữ liệu
+### L4. `edit` page: `buildRulesJsonPayload` tách `structure_patterns`/`transitions` bằng `' • '` có thể lệch dữ liệu — ĐÃ SỬA
 
-**Hiện tượng:** [edit/[id].vue ~1148-1159] — khi `parts.length < 2` (AI join bằng ký tự khác `;`, `\n`...) thì `current.transitions` giữ nguyên cũ nhưng `current.structure_patterns = s2` (chuỗi gộp) → có thể ghi `structure_patterns` chứa cả phần transitions lặp.
+**Hiện tượng:** [edit/[id].vue ~1148-1159] — section 2 của Tab 3 gộp 2 khóa thành 1 textarea bằng `' • '` rồi tách ngược lúc lưu. 4 kịch bản hỏng dữ liệu:
+- Rule gốc chứa `'•'` (AI đánh dấu đầu dòng) → phần của `structure_patterns` trôi sang `transitions`.
+- Chỉ có `transitions`, thiếu `structure_patterns` → giá trị transitions được ghi nhầm vào key `structure_patterns`.
+- Tier `micro`/`short`: chữ fallback "Không áp dụng..." (placeholder hiển thị) bị ghi vào DB như rule thật; nếu sau này đổi `dominant_tier` lên `long` sẽ trôi vào prompt.
+- Xóa ô trống khi rule thiếu → ghi `Chưa có dữ liệu.` vào DB.
 
-**Mức độ:** thấp — phụ thuộc AI có thực sự join bằng `•` hay không.
-
-**Hướng sửa:** hoặc đảm bảo AI join bằng `•`, hoặc FE không đè `structure_patterns` khi user không sửa section đó.
+**Đã sửa (edit/[id].vue):**
+- Tách thành **4 section riêng** map 1:1 4 khóa `opening` / `structure_patterns` / `transitions` / `ending` — không còn gộp/tách bằng separator.
+- Placeholder tier-aware ("Không áp dụng...", "Chưa có dữ liệu") chuyển sang prop `placeholder` của textarea — không bao giờ thành giá trị lưu DB.
+- `buildRulesJsonPayload` ghi WYSIWYG theo thứ tự 4 section; rỗng → `''` (ConvertEmptyStringsToNull phía BE biến thành null → xóa khóa, validation nullable vẫn pass).
+- Template Tab 3 chuyển grid 3 cột → 2×2 (`md="6"`) cho 4 ô.
 
 ---
 
@@ -109,7 +115,7 @@ Các taskRun `queued`/`running` > N phút mà bảng `jobs` không còn row tư�
 - [x] L2 — ĐÃ SỬA theo hướng B: xóa `tone_instructions` khỏi `outputSchema()` của analyzer.
 - [x] L3 — ĐÃ SỬA: `eslint --fix` dọn hết 13 error của create page (0 error còn lại).
 - [x] L7 — ĐÃ SỬA: xuống dòng docblock `failed()` trong `AnalyzeWritingProfileJob`.
-- [ ] L4 — xem lại cách join `structure_patterns`/`transitions` bằng `' • '` trong edit page.
+- [x] L4 — ĐÃ SỬA: tách 4 section riêng 1:1 4 khóa, placeholder chuyển sang prop, bỏ split `' • '`.
 - [ ] L5 + L6 — Task 5 (user tự làm): `runSandboxStep` API + store + stepper Tab 9.
 - [ ] I1-I4 — đề xuất, chưa quyết.
 

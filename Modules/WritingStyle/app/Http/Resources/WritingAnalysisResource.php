@@ -106,6 +106,10 @@ class WritingAnalysisResource extends JsonResource
             'rules_json'         => is_array($raw['rules_json'] ?? null) ? $raw['rules_json'] : [],
             'evidence_json'      => is_array($raw['evidence_json'] ?? null) ? array_values($raw['evidence_json']) : [],
             'style_instructions' => (string) ($raw['style_instructions'] ?? ''),
+            'voice_texture_instructions' => (string) ($raw['voice_texture_instructions'] ?? ''),
+            'voice_texture_sliders_json' => $raw['voice_texture_sliders_json'] ?? null,
+            'tone_sliders_json' => $raw['tone_sliders_json'] ?? null,
+            'style_analysis_json' => $raw['style_analysis_json'] ?? null,
             'metadata'           => is_array($raw['metadata'] ?? null) ? $raw['metadata'] : [],
         ];
     }

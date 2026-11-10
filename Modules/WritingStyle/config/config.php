@@ -17,6 +17,8 @@
 
 return [
     'name' => 'WritingStyle',
+    'prompt_version' => (int) env('WRITING_STYLE_PROMPT_VERSION', 2),
+    'v3' => require __DIR__.'/../prompts/v3.php',
 
     /* ---------------------------------------------------------------------
      * 16 khóa thuộc tính DNA văn phong — mỗi key trả lời câu hỏi giải mã.

@@ -4,8 +4,10 @@ namespace Modules\WritingStyle\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Modules\Core\Http\Responses\BaseResponse;
+use Modules\WritingStyle\DTOs\WritingBrief;
 use Modules\WritingStyle\Http\Requests\RunSandboxStepRequest;
 use Modules\WritingStyle\Http\Requests\SandboxRequest;
 use Modules\WritingStyle\Models\WritingProfile;
@@ -43,18 +45,11 @@ class WritingSandboxController extends Controller
         $data = $request->validated();
 
         // Gói overrides cho SnapshotService — giữ nhẹ (chỉ key tồn tại).
-        $overrides = array_filter([
-            'tone_overrides'             => $data['tone_overrides'] ?? null,
-            'style_instructions'         => $data['style_instructions'] ?? null,
-            'voice_texture_instructions' => $data['voice_texture_instructions'] ?? null,
-            'tone_instructions'          => $data['tone_instructions'] ?? null,
-            'voice_texture_sliders_json' => $data['voice_texture_sliders_json'] ?? null,
-            'temperature'                => isset($data['temperature']) ? (float) $data['temperature'] : null,
-        ], static fn ($v) => $v !== null);
+        $overrides = Arr::except($data, ['topic', 'target_tier', 'target_sentences']);
 
         $result = $this->sandbox->sandbox(
             $writingProfile,
-            $data['topic'],
+            $data['topic'] ?? $data['brief']['topic'],
             $data['target_tier'] ?? $writingProfile->dominant_tier,
             (int) ($data['target_sentences'] ?? 0),
             $overrides,
@@ -76,21 +71,13 @@ class WritingSandboxController extends Controller
 
         $data = $request->validated();
 
-        $overrides = array_filter([
-            'tone_overrides'             => $data['tone_overrides'] ?? null,
-            'style_instructions'         => $data['style_instructions'] ?? null,
-            'voice_texture_instructions' => $data['voice_texture_instructions'] ?? null,
-            'tone_instructions'          => $data['tone_instructions'] ?? null,
-            'voice_texture_sliders_json' => $data['voice_texture_sliders_json'] ?? null,
-            'temperature'                => isset($data['temperature']) ? (float) $data['temperature'] : null,
-            'target_sentences'           => isset($data['target_sentences']) ? (int) $data['target_sentences'] : null,
-        ], static fn ($v) => $v !== null);
+        $overrides = Arr::except($data, ['topic', 'target_tier', 'artifacts']);
 
         $result = $this->pipelineRunner->runStep(
             $writingProfile,
             $data['target_tier'] ?? $writingProfile->dominant_tier,
             $step,
-            $data['topic'],
+            $data['topic'] ?? $data['brief']['topic'],
             (array) ($data['artifacts'] ?? []),
             $overrides,
         );
@@ -111,29 +98,59 @@ class WritingSandboxController extends Controller
     public function saveSample(Request $request, WritingProfile $writingProfile)
     {
         $data = $request->validate([
-            'topic'         => ['required', 'string', 'max:500'],
-            'target_tier'   => ['nullable', 'string', 'in:micro,short,medium,long'],
-            'text'          => ['required', 'string', 'max:50000'],
-            'system_prompt' => ['nullable', 'string', 'max:50000'],
+            ...WritingBrief::rules(),
+            'id'                 => ['nullable', 'string', 'max:100'],
+            'topic'              => ['required', 'string', 'max:500'],
+            'target_tier'        => ['nullable', 'string', 'in:micro,short,medium,long'],
+            'status'             => ['nullable', 'string', 'in:in_progress,completed'],
+            'current_step_index' => ['nullable', 'integer', 'min:0'],
+            'steps'              => ['nullable', 'array'],
+            'artifacts'          => ['nullable', 'array'],
+            'text'               => ['nullable', 'string', 'max:50000'],
+            'system_prompt'      => ['nullable', 'string', 'max:50000'],
         ]);
 
         $samples = is_array($writingProfile->sandbox_samples_json)
             ? $writingProfile->sandbox_samples_json
             : [];
 
+        $incomingId = isset($data['id']) && ! str_starts_with((string) $data['id'], 'local-')
+            ? (string) $data['id']
+            : (string) Str::uuid();
+
+        $existingIdx = null;
+        foreach ($samples as $idx => $item) {
+            if ((string) ($item['id'] ?? '') === $incomingId) {
+                $existingIdx = $idx;
+                break;
+            }
+        }
+
         $newSample = [
-            'id'            => (string) Str::uuid(),
-            'topic'         => trim($data['topic']),
-            'target_tier'   => $data['target_tier'] ?? $writingProfile->dominant_tier ?? 'medium',
-            'text'          => trim($data['text']),
-            'system_prompt' => isset($data['system_prompt']) ? trim($data['system_prompt']) : '',
-            'created_at'    => now()->toISOString(),
+            'id'                 => $incomingId,
+            'topic'              => trim($data['topic']),
+            'brief'              => $data['brief'] ?? null,
+            'target_tier'        => $data['target_tier'] ?? $writingProfile->dominant_tier ?? 'medium',
+            'status'             => $data['status'] ?? (! empty($data['text']) ? 'completed' : 'in_progress'),
+            'current_step_index' => (int) ($data['current_step_index'] ?? 0),
+            'steps'              => $data['steps'] ?? [],
+            'artifacts'          => $data['artifacts'] ?? [],
+            'text'               => isset($data['text']) ? trim($data['text']) : '',
+            'system_prompt'      => isset($data['system_prompt']) ? trim($data['system_prompt']) : '',
+            'created_at'         => $existingIdx !== null
+                ? ($samples[$existingIdx]['created_at'] ?? now()->toISOString())
+                : now()->toISOString(),
+            'updated_at'         => now()->toISOString(),
         ];
 
-        array_unshift($samples, $newSample);
+        if ($existingIdx !== null) {
+            $samples[$existingIdx] = $newSample;
+        } else {
+            array_unshift($samples, $newSample);
+        }
 
         // Giữ tối đa 30 bản viết thử gần nhất để tối ưu dung lượng JSON
-        $samples = array_slice($samples, 0, 30);
+        $samples = array_slice(array_values($samples), 0, 30);
 
         $writingProfile->update([
             'sandbox_samples_json' => $samples,

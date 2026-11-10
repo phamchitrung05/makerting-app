@@ -31,5 +31,7 @@ final readonly class WritingProfileSnapshotDto
         public array $rulesJson,
         public string $sentenceHint,
         public bool $evidenceStripped,
+        public array $styleSummary = [],
+        public array $provenance = [],
     ) {}
 }

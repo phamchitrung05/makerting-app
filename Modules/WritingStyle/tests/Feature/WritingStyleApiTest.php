@@ -152,6 +152,41 @@ class WritingStyleApiTest extends TestCase
         $this->assertNull($analysis->fresh()->draft_profile_id);
     }
 
+    public function test_v3_profile_persists_analysis_and_unknown_slider_values(): void
+    {
+        config(['writingstyle.prompt_version' => 3]);
+        $token = $this->token($this->admin(['writing.profile.create', 'writing.profile.view']));
+        $analysis = WritingProfileAnalysis::create([
+            'source_type' => 'paste',
+            'reference_text' => 'Nhà em gửi dâu rể vài mẫu.',
+            'status' => 'succeeded',
+            'prompt_version' => 3,
+            'result_json' => [
+                'rules_json' => ['pronouns' => 'Xưng nhà em'],
+                'style_analysis_json' => ['schema_version' => 3, 'features' => []],
+                'style_instructions' => 'Nói trực tiếp với dâu rể.',
+                'voice_texture_instructions' => 'Dùng câu ngắn và từ gần gũi.',
+                'voice_texture_sliders_json' => ['voice_timbre' => null],
+                'tone_sliders_json' => ['humor' => 0],
+            ],
+        ]);
+
+        $created = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Hồ sơ V3',
+            'analysis_id' => $analysis->id,
+        ], $token)->assertCreated();
+        $id = $created->json('data.id');
+
+        $this->getJson('/api/v1/admin/writing-style/writing-profiles/'.$id, $token)
+            ->assertOk()
+            ->assertJsonPath('data.rules_json.pronouns', 'Xưng nhà em')
+            ->assertJsonPath('data.style_analysis_json.schema_version', 3)
+            ->assertJsonPath('data.voice_texture_instructions', 'Dùng câu ngắn và từ gần gũi.')
+            ->assertJsonPath('data.voice_texture_sliders_json.voice_timbre', null)
+            ->assertJsonPath('data.tone_sliders_json.humor', 0)
+            ->assertJsonPath('data.tone_instructions', '');
+    }
+
     public function test_store_analysis_id_khong_ton_tai_422(): void
     {
         $u = $this->admin(['writing.profile.create']);

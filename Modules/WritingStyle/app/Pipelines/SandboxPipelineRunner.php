@@ -3,6 +3,9 @@
 namespace Modules\WritingStyle\Pipelines;
 
 use Modules\WritingStyle\Models\WritingProfile;
+use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
+use Modules\WritingStyle\DTOs\WritingBrief;
+use Modules\WritingStyle\Services\PromptV3;
 use Modules\WritingStyle\Pipelines\Contracts\SandboxStepContract;
 use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
 
@@ -148,6 +151,27 @@ class SandboxPipelineRunner
 
         // 3. Runtime guard: mọi dependency của step phải đã có artifact hợp lệ.
         $this->validator->assertDependenciesMet($targetTier, $stepKey, $artifacts);
+
+        if (PromptV3::enabled() && $stepKey !== 'topic_outline' && isset($artifacts['topic_outline'])) {
+            if (! ($overrides['outline_approved'] ?? false)) {
+                throw new InvalidPipelineException('Hãy xác nhận dàn ý trước khi viết bài.');
+            }
+            $plan = $artifacts['topic_outline'];
+            $brief = WritingBrief::fromInput($topic, $targetTier, $overrides);
+            $snapshot = app(WritingStyleCompilerContract::class)->buildSnapshot(
+                $profile,
+                $targetTier,
+                (int) ($overrides['target_sentences'] ?? 0),
+                array_replace($overrides, ['brief' => $brief->data]),
+            );
+            if (($plan['schema_version'] ?? null) !== 3 || ($plan['input_fingerprint'] ?? null) !== WritingContentPlan::fingerprint($snapshot, $brief)) {
+                throw new InvalidPipelineException('Dàn ý đã cũ hoặc khác phiên bản. Hãy lập lại dàn ý trước khi viết.');
+            }
+            $artifacts['topic_outline'] = [
+                ...WritingContentPlan::validate($plan, $brief),
+                'schema_version' => 3,
+            ];
+        }
 
         // 4. Gom PromptBlock của tất cả step đứng TRƯỚC step hiện tại trong
         //    pipeline (theo đúng thứ tự config), compileToPromptBlock đã sẵn.

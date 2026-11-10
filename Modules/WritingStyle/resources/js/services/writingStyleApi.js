@@ -221,6 +221,24 @@ export const writingStyleApi = {
 
   /**
    * =====================================================================
+   * CHỨC NĂNG: Chạy 1 bước (step) trong quy trình Sandbox Pipeline theo tier
+   * =====================================================================
+   *
+   * INPUT:
+   * - id (number|string): ID hồ sơ văn phong
+   * - step (string): Mã bước cần chạy (vd: 'topic_outline', 'article_writer')
+   * - payload (Object): { topic, target_tier, artifacts, tone_overrides, ... }
+   *
+   * OUTPUT:
+   * - Promise<Object>: { step: string, artifact: Object }
+   * =====================================================================
+   */
+  runSandboxStep(id, step, payload) {
+    return $api(`${BASE}/writing-profiles/${id}/sandbox/steps/${step}`, { method: 'POST', body: payload })
+  },
+
+  /**
+   * =====================================================================
    * CHỨC NĂNG: Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong
    * =====================================================================
    */

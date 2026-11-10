@@ -6,6 +6,10 @@ use Modules\CoreAi\Contracts\CoreAiGatewayContract;
 use Modules\CoreAi\DTOs\AiStructuredRequest;
 use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
 use Modules\WritingStyle\DTOs\SandboxResultDto;
+use Modules\WritingStyle\DTOs\WritingBrief;
+use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
+use Modules\WritingStyle\Services\PromptV3;
+use Modules\WritingStyle\Services\WritingQualityReport;
 use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Pipelines\Contracts\SandboxStepContract;
 
@@ -101,6 +105,11 @@ class ArticleWriterStep implements SandboxStepContract
         array $upstreamPromptBlocks,
         array $overrides = [],
     ): array {
+        $brief = PromptV3::enabled() || isset($overrides['brief']) ? WritingBrief::fromInput($topic, $targetTier, $overrides) : null;
+        if ($brief !== null) {
+            $overrides['brief'] = $brief->data;
+        }
+
         // 1. Snapshot DNA (rules theo tier + Ô 1 + Ô 2 + 5 sliders + 8 sliders).
         $targetSentences = (int) ($overrides['target_sentences'] ?? 0);
         $snapshot = $this->compiler->buildSnapshot(
@@ -121,28 +130,57 @@ class ArticleWriterStep implements SandboxStepContract
         $upstreamSection = $this->buildUpstreamSection($upstreamPromptBlocks);
         $userPrompt = $this->buildUserPrompt($topic, $snapshot->sentenceHint, $upstreamSection);
 
+        $options = ['temperature' => $temperature];
+        if (PromptV3::enabled()) {
+            $userPrompt = config('writingstyle.v3.writer')."\n\n".PromptV3::json([
+                'brief' => $brief->data,
+                'content_plan' => array_column($upstreamPromptBlocks, 'block'),
+            ]);
+            $options['max_tokens'] = (int) config('writingstyle.v3.max_output_tokens', 4096);
+            PromptV3::checkContext($snapshot->systemPrompt, $userPrompt);
+        } elseif ($brief !== null) {
+            $userPrompt .= "\n\nBrief:\n".PromptV3::json($brief->data);
+        }
+
         $resp = $this->ai->executeStructured(
             AiStructuredRequest::fromPrompt(
                 $userPrompt,
                 system: $snapshot->systemPrompt,
                 schema: null,
-                options: ['temperature' => $temperature],
+                options: $options,
                 module: 'writingstyle',
-                operation: 'sandbox_step_article_writer',
+                operation: PromptV3::enabled() ? 'sandbox_step_article_writer_v3' : 'sandbox_step_article_writer',
             )
         );
+
+        $text = trim($resp->text);
+        if (PromptV3::enabled()) {
+            PromptV3::requireComplete($resp);
+            if ($text === '') {
+                throw new InvalidPipelineException('AI chưa trả nội dung bài viết. Hãy chạy lại bước viết.');
+            }
+        }
 
         $dto = new SandboxResultDto(
             profileId: (int) $profile->id,
             topic: $topic,
             targetTier: $snapshot->targetTier,
-            text: trim((string) ($resp->text ?? '')),
+            text: $text,
             snapshot: [
                 'system_prompt' => $snapshot->systemPrompt,
                 'rules'         => $snapshot->rulesJson,
                 'sentence_hint' => $snapshot->sentenceHint,
+                ...($brief === null ? [] : ['provenance' => array_replace($snapshot->provenance, [
+                    'prompt_version' => PromptV3::enabled() ? 3 : 2,
+                    'model' => $resp->remoteModelId,
+                    'provider' => $resp->providerKey,
+                    'options' => $options,
+                    'brief_fingerprint' => hash('sha256', PromptV3::json($brief->data)),
+                    'plan_fingerprint' => $upstreamPromptBlocks === [] ? null : hash('sha256', PromptV3::json($upstreamPromptBlocks)),
+                ])]),
             ],
             aiRunId: $this->ai->lastRun()?->id,
+            qualityReport: $brief === null ? null : WritingQualityReport::inspect($text, $brief, $profile->style_analysis_json['source_specific_items'] ?? []),
         );
 
         return $dto->toArray();

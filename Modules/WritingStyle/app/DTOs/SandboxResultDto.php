@@ -30,6 +30,7 @@ final readonly class SandboxResultDto
         public string $text,
         public array $snapshot,
         public ?string $aiRunId = null,
+        public ?array $qualityReport = null,
     ) {}
 
     /**
@@ -47,6 +48,7 @@ final readonly class SandboxResultDto
             'text'        => $this->text,
             'snapshot'    => $this->snapshot,
             'ai_run_id'   => $this->aiRunId,
+            ...($this->qualityReport === null ? [] : ['quality_report' => $this->qualityReport]),
         ];
     }
 }

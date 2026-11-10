@@ -5,6 +5,8 @@ namespace Modules\WritingStyle\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Responses\BaseResponse;
+use Modules\WritingStyle\DTOs\WritingBrief;
+use Modules\WritingStyle\Services\PromptV3;
 use Modules\WritingStyle\Http\Requests\StoreWritingProfileRequest;
 use Modules\WritingStyle\Http\Resources\WritingProfileResource;
 use Modules\WritingStyle\Models\WritingProfile;
@@ -64,13 +66,16 @@ class WritingProfileController extends Controller
             $tiers[] = [
                 'value'         => $t,
                 'label'         => config("writingstyle.tiers.{$t}.label", $t),
-                'sentence_hint' => WritingProfileDefinition::tierLabel($t),
+                'sentence_hint' => PromptV3::enabled() ? WritingBrief::fromInput('', $t, [])->lengthHint() : WritingProfileDefinition::tierLabel($t),
             ];
         }
 
         $rules = [];
         foreach (WritingProfileDefinition::ruleKeys() as $k) {
-            $rules[] = ['key' => $k, 'question' => WritingProfileDefinition::ruleQuestion($k)];
+            $rules[] = [
+                'key' => $k,
+                'question' => PromptV3::enabled() ? config('writingstyle.v3.questions.'.$k, WritingProfileDefinition::ruleQuestion($k)) : WritingProfileDefinition::ruleQuestion($k),
+            ];
         }
 
         return BaseResponse::success([
@@ -79,6 +84,9 @@ class WritingProfileController extends Controller
             // Sơ đồ Pipeline của 4 tier — FE render Pipeline Stepper biết trước
             // các bước + trạng thái phụ thuộc (PLAN-WRITING-STYLE-SANDBOX-PIPELINE).
             'pipelines' => app(SandboxPipelineRunner::class)->describePipelines(),
+            'prompt_version' => (int) config('writingstyle.prompt_version', 2),
+            'axis_definitions' => config('writingstyle.v3.axes'),
+            'presets' => config('writingstyle.v3.presets', []),
         ]);
     }
 
@@ -101,9 +109,11 @@ class WritingProfileController extends Controller
             'description'                => $data['description'] ?? null,
             'dominant_tier'              => $data['dominant_tier'] ?? WritingProfile::TIER_MEDIUM,
             'temperature'                => $data['temperature'] ?? 0.70,
-            'rules_json'                 => $data['rules_json'] ?? [],
-            'evidence_json'              => $data['evidence_json'] ?? [],
-            'style_instructions'         => $data['style_instructions'] ?? '',
+            'rules_json'                 => $data['rules_json'] ?? ($analysisResult['rules_json'] ?? []),
+            'style_analysis_json'        => $analysisResult['style_analysis_json'] ?? null,
+            'slider_preferences_json'    => $data['slider_preferences_json'] ?? null,
+            'evidence_json'              => $data['evidence_json'] ?? ($analysisResult['evidence_json'] ?? []),
+            'style_instructions'         => $data['style_instructions'] ?? ($analysisResult['style_instructions'] ?? ''),
             'voice_texture_instructions' => $data['voice_texture_instructions']
                 ?? ($analysisResult['voice_texture_instructions'] ?? ''),
             'voice_texture_sliders_json' => $data['voice_texture_sliders_json']
@@ -164,6 +174,7 @@ class WritingProfileController extends Controller
             'voice_texture_instructions',
             'voice_texture_sliders_json',
             'tone_sliders_json',
+            'slider_preferences_json',
             'tone_instructions',
             'status',
             'is_enabled',

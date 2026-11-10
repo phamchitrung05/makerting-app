@@ -33,6 +33,7 @@ import { slugApi } from '@modules/Core/resources/js/services/slugApi'
 
 export const useWritingStyleStore = defineStore('writingStyle', {
   state: () => ({
+    pendingImport: null,
     profiles: [],            // WritingProfileResource[]
     total: 0,                // itemsLength từ server (dataTable)
     options: { tiers: [], rules: [] },
@@ -61,6 +62,7 @@ export const useWritingStyleStore = defineStore('writingStyle', {
   getters: {
     tiers: state => state.options.tiers ?? [],
     ruleKeys: state => state.options.rules ?? [],
+    tierPipelines: state => state.options.pipelines ?? {},
     enabledProfiles: state => state.profiles.filter(p => p.is_enabled),
 
     /* Số lượng theo nhóm trạng thái UI:
@@ -615,6 +617,29 @@ export const useWritingStyleStore = defineStore('writingStyle', {
         this.sandboxResult = res
 
         return res
+      } finally {
+        this.sandboxing = false
+      }
+    },
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Thực thi 1 bước (step) trong quy trình Sandbox Pipeline
+     * =====================================================================
+     *
+     * INPUT:
+     * - id (number|string): ID hồ sơ văn phong
+     * - step (string): Mã step trong pipeline (vd: 'topic_outline', 'article_writer')
+     * - payload (Object): { topic, target_tier, artifacts, ...overrides }
+     *
+     * OUTPUT:
+     * - Promise<Object>: { step, artifact }
+     * =====================================================================
+     */
+    async runSandboxStep(id, step, payload) {
+      this.sandboxing = true
+      try {
+        return await writingStyleApi.runSandboxStep(id, step, payload)
       } finally {
         this.sandboxing = false
       }

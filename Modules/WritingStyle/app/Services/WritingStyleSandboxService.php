@@ -56,6 +56,7 @@ class WritingStyleSandboxService
             text: (string) $result['text'],
             snapshot: (array) ($result['snapshot'] ?? []),
             aiRunId: $result['ai_run_id'] ?? null,
+            qualityReport: $result['quality_report'] ?? null,
         );
     }
 }

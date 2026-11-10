@@ -37,6 +37,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
 import TaxonomyField from '@modules/Taxonomy/resources/js/components/TaxonomyField.vue'
+import SandboxSampleDetailDialog from '../../../components/SandboxSampleDetailDialog.vue'
+import SandboxWritingBrief from '../../../components/SandboxWritingBrief.vue'
+import { mergeRuleEdits } from '../../../utils/sampleText.js'
 import { firstErrorMessage } from '@/utils/api'
 import { useWritingStyleStore } from '../../../stores/writingStyle'
 
@@ -47,6 +50,7 @@ const router = useRouter()
 const store = useWritingStyleStore()
 
 const profile = ref(null)
+let initialRuleEdits = {}
 const loading = ref(true)
 const saving = ref(false)
 const loadError = ref('')
@@ -121,6 +125,29 @@ const addSampleQuote = () => {
  * TAB 3: CẤU TRÚC NỘI DUNG — render từ rules_json
  * ------------------------------------------------------------------- */
 const structureSections = ref([]) // [{title, weight, sentences, guideline, sample}]
+
+/* Chip hiển thị tier độ dài của profile — giống list page (icon + label
+ * tiếng Việt + màu). Đọc từ options.tiers (GET /options) + TIER_META local. */
+const TIER_META = {
+  micro: { icon: 'tabler-letter-s',   color: 'error'   },
+  short: { icon: 'tabler-file-text',  color: 'warning' },
+  medium: { icon: 'tabler-article',   color: 'info'    },
+  long: { icon: 'tabler-book',        color: 'primary' },
+}
+
+const dominantTierMeta = computed(() => {
+  const tierKey = profile.value?.dominant_tier ?? 'medium'
+  const meta = TIER_META[tierKey] ?? TIER_META.medium
+  const option = (store.options?.tiers ?? []).find(t => t.value === tierKey)
+
+  return {
+    key: tierKey,
+    icon: meta.icon,
+    color: meta.color,
+    label: option?.label ?? tierKey,
+    sentenceHint: option?.sentence_hint ?? '',
+  }
+})
 
 /* ---------------------------------------------------------------------
  * TỪ ĐIỂN TÊN TIẾNG VIỆT CHO 16 KHÓA DNA
@@ -270,88 +297,7 @@ const voiceTextureSliders = reactive([
 /* Danh sách Checkbox các dạng hành văn xoay quanh 5 thuộc tính Chất văn.
  * Khi người dùng tích chọn / bỏ chọn -> tự động cộng hưởng tính điểm cho 5 thanh trượt
  * và đồng bộ gợi ý vào Ô 2 (giống cơ chế Sandbox cảm xúc). */
-const VOICE_STYLE_OPTIONS = [
-  {
-    id: 'intimate_whisper',
-    title: 'Thủ thỉ tâm tình & Kể chuyện gần gũi',
-    attributeLabel: 'Giọng văn',
-    color: 'primary',
-    icon: 'tabler-microphone-2',
-    desc: 'Hạ thấp khoảng cách với người đọc, trò chuyện ấm áp như tri kỷ bên tách trà.',
-    deltas: { voice_timbre: 25, emotional_nuance: 15, vernacular_flow: 10, rhythm_variation: 0, emphasis_glide: 5 },
-    directive: 'Giọng văn trầm ấm, thủ thỉ như một người bạn tri kỷ đang kể chuyện 1-1, không lên gân thuyết giáo.',
-  },
-  {
-    id: 'sharp_poised',
-    title: 'Đĩnh đạc, sắc sảo & Chuẩn mực chuyên gia',
-    attributeLabel: 'Giọng văn',
-    color: 'primary',
-    icon: 'tabler-award',
-    desc: 'Khẩu khí chững chạc, lập luận gãy gọn, tạo độ tin cậy cao và tiết chế cảm tính.',
-    deltas: { voice_timbre: -20, vernacular_flow: -15, emotional_nuance: -15, rhythm_variation: 5, emphasis_glide: 15 },
-    directive: 'Giọng văn đĩnh đạc, điềm tĩnh và sắc sảo; ưu tiên nhận định gãy gọn, xác đáng của người có trải nghiệm sâu.',
-  },
-  {
-    id: 'vernacular_natural',
-    title: 'Dân dã đời thường & Thuận tai người Việt',
-    attributeLabel: 'Tính dân dã tự nhiên',
-    color: 'success',
-    icon: 'tabler-message-circle',
-    desc: 'Từ thuần Việt dung dị, mở câu bằng từ nối cảm xúc tự nhiên, thoát mùi văn dịch AI.',
-    deltas: { voice_timbre: 15, vernacular_flow: 30, emotional_nuance: 10, rhythm_variation: 10, emphasis_glide: 0 },
-    directive: 'Ưu tiên từ thuần Việt dung dị, thuận tai; cho phép mở câu bằng từ nối cảm xúc đời thường (Mà thật ra, Ấy vậy mà, Đôi khi...).',
-  },
-  {
-    id: 'quiet_luxury_polish',
-    title: 'Trau chuốt tinh tế & Tiết chế (Quiet Luxury)',
-    attributeLabel: 'Tính dân dã tự nhiên',
-    color: 'success',
-    icon: 'tabler-diamond',
-    desc: 'Từ vựng chọn lọc kỹ lưỡng, sang trọng kín đáo, tuyệt đối tránh khẩu ngữ suồng sã.',
-    deltas: { voice_timbre: 5, vernacular_flow: -20, emotional_nuance: 15, rhythm_variation: 0, emphasis_glide: 20 },
-    directive: 'Câu chữ gọt giũa tinh tế theo tinh thần Quiet Luxury; chọn lọc từ ngữ giàu sức gợi, tránh khẩu ngữ suồng sã.',
-  },
-  {
-    id: 'deep_resonance',
-    title: 'Sâu lắng, giàu dư âm & Gợi tả giác quan',
-    attributeLabel: 'Màu sắc cảm xúc',
-    color: 'error',
-    icon: 'tabler-heart-spark',
-    desc: 'Không dùng tính từ sáo rỗng, để chi tiết ánh sáng/âm thanh/xúc giác tự gợi nỗi niềm.',
-    deltas: { voice_timbre: 15, vernacular_flow: 5, emotional_nuance: 30, rhythm_variation: 10, emphasis_glide: 15 },
-    directive: 'Màu sắc cảm xúc lắng đọng, giàu dư âm; truyền tải qua chi tiết giác quan và khoảng lặng thay vì tính từ cảm thán sáo rỗng.',
-  },
-  {
-    id: 'dynamic_cadence',
-    title: 'Co giãn nhịp thở (Câu dài xen câu cực ngắn)',
-    attributeLabel: 'Biến thiên nhịp điệu',
-    color: 'warning',
-    icon: 'tabler-wave-sine',
-    desc: 'Sau 2–3 câu ghép dài miêu tả liên hoàn sẽ đặt 1 câu đơn 3–6 chữ để chốt nhịp.',
-    deltas: { voice_timbre: 0, vernacular_flow: 10, emotional_nuance: 10, rhythm_variation: 30, emphasis_glide: 15 },
-    directive: 'Biến thiên nhịp câu rõ rệt: đan xen 2–3 câu ghép dài nhiều vế với 1 câu đơn cực ngắn (3–6 chữ) đứng riêng làm điểm rơi.',
-  },
-  {
-    id: 'steady_calm_flow',
-    title: 'Nhịp văn đều đặn, êm ả & Thư thái',
-    attributeLabel: 'Biến thiên nhịp điệu',
-    color: 'warning',
-    icon: 'tabler-ripple',
-    desc: 'Duy trì nhịp thở chậm rãi, liền mạch, dẫn dắt người đọc tuần tự không giật cục.',
-    deltas: { voice_timbre: 10, vernacular_flow: 0, emotional_nuance: 5, rhythm_variation: -25, emphasis_glide: -10 },
-    directive: 'Duy trì nhịp điệu hành văn êm ả, khoan thai; các câu nối tiếp nhau mượt mà, không ngắt nhịp đột ngột.',
-  },
-  {
-    id: 'zoom_in_glide',
-    title: 'Lướt nhanh ý phụ – Zoom-in nhấn sâu chi tiết đắt',
-    attributeLabel: 'Tính nhấn và lướt',
-    color: 'info',
-    icon: 'tabler-focus-2',
-    desc: 'Gói gọn thông tin nền trong 1 câu lướt nhanh, dừng lại khắc họa cận cảnh điểm sáng.',
-    deltas: { voice_timbre: 0, vernacular_flow: 0, emotional_nuance: 15, rhythm_variation: 15, emphasis_glide: 30 },
-    directive: 'Áp dụng triệt để nghệ thuật Nhấn – Lướt: lướt nhanh thông tin nền phụ trong 1 câu ngắn, dừng lại zoom-in khắc họa sâu 1 chi tiết đắt giá nhất.',
-  },
-]
+const VOICE_STYLE_OPTIONS = computed(() => store.options.presets?.voice ?? [])
 
 const selectedVoiceOptionIds = ref([])
 
@@ -367,7 +313,7 @@ const selectedVoiceOptionIds = ref([])
  * =====================================================================
  */
 const voiceStyleSelectItems = computed(() =>
-  VOICE_STYLE_OPTIONS.map(opt => ({
+  VOICE_STYLE_OPTIONS.value.map(opt => ({
     value: opt.id,
     title: opt.title,
     attributeLabel: opt.attributeLabel,
@@ -389,13 +335,13 @@ const hasModifiedVoiceSliders = computed(() =>
 )
 
 function recalculateVoiceTextureFromCheckboxes() {
-  const checkedItems = VOICE_STYLE_OPTIONS.filter(opt =>
+  const checkedItems = VOICE_STYLE_OPTIONS.value.filter(opt =>
     selectedVoiceOptionIds.value.includes(opt.id),
   )
 
   // 1. Tính lại điểm 5 thanh trượt từ baseline + tổng delta các ô đã chọn
   voiceTextureSliders.forEach(slider => {
-    const base = typeof slider.baseline === 'number' ? slider.baseline : 50
+    const base = slider.baseline
     if (!checkedItems.length) {
       slider.value = base
       
@@ -407,11 +353,11 @@ function recalculateVoiceTextureFromCheckboxes() {
       0,
     )
 
-    slider.value = Math.max(5, Math.min(100, base + totalDelta))
+    slider.value = totalDelta === 0 ? base : Math.max(0, Math.min(100, (base ?? 50) + totalDelta))
   })
 
   // 2. Đồng bộ các dòng chỉ đạo đã tích chọn vào Ô 2 (giữ nguyên phần văn bản gốc của AI)
-  const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  const allDirectives = new Set(VOICE_STYLE_OPTIONS.value.map(o => `- ${o.directive}`))
 
   const currentLines = String(advancedConfig.voiceTexturePrompt || '')
     .split('\n')
@@ -437,88 +383,7 @@ function toggleVoiceStyleOption(optId) {
 /* Danh sách Gợi ý Sắc thái & Phối âm cảm xúc xoay quanh 8 trục cảm xúc (Ô 3).
  * Khi người dùng chọn / bỏ chọn -> tự động cộng hưởng tính điểm cho 8 thanh trượt
  * và đồng bộ gợi ý vào Ô 3 (tone_instructions). */
-const TONE_STYLE_OPTIONS = [
-  {
-    id: 'humorous',
-    title: 'Hóm hỉnh & Gần gũi',
-    attributeLabel: 'Vui vẻ & Hóm hỉnh',
-    color: 'warning',
-    icon: 'tabler-mood-smile',
-    desc: 'Chêm xen ví dụ dí dỏm, chơi chữ tinh tế, tạo không khí nhẹ nhàng.',
-    deltas: { humor: 30, formality: -15, empathy: 20 },
-    directive: 'Giữ sắc thái vui vẻ, dí dỏm; đan cài ví dụ hóm hỉnh và chơi chữ tinh tế để kéo gần khoảng cách với người đọc.',
-  },
-  {
-    id: 'empathy',
-    title: 'Đồng cảm & Trân trọng',
-    attributeLabel: 'Trân trọng & Đồng cảm',
-    color: 'error',
-    icon: 'tabler-heart',
-    desc: 'Ghi nhận nỗ lực độc giả, thấu hiểu khó khăn, giọng điệu ấm áp.',
-    deltas: { empathy: 40, candor: 30, formality: -5 },
-    directive: 'Sắc thái trân trọng, giàu lòng trắc ẩn; luôn ghi nhận trăn trở và khó khăn của độc giả trước khi đưa ra gợi ý.',
-  },
-  {
-    id: 'assertive',
-    title: 'Sắc sảo & Quyết đoán',
-    attributeLabel: 'Sắc sảo & Quyết đoán',
-    color: 'primary',
-    icon: 'tabler-bolt',
-    desc: 'Luận điểm đanh thép, lập trường dứt khoát, giảm từ ngập ngừng.',
-    deltas: { assertiveness: 40, depth: 40, urgency: 20 },
-    directive: 'Khẩu khí dứt khoát, sắc bén; khẳng định quan điểm mạnh mẽ bằng lý lẽ thuyết phục, không dùng từ ngữ do dự.',
-  },
-  {
-    id: 'formality_academic',
-    title: 'Trang trọng & Chuẩn mực học thuật',
-    attributeLabel: 'Trang trọng',
-    color: 'info',
-    icon: 'tabler-scale',
-    desc: 'Văn phong đĩnh đạc, chuẩn mực báo chí/nghiên cứu, khách quan.',
-    deltas: { formality: 35, depth: 25, humor: -20 },
-    directive: 'Duy trì sắc thái trang trọng, điềm tĩnh; phân tích có tính hệ thống và dẫn chứng minh bạch chuẩn mực.',
-  },
-  {
-    id: 'inspiring',
-    title: 'Truyền lửa & Thôi thúc',
-    attributeLabel: 'Nhiệt huyết & Truyền lửa',
-    color: 'warning',
-    icon: 'tabler-flame',
-    desc: 'Tiết tấu hào sảng, thắp sáng động lực, khơi gợi niềm tin bứt phá.',
-    deltas: { inspiration: 40, urgency: 25, humor: 10 },
-    directive: 'Giọng văn tràn đầy năng lượng, thôi thúc hành động; khơi gợi khát vọng và tinh thần dám nghĩ dám làm.',
-  },
-  {
-    id: 'candor_authentic',
-    title: 'Chân thực, Gai góc & Bộc trực',
-    attributeLabel: 'Chân thực & Bộc trực',
-    color: 'success',
-    icon: 'tabler-shield-check',
-    desc: 'Kể chuyện thực tế, dám nói sự thật góc khuất, không né tránh.',
-    deltas: { candor: 40, empathy: 20, formality: -15 },
-    directive: 'Thẳng thắn bộc trực, dám nhìn thẳng vào thực tế gai góc và mặt trái của vấn đề, không tô hồng hay sáo rỗng.',
-  },
-  {
-    id: 'intellectual_depth',
-    title: 'Trí tuệ, Chuyên sâu & Bản chất',
-    attributeLabel: 'Trí tuệ & Chuyên sâu',
-    color: 'primary',
-    icon: 'tabler-brain',
-    desc: 'Phân tích bản chất, cơ chế hoạt động ngầm, kiến trúc, số liệu.',
-    deltas: { depth: 45, assertiveness: 20, formality: 10 },
-    directive: 'Tư duy sắc sảo, giải phẫu vấn đề tới tận tầng bản chất cốt lõi; ưu tiên số liệu và mô hình hóa tư duy.',
-  },
-  {
-    id: 'urgent_call',
-    title: 'Khẩn thiết & Kêu gọi hành động ngay',
-    attributeLabel: 'Khẩn thiết & Kêu gọi',
-    color: 'error',
-    icon: 'tabler-alarm',
-    desc: 'Nhấn mạnh tính cấp thiết của thời điểm, thôi thúc quyết định.',
-    deltas: { urgency: 45, assertiveness: 25, inspiration: 15 },
-    directive: 'Tạo cảm giác cấp bách, nhấn mạnh cơ hội và rủi ro nếu chần chừ; hướng độc giả tới hành động cụ thể ngay lập tức.',
-  },
-]
+const TONE_STYLE_OPTIONS = computed(() => store.options.presets?.tone ?? [])
 
 /** ID các tùy chọn sắc thái / phối âm cảm xúc đang được chọn trong AppSelect */
 const selectedToneOptionIds = ref([])
@@ -535,7 +400,7 @@ const selectedToneOptionIds = ref([])
  * =====================================================================
  */
 const toneStyleSelectItems = computed(() =>
-  TONE_STYLE_OPTIONS.map(opt => ({
+  TONE_STYLE_OPTIONS.value.map(opt => ({
     value: opt.id,
     title: opt.title,
     attributeLabel: opt.attributeLabel,
@@ -565,15 +430,16 @@ const hasModifiedToneSliders = computed(() =>
  * =====================================================================
  */
 function recalculateToneFromSelect() {
-  const checkedItems = TONE_STYLE_OPTIONS.filter(opt =>
+  const checkedItems = TONE_STYLE_OPTIONS.value.filter(opt =>
     selectedToneOptionIds.value.includes(opt.id),
   )
 
   // 1. Tính lại điểm 8 thanh trượt từ baseline + tổng delta các ô đã chọn
   toneSliders.forEach(slider => {
-    const base = typeof slider.baseline === 'number' ? slider.baseline : 50
+    const base = slider.baseline
     if (!checkedItems.length) {
       slider.value = base
+
       return
     }
 
@@ -582,11 +448,11 @@ function recalculateToneFromSelect() {
       0,
     )
 
-    slider.value = Math.max(0, Math.min(100, base + totalDelta))
+    slider.value = totalDelta === 0 ? base : Math.max(0, Math.min(100, (base ?? 50) + totalDelta))
   })
 
   // 2. Đồng bộ các dòng chỉ đạo đã tích chọn vào Ô 3 (giữ nguyên phần văn bản gốc)
-  const allDirectives = new Set(TONE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  const allDirectives = new Set(TONE_STYLE_OPTIONS.value.map(o => `- ${o.directive}`))
 
   const currentLines = String(advancedConfig.tonePrompt || '')
     .split('\n')
@@ -609,7 +475,7 @@ function resetToneSliders() {
     t.value = t.baseline
   })
 
-  const allDirectives = new Set(TONE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  const allDirectives = new Set(TONE_STYLE_OPTIONS.value.map(o => `- ${o.directive}`))
 
   advancedConfig.tonePrompt = String(advancedConfig.tonePrompt || '')
     .split('\n')
@@ -628,7 +494,7 @@ function resetVoiceTextureSliders() {
     s.value = s.baseline
   })
 
-  const allDirectives = new Set(VOICE_STYLE_OPTIONS.map(o => `- ${o.directive}`))
+  const allDirectives = new Set(VOICE_STYLE_OPTIONS.value.map(o => `- ${o.directive}`))
 
   advancedConfig.voiceTexturePrompt = String(advancedConfig.voiceTexturePrompt || '')
     .split('\n')
@@ -647,8 +513,11 @@ function resetVoiceTextureSliders() {
 const versionHistory = ref([])
 
 /* ---------------------------------------------------------------------
- * TAB 9 (MỚI): PHÒNG THỬ DNA — sandbox + tone calibration
+ * TAB 9 (MỚI): PHÒNG THỬ DNA — sandbox pipeline nhiều bước + tone calibration
  * ------------------------------------------------------------------- */
+const briefForm = ref({})
+const usesPromptV3 = computed(() => store.options.prompt_version === 3)
+
 const sandboxForm = reactive({
   topic: '',
   targetTier: 'medium',
@@ -658,11 +527,134 @@ const sandboxGeneratedText = ref('')
 const sandboxSnapshotPrompt = ref('')
 const sandboxHasRan = ref(false)
 
-/** Danh sách các bản viết thử đã lưu trong DB của hồ sơ này (sandbox_samples_json) */
+/** Danh sách các bản viết thử (gồm cả bản đang chạy theo từng bước & bản đã hoàn thành lưu DB) */
 const savedSandboxSamples = ref([])
 const savingSandboxSample = ref(false)
+const savingSampleId = ref(null)
 const deletingSandboxSampleId = ref(null)
+const runningSampleStepId = ref(null)
 const expandedSamplePrompts = reactive({})
+const expandedSampleSteps = reactive({})
+const sandboxDetailDialogOpen = ref(false)
+const activeDialogSample = ref(null)
+
+function openSandboxSampleDialog(sample) {
+  activeDialogSample.value = sample
+  sandboxDetailDialogOpen.value = true
+}
+
+/** Fallback sơ đồ pipeline theo config khi API /options chưa kịp trả về */
+const DEFAULT_TIER_PIPELINES = {
+  micro: [
+    {
+      step: 'article_writer',
+      label: 'Bước 1: Áp dụng DNA & Viết toàn bài',
+      description: 'Áp dụng toàn bộ DNA văn phong để sinh bài viết hoàn chỉnh.',
+      icon: 'tabler-writing',
+      stage: 100,
+      is_terminal: true,
+      depends_on: [],
+    },
+  ],
+  short: [
+    {
+      step: 'article_writer',
+      label: 'Bước 1: Áp dụng DNA & Viết toàn bài',
+      description: 'Áp dụng toàn bộ DNA văn phong để sinh bài viết hoàn chỉnh.',
+      icon: 'tabler-writing',
+      stage: 100,
+      is_terminal: true,
+      depends_on: [],
+    },
+  ],
+  medium: [
+    {
+      step: 'article_writer',
+      label: 'Bước 1: Áp dụng DNA & Viết toàn bài',
+      description: 'Áp dụng toàn bộ DNA văn phong để sinh bài viết hoàn chỉnh.',
+      icon: 'tabler-writing',
+      stage: 100,
+      is_terminal: true,
+      depends_on: [],
+    },
+  ],
+  long: [
+    {
+      step: 'topic_outline',
+      label: 'Bước 1: Phân tích Chủ đề & Lập Dàn ý',
+      description: 'Rút luận điểm cốt lõi, góc tiếp cận độc giả và cây dàn ý H2/H3 thực chiến trước khi viết.',
+      icon: 'tabler-binary-tree',
+      stage: 20,
+      is_terminal: false,
+      depends_on: [],
+    },
+    {
+      step: 'article_writer',
+      label: 'Bước 2: Áp dụng DNA & Viết toàn bài',
+      description: 'Áp dụng toàn bộ DNA văn phong + kết quả phân tích các bước trước để sinh bài viết hoàn chỉnh.',
+      icon: 'tabler-writing',
+      stage: 100,
+      is_terminal: true,
+      depends_on: ['topic_outline'],
+    },
+  ],
+}
+
+/**
+ * Lấy danh sách các bước (steps) từ config cho 1 cấp độ độ dài (tier).
+ * Tự động đọc động từ `store.tierPipelines[tier].steps` (từ config.php).
+ */
+function getPipelineStepsForTier(tier) {
+  const t = tier || 'medium'
+  const fromStore = store.tierPipelines?.[t]?.steps
+  if (Array.isArray(fromStore) && fromStore.length > 0) {
+    return fromStore.map(s => ({ ...s }))
+  }
+
+  return (DEFAULT_TIER_PIPELINES[t] || DEFAULT_TIER_PIPELINES.medium).map(s => ({ ...s }))
+}
+
+/** Danh sách các bước của Tier đang chọn trên form "Chủ đề thử nghiệm mới" */
+const currentTierPipelineSteps = computed(() =>
+  getPipelineStepsForTier(sandboxForm.targetTier || profile.value?.dominant_tier || 'medium'),
+)
+
+/** Rút gọn nhãn bước (bỏ tiền tố "Bước X:" nếu cần hiển thị ngắn gọn) */
+function cleanStepLabel(stepObj) {
+  if (!stepObj) return ''
+
+  return String(stepObj.label || stepObj.step || '').replace(/^Bước\s+\d+\s*:\s*/i, '').trim()
+}
+
+/** Chuẩn hóa 1 bản ghi bài văn thử nghiệm (tương thích cả bản lưu từ DB lẫn bản đang chạy từng step) */
+function normalizeSandboxSample(raw) {
+  const tier = raw.target_tier || profile.value?.dominant_tier || 'medium'
+  const steps = Array.isArray(raw.steps) && raw.steps.length > 0
+    ? raw.steps
+    : getPipelineStepsForTier(tier)
+
+  const hasText = Boolean(raw.text && String(raw.text).trim() !== '')
+  const currentStepIndex = typeof raw.current_step_index === 'number'
+    ? raw.current_step_index
+    : (hasText ? steps.length - 1 : 0)
+
+  const status = raw.status || (hasText || currentStepIndex >= steps.length - 1 ? 'completed' : 'in_progress')
+
+  return {
+    id: raw.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    topic: raw.topic || 'Chủ đề thử nghiệm',
+    brief: raw.brief ?? null,
+    target_tier: tier,
+    steps,
+    current_step_index: currentStepIndex,
+    status,
+    artifacts: raw.artifacts && typeof raw.artifacts === 'object' ? raw.artifacts : {},
+    text: raw.text || '',
+    system_prompt: raw.system_prompt || '',
+    saved_to_db: raw.saved_to_db ?? Boolean(raw.id && !String(raw.id).startsWith('local-')),
+    created_at: raw.created_at || new Date().toISOString(),
+  }
+}
 
 /** Quản lý trạng thái mở/đóng các panel trong Tab 9 Phòng thử DNA (chế độ accordion đơn, mặc định đóng cả 2):
  * null: Đóng cả 2 panel mặc định
@@ -745,14 +737,73 @@ function applyTonePreset(presetKey) {
 
 function resetToneToBaseline() { applyTonePreset('default') }
 
-/* style_instructions gửi lên backend = style_instructions của profile hiện
- * tại (KHÔNG ghép TONE CALIBRATION phía client — backend tự render section
- * đó từ `tone_overrides` qua SnapshotService::renderToneSection, ghép thêm
- * ở đây sẽ sinh 2 khối calibration trùng lặp trong system prompt). */
-const sandboxStyleInstructions = computed(() => {
-  return advancedConfig.systemPrompt || profile.value?.style_instructions || ''
-})
+function buildSandboxBrief(topic) {
+  if (!usesPromptV3.value) return null
 
+  const form = briefForm.value
+  const lines = text => String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+
+  return {
+    topic,
+    content_type: form.contentType || null,
+    platform: form.platform?.trim() || null,
+    audience: form.audience?.trim() || null,
+    objective: form.objective?.trim() || null,
+    provided_facts: lines(form.facts).map((text, index) => ({ id: `fact_${index + 1}`, text, source: 'user' })),
+    required_details: [...new Set(lines(form.requiredDetails))],
+    offer: form.offer?.trim() || null,
+    cta: form.cta?.trim() || null,
+    length: form.lengthUnit ? { unit: form.lengthUnit, min: form.lengthMin || null, max: form.lengthMax || null } : null,
+    format: {
+      ...(form.headings == null ? {} : { headings: form.headings }),
+      ...(form.bullets == null ? {} : { bullets: form.bullets }),
+    },
+    constraints: lines(form.constraints),
+  }
+}
+
+/** Gom runtime overrides hiện tại từ Tab 7 & Tab 9 để gửi kèm mỗi bước Sandbox */
+function buildCurrentSandboxOverrides() {
+  const current = profile.value
+  const instructions = {
+    style_instructions: advancedConfig.systemPrompt?.trim() || null,
+    voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || null,
+    tone_instructions: advancedConfig.tonePrompt?.trim() || null,
+  }
+
+  if (usesPromptV3.value) {
+    const changedAxes = (sliders, stored) => Object.fromEntries(
+      sliders.filter(s => (s.value ?? null) !== (stored?.[s.key] ?? null))
+        .map(s => [s.key, s.value ?? null]),
+    )
+
+    return {
+      ...Object.fromEntries(Object.entries(instructions).filter(([key, value]) => value !== (current[key]?.trim() || null))),
+      voice_texture_sliders_json: changedAxes(voiceTextureSliders, current.voice_texture_sliders_json),
+      tone_overrides: changedAxes(toneSliders, current.tone_sliders_json),
+      temperature: Number(advancedConfig.temperature),
+    }
+  }
+
+  return {
+    ...instructions,
+    voice_texture_sliders_json: Object.fromEntries(voiceTextureSliders.map(s => [s.key, s.value ?? null])),
+    tone_overrides: Object.fromEntries(toneSliders.map(s => [s.key, s.value ?? null])),
+    temperature: Number(advancedConfig.temperature),
+  }
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Bắt đầu tạo 1 bản ghi bài văn thử nghiệm mới (chạy Bước 1)
+ * =====================================================================
+ * - Với văn phong/cấp độ có nhiều step (vd: 'long' có Bước 1: Phân tích dàn ý -> Bước 2: Viết bài):
+ *   Tạo ngay 1 bản ghi ở Bước 1 trong VCard "Các bài văn thử nghiệm" bên dưới,
+ *   hiển thị kết quả Bước 1 và hiện nút "Tiếp tục phân tích lần thứ 2...".
+ * - Với văn phong/cấp độ chỉ có 1 step ('article_writer'):
+ *   Chạy bước viết bài, tạo bản ghi ở trạng thái "Hoàn thành" và tự động lưu vào hồ sơ.
+ * =====================================================================
+ */
 async function runSandboxDemo() {
   if (!profile.value?.id) {
     snack.text = 'Chưa tải được hồ sơ — hãy đợi nạp xong'
@@ -771,41 +822,62 @@ async function runSandboxDemo() {
     return
   }
 
-  // tone_overrides: key => percent hiện tại trên các slider (8 trục).
-  const toneOverrides = Object.fromEntries(
-    toneSliders.map(t => [t.key, Number(t.value) || 0]),
-  )
-
-  // voice_texture_sliders_json: 5 thanh trượt Chất văn hiện tại ở Tab 7.
-  const voiceSlidersPayload = Object.fromEntries(
-    voiceTextureSliders.map(s => [s.key, Number(s.value) || 0]),
-  )
-
   try {
-    const res = await store.sandbox(profile.value.id, {
-      topic,
-      target_tier: sandboxForm.targetTier || profile.value.dominant_tier,
+    await store.fetchOptions()
+    const targetTier = sandboxForm.targetTier || profile.value.dominant_tier || 'medium'
+    const steps = getPipelineStepsForTier(targetTier)
+    const firstStep = steps[0]
+    const brief = buildSandboxBrief(topic)
+    const overrides = buildCurrentSandboxOverrides()
 
-      // style_instructions (Ô 1) + voice_texture_instructions (Ô 2) + 5 sliders Chất văn
-      style_instructions: sandboxStyleInstructions.value || undefined,
-      voice_texture_instructions: advancedConfig.voiceTexturePrompt?.trim() || undefined,
-      tone_instructions: advancedConfig.tonePrompt?.trim() || undefined,
-      voice_texture_sliders_json: voiceSlidersPayload,
-      tone_overrides: toneOverrides,
-      temperature: Number(advancedConfig.temperature),
+    const res = await store.runSandboxStep(profile.value.id, firstStep.step, {
+      topic,
+      brief,
+      target_tier: targetTier,
+      artifacts: {},
+      ...overrides,
     })
 
-    sandboxGeneratedText.value = res?.text ?? ''
-    sandboxHasRan.value = true
+    const artifact = res?.artifact || {}
+    const isTerminal = Boolean(firstStep.is_terminal) || steps.length === 1
 
-    if (res?.snapshot?.system_prompt) {
-      sandboxSnapshotPrompt.value = res.snapshot.system_prompt
+    const newSample = normalizeSandboxSample({
+      id: `local-${Date.now()}`,
+      topic,
+      brief,
+      target_tier: targetTier,
+      steps,
+      current_step_index: 0,
+      status: isTerminal ? 'completed' : 'in_progress',
+      artifacts: {
+        [firstStep.step]: artifact,
+      },
+      text: isTerminal ? (artifact.text || '') : '',
+      system_prompt: isTerminal ? (artifact.snapshot?.system_prompt || '') : '',
+      saved_to_db: false,
+      created_at: new Date().toISOString(),
+    })
+
+    // Đưa bản ghi mới lên đầu danh sách trong VCard "Các bài văn thử nghiệm" bên dưới
+    savedSandboxSamples.value.unshift(newSample)
+    expandedSampleSteps[newSample.id] = true
+
+    if (isTerminal) {
+      sandboxGeneratedText.value = newSample.text
+      sandboxSnapshotPrompt.value = newSample.system_prompt
+      sandboxHasRan.value = true
+
+      await persistSampleToDb(newSample, true)
+
+      snack.text = `Đã hoàn thành bài viết thử nghiệm ở cấp độ "${targetTier.toUpperCase()}"`
+      snack.color = 'success'
+    } else {
+      // Lưu ngay cả khi mới xong Bước 1 (đang in_progress) để F5 không bị mất tiến trình
+      await persistSampleToDb(newSample, true)
+
+      snack.text = `Đã tạo và lưu bản ghi ở Bước 1/${steps.length} (${cleanStepLabel(firstStep)}). Bấm nút tiếp tục trên bản ghi để qua bước kế tiếp!`
+      snack.color = 'info'
     }
-
-    const tierLabel = (res?.target_tier || sandboxForm.targetTier).toUpperCase()
-
-    snack.text = `Đã sinh văn bản thử nghiệm ở cấp độ "${tierLabel}"`
-    snack.color = 'success'
     snack.show = true
   } catch (e) {
     snack.text = firstErrorMessage(e)
@@ -816,51 +888,201 @@ async function runSandboxDemo() {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Lưu (Ghim) bản viết thử hiện tại vào Database của hồ sơ
+ * CHỨC NĂNG: Chạy bước tiếp theo cho 1 bản ghi đang ở trạng thái in_progress
+ * =====================================================================
+ * Dựa theo mảng `sample.steps` từ config có bao nhiêu bước phân tích thì
+ * chạy tuần tự từng bước (`current_step_index + 1`) cho tới bước viết văn
+ * cuối cùng (`is_terminal = true`) thì chuyển trạng thái sang "Hoàn thành".
  * =====================================================================
  */
-async function saveCurrentSandboxSample() {
-  if (!profile.value?.id || !activeSandboxSample.value) return
+async function runNextSandboxStep(sample) {
+  if (!profile.value?.id || !sample) return
 
-  savingSandboxSample.value = true
+  const nextIdx = sample.current_step_index + 1
+  if (nextIdx >= sample.steps.length) return
+
+  const nextStep = sample.steps[nextIdx]
+  const overrides = buildCurrentSandboxOverrides()
+
+  runningSampleStepId.value = sample.id
   try {
-    const res = await store.saveSandboxSample(profile.value.id, {
-      topic: sandboxForm.topic.trim() || 'Chủ đề thử nghiệm',
-      target_tier: sandboxForm.targetTier || profile.value.dominant_tier || 'medium',
-      text: activeSandboxSample.value,
-      system_prompt: sandboxSnapshotPrompt.value || '',
+    const res = await store.runSandboxStep(profile.value.id, nextStep.step, {
+      topic: sample.topic,
+      brief: sample.brief,
+      target_tier: sample.target_tier,
+      artifacts: sample.artifacts || {},
+      outline_approved: Boolean(sample.artifacts?.topic_outline),
+      ...overrides,
     })
 
-    if (Array.isArray(res?.samples)) {
-      savedSandboxSamples.value = res.samples
+    const artifact = res?.artifact || {}
+    if (!sample.artifacts || typeof sample.artifacts !== 'object') {
+      sample.artifacts = {}
     }
+    sample.artifacts[nextStep.step] = artifact
+    sample.current_step_index = nextIdx
 
-    snack.text = 'Đã lưu bản viết thử vào hồ sơ để so sánh'
-    snack.color = 'success'
+    const isLastStep = Boolean(nextStep.is_terminal) || nextIdx >= sample.steps.length - 1
+    if (isLastStep) {
+      sample.status = 'completed'
+      sample.text = artifact.text || ''
+      sample.system_prompt = artifact.snapshot?.system_prompt || ''
+
+      sandboxGeneratedText.value = sample.text
+      sandboxSnapshotPrompt.value = sample.system_prompt
+      sandboxHasRan.value = true
+
+      // Lưu bản hoàn thành vào DB
+      await persistSampleToDb(sample, true)
+
+      snack.text = `Hoàn thành toàn bộ ${sample.steps.length}/${sample.steps.length} bước — Đã sinh bài văn hoàn chỉnh!`
+      snack.color = 'success'
+    } else {
+      // Cập nhật tiến trình bước trung gian vào DB
+      await persistSampleToDb(sample, true)
+
+      snack.text = `Đã hoàn tất Bước ${nextIdx + 1}/${sample.steps.length} (${cleanStepLabel(nextStep)}). Hãy bấm tiếp tục để sang bước kế tiếp!`
+      snack.color = 'info'
+    }
     snack.show = true
   } catch (e) {
     snack.text = firstErrorMessage(e)
     snack.color = 'error'
     snack.show = true
   } finally {
-    savingSandboxSample.value = false
+    runningSampleStepId.value = null
   }
+}
+
+async function refreshSandboxOutline(sample) {
+  if (!profile.value?.id || runningSampleStepId.value) return
+
+  runningSampleStepId.value = sample.id
+  try {
+    const res = await store.runSandboxStep(profile.value.id, 'topic_outline', {
+      topic: sample.topic,
+      target_tier: sample.target_tier,
+      brief: sample.brief,
+      ...buildCurrentSandboxOverrides(),
+    })
+
+    sample.artifacts = { topic_outline: res.artifact }
+    sample.current_step_index = 0
+    await persistSampleToDb(sample)
+  } catch (error) {
+    snack.text = firstErrorMessage(error)
+    snack.color = 'error'
+    snack.show = true
+  } finally {
+    runningSampleStepId.value = null
+  }
+}
+
+/** Thêm 1 mục H2/H3 mới vào dàn ý của Bước 1 (`topic_outline`) trên bản ghi */
+function addOutlineSection(sample) {
+  const outlineArtifact = sample?.artifacts?.topic_outline
+  if (!outlineArtifact) return
+  if (!Array.isArray(outlineArtifact.outline)) {
+    outlineArtifact.outline = []
+  }
+  outlineArtifact.outline.push({
+    tag: 'H2',
+    title: 'Tiêu đề luận điểm mới',
+    key_points: ['Ý chính triển khai'],
+    suggested_evidence: '',
+  })
+}
+
+/** Xóa 1 mục khỏi dàn ý của Bước 1 (`topic_outline`) */
+function removeOutlineSection(sample, idx) {
+  const outline = sample?.artifacts?.topic_outline?.outline
+  if (!Array.isArray(outline) || outline.length <= 1) return
+  outline.splice(idx, 1)
 }
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database
+ * CHỨC NĂNG: Lưu / Cập nhật (Upsert) bản viết thử vào Database của hồ sơ
+ * =====================================================================
+ * Lưu cả trạng thái đang chạy dở (Bước 1 in_progress + artifacts) lẫn
+ * bản đã hoàn thành (completed + text) để khi F5/tải lại trang vẫn tiếp tục
+ * phân tích bước 2 được bình thường.
+ * =====================================================================
+ */
+async function persistSampleToDb(sample, silent = false) {
+  if (!profile.value?.id || !sample) return
+
+  savingSampleId.value = sample.id
+  savingSandboxSample.value = true
+  try {
+    const res = await store.saveSandboxSample(profile.value.id, {
+      id: sample.saved_to_db ? sample.id : undefined,
+      topic: sample.topic.trim() || 'Chủ đề thử nghiệm',
+      brief: sample.brief,
+      target_tier: sample.target_tier || profile.value.dominant_tier || 'medium',
+      status: sample.status || 'in_progress',
+      current_step_index: sample.current_step_index ?? 0,
+      steps: sample.steps || [],
+      artifacts: sample.artifacts || {},
+      text: sample.text || '',
+      system_prompt: sample.system_prompt || '',
+    })
+
+    if (res?.sample?.id) {
+      const oldId = sample.id
+
+      sample.id = res.sample.id
+      sample.saved_to_db = true
+      if (expandedSampleSteps[oldId]) {
+        expandedSampleSteps[sample.id] = true
+      }
+    } else {
+      sample.saved_to_db = true
+    }
+
+    if (!silent) {
+      snack.text = 'Đã lưu bản viết thử vào hồ sơ để so sánh'
+      snack.color = 'success'
+      snack.show = true
+    }
+  } catch (e) {
+    if (!silent) {
+      snack.text = firstErrorMessage(e)
+      snack.color = 'error'
+      snack.show = true
+    }
+  } finally {
+    savingSampleId.value = null
+    savingSandboxSample.value = false
+  }
+}
+
+async function saveCurrentSandboxSample(sample) {
+  await persistSampleToDb(sample, false)
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xóa 1 bản viết thử (khỏi danh sách tạm hoặc khỏi Database)
  * =====================================================================
  */
 async function removeSandboxSample(sampleId) {
   if (!profile.value?.id || !sampleId) return
 
+  const target = savedSandboxSamples.value.find(s => s.id === sampleId)
+  if (target && (!target.saved_to_db || String(sampleId).startsWith('local-'))) {
+    savedSandboxSamples.value = savedSandboxSamples.value.filter(s => s.id !== sampleId)
+    snack.text = 'Đã xóa bản thử nghiệm'
+    snack.color = 'info'
+    snack.show = true
+
+    return
+  }
+
   deletingSandboxSampleId.value = sampleId
   try {
-    const res = await store.deleteSandboxSample(profile.value.id, sampleId)
-    if (Array.isArray(res?.samples)) {
-      savedSandboxSamples.value = res.samples
-    }
+    await store.deleteSandboxSample(profile.value.id, sampleId)
+    savedSandboxSamples.value = savedSandboxSamples.value.filter(s => s.id !== sampleId)
     snack.text = 'Đã xóa bản viết thử'
     snack.color = 'info'
     snack.show = true
@@ -992,34 +1214,28 @@ function applyProfileToForm(p) {
     ? p.voice_texture_sliders_json
     : {}
 
-  voiceTextureSliders.forEach(s => {
-    const val = typeof savedVoiceSliders[s.key] === 'number'
-      ? savedVoiceSliders[s.key]
-      : s.defaultVal
+  const preferences = p.slider_preferences_json ?? {}
 
-    s.baseline = val
-    s.value = val
+  voiceTextureSliders.forEach(slider => {
+    const value = Object.hasOwn(savedVoiceSliders, slider.key) ? savedVoiceSliders[slider.key] : slider.defaultVal
+
+    slider.value = value
+    slider.baseline = Object.hasOwn(preferences.voice ?? {}, slider.key) ? preferences.voice[slider.key] : value
   })
 
-  // Đồng bộ trạng thái checkbox nếu trong Ô 2 đã có các dòng gợi ý tương ứng
-  const currentVoiceText = String(p.voice_texture_instructions ?? '')
-
-  selectedVoiceOptionIds.value = VOICE_STYLE_OPTIONS
-    .filter(opt => currentVoiceText.includes(opt.directive))
-    .map(opt => opt.id)
+  selectedVoiceOptionIds.value = [...(preferences.voice_presets ?? [])]
+  selectedToneOptionIds.value = [...(preferences.tone_presets ?? [])]
 
   // Nạp 8 thanh trượt Sandbox sắc thái cảm xúc từ DB (tone_sliders_json)
   const savedToneSliders = p.tone_sliders_json && typeof p.tone_sliders_json === 'object'
     ? p.tone_sliders_json
     : {}
 
-  toneSliders.forEach(t => {
-    const val = typeof savedToneSliders[t.key] === 'number'
-      ? savedToneSliders[t.key]
-      : 50
+  toneSliders.forEach(slider => {
+    const value = Object.hasOwn(savedToneSliders, slider.key) ? savedToneSliders[slider.key] : 50
 
-    t.baseline = val
-    t.value = val
+    slider.value = value
+    slider.baseline = Object.hasOwn(preferences.tone ?? {}, slider.key) ? preferences.tone[slider.key] : value
   })
 
   const rules = p.rules_json && typeof p.rules_json === 'object' ? p.rules_json : {}
@@ -1033,7 +1249,9 @@ function applyProfileToForm(p) {
     { title: 'Cách mở bài', value: rules.opening || '—', icon: 'tabler-arrow-bar-to-right', color: 'primary' },
   ]
 
-  // Cấu trúc nội dung — 3 phần lấy từ rule_keys (thân thiện với tier ngắn).
+  // Cấu trúc nội dung — 4 phần map 1:1 4 khóa rule_keys (mỗi khóa 1 ô
+  // riêng; trước đây gộp structure_patterns+transitions bằng ' • ' rồi
+  // tách ngược lúc lưu — hỏng dữ liệu, xem docs/writing-profile-review-findings.md L4).
   const tierVal = p.dominant_tier
   const isMicro = tierVal === 'micro'
   const isShort = tierVal === 'short'
@@ -1044,21 +1262,32 @@ function applyProfileToForm(p) {
       weight: 'rules_json.opening',
       sentences: '',
       guideline: 'Cách AI nhận diện thủ pháp mở đầu trong bài mẫu.',
-      sample: rules.opening || (isMicro ? 'Không áp dụng cho văn bản cực ngắn (Micro 1–3 câu — ý liền một mạch).' : 'Chưa có dữ liệu.'),
+      sample: rules.opening || '',
+      placeholder: isMicro ? 'Không áp dụng cho văn bản cực ngắn (Micro 1–3 câu — ý liền một mạch).' : 'Chưa có dữ liệu',
     },
     {
-      title: 'Cấu trúc bài & Chuyển đoạn (Structure & Transitions)',
+      title: 'Khung cấu trúc bài (Structure)',
       weight: 'rules_json.structure_patterns',
       sentences: '',
-      guideline: 'Mô hình khung bài tổng thể + nghệ thuật chuyển đoạn giữa các ý.',
-      sample: [rules.structure_patterns, rules.transitions].filter(Boolean).join(' • ') || (isMicro || isShort ? 'Không áp dụng cho văn bản ngắn (Micro/Short — không chia dàn ý nhiều phần).' : 'Chưa có dữ liệu.'),
+      guideline: 'Mô hình khung bài tổng thể (Hook → Vấn đề → Giải pháp → CTA, listicle, tuyến tính...).',
+      sample: rules.structure_patterns || '',
+      placeholder: isMicro || isShort ? 'Không áp dụng cho văn bản ngắn (Micro/Short — không chia dàn ý nhiều phần).' : 'Chưa có dữ liệu',
+    },
+    {
+      title: 'Nghệ thuật chuyển đoạn (Transitions)',
+      weight: 'rules_json.transitions',
+      sentences: '',
+      guideline: 'Cách chuyển ý giữa các phần — điểm neo cảm xúc, cách vào ý mới.',
+      sample: rules.transitions || '',
+      placeholder: isMicro ? 'Không áp dụng cho văn bản cực ngắn (Micro 1–3 câu — ý liền một mạch).' : 'Chưa có dữ liệu',
     },
     {
       title: 'Kết bài & CTA (Ending)',
       weight: 'rules_json.ending',
       sentences: '',
       guideline: 'Cách khép lại bài viết và phong cách kêu gọi hành động.',
-      sample: rules.ending || 'Chưa có dữ liệu.',
+      sample: rules.ending || '',
+      placeholder: 'Chưa có dữ liệu',
     },
   ]
 
@@ -1093,14 +1322,17 @@ function applyProfileToForm(p) {
   vocabConfig.powerWords = extractQuotedWords(rules.vocabulary)
   vocabConfig.negativeWords = avoidToRules(rules.avoid).map(r => r.text)
   vocabConfig.ctaPhilosophy = rules.ending || ''
+  initialRuleEdits = readEditableRules()
 
   // Taxonomy
   categories.value = (p.categories ?? []).map(c => c.id)
   tags.value = (p.tags ?? []).map(t => t.id)
   newTags.value = []
 
-  // Danh sách bản viết thử đã lưu trong Phòng thử DNA
-  savedSandboxSamples.value = Array.isArray(p.sandbox_samples_json) ? p.sandbox_samples_json : []
+  // Danh sách bản viết thử đã lưu trong Phòng thử DNA (chuẩn hóa cấu trúc step-by-step)
+  savedSandboxSamples.value = Array.isArray(p.sandbox_samples_json)
+    ? p.sandbox_samples_json.map(item => normalizeSandboxSample({ ...item, saved_to_db: true }))
+    : []
 
   // Lịch sử — mỗi lần giải mã 1 dòng + entry hiện tại trên đầu.
   const analyses = Array.isArray(p.analyses) ? p.analyses : []
@@ -1127,70 +1359,23 @@ function applyProfileToForm(p) {
  * BUILD PAYLOAD PUT — merge các khóa rules_json user chỉnh trên UI,
  * giữ nguyên 9 khóa còn lại từ profile.rules_json hiện tại.
  * =================================================================== */
+function readEditableRules() {
+  const keys = ['opening', 'structure_patterns', 'transitions', 'ending']
+  const sections = Object.fromEntries(keys.map((key, index) => [key, String(structureSections.value[index]?.sample ?? '').trim()]))
+  const description = (vocabConfig.vocabularyDesc ?? '').trim()
+  const powerWords = vocabConfig.powerWords.map(word => JSON.stringify(word.trim())).join(', ')
+
+  return {
+    ...sections,
+    pronouns: joinPronouns(languageConfig.brandPronoun, languageConfig.customerPronoun),
+    vocabulary: [description, powerWords ? 'Từ ngữ ưu tiên: ' + powerWords : ''].filter(Boolean).join('. ').slice(0, 500),
+    avoid: vocabConfig.negativeWords.join('. '),
+    cta: vocabConfig.ctaPhilosophy?.trim() || '',
+  }
+}
+
 function buildRulesJsonPayload() {
-  const current = (profile.value?.rules_json && typeof profile.value.rules_json === 'object')
-    ? { ...profile.value.rules_json }
-    : {}
-
-  // Các khóa có UI chỉnh: pronouns (từ 2 ô), vocabulary (powerWords),
-  // avoid (negativeWords), opening/structure_patterns/transitions/ending
-  // (3 structureSections), tone/emotion (từ traitSummaryList — chỉ đọc
-  // trên UI nên không đè; nếu muốn chỉnh được thì thêm input).
-  const pronounsJoined = joinPronouns(languageConfig.brandPronoun, languageConfig.customerPronoun)
-  if (pronounsJoined) current.pronouns = pronounsJoined
-
-  if (structureSections.value.length >= 3) {
-    current.opening = structureSections.value[0]?.sample ?? current.opening
-
-
-    // structure_patterns & transitions gộp trong section 2 — giữ chuỗi gộp,
-    // không tách lại (vì UI chỉ hiển thị 1 sample gộp).
-    const s2 = structureSections.value[1]?.sample ?? ''
-
-    if (s2 && s2 !== 'Chưa có dữ liệu.') {
-      // Tách lại theo ' • ' nếu có (rules gốc đã join bằng •).
-      const parts = s2.split(' • ').map(s => s.trim()).filter(Boolean)
-
-      if (parts.length >= 2) {
-        current.structure_patterns = parts[0]
-        current.transitions = parts.slice(1).join(' • ')
-      } else {
-        current.structure_patterns = s2
-      }
-    }
-    current.ending = structureSections.value[2]?.sample ?? current.ending
-  }
-
-  // 1. Vocabulary + Power Words (ghép vào rules_json.vocabulary)
-  let finalVocab = (vocabConfig.vocabularyDesc ?? '').trim()
-  const kwIdx = finalVocab.search(/[;.]\s*Từ ngữ ưu tiên:/i)
-  if (kwIdx > 0) {
-    finalVocab = finalVocab.substring(0, kwIdx).trim()
-  }
-
-  if (Array.isArray(vocabConfig.powerWords) && vocabConfig.powerWords.length > 0) {
-    const quotedList = vocabConfig.powerWords.map(w => `"${w.trim()}"`).join(', ')
-
-    finalVocab = finalVocab
-      ? `${finalVocab}. Từ ngữ ưu tiên: ${quotedList}.`
-      : `Từ ngữ ưu tiên: ${quotedList}.`
-  }
-
-  if (finalVocab) {
-    current.vocabulary = finalVocab.slice(0, 495)
-  }
-
-  // 2. CTA / Ending
-  if (vocabConfig.ctaPhilosophy?.trim()) {
-    current.ending = vocabConfig.ctaPhilosophy.trim()
-  }
-
-  // avoid từ negativeWords (các dòng đã bỏ allowed=false ra).
-  if (Array.isArray(vocabConfig.negativeWords) && vocabConfig.negativeWords.length) {
-    current.avoid = vocabConfig.negativeWords.join('. ')
-  }
-
-  return current
+  return mergeRuleEdits(profile.value?.rules_json, initialRuleEdits, readEditableRules())
 }
 
 function buildEvidenceJsonPayload() {
@@ -1210,11 +1395,11 @@ async function saveProfile() {
   }
 
   const voiceSlidersPayload = Object.fromEntries(
-    voiceTextureSliders.map(s => [s.key, Number(s.value) || 0]),
+    voiceTextureSliders.map(s => [s.key, s.value ?? null]),
   )
 
   const toneSlidersPayload = Object.fromEntries(
-    toneSliders.map(t => [t.key, Number(t.value) || 0]),
+    toneSliders.map(t => [t.key, t.value ?? null]),
   )
 
   const payload = {
@@ -1228,6 +1413,12 @@ async function saveProfile() {
     tone_instructions: advancedConfig.tonePrompt?.trim() || null,
     voice_texture_sliders_json: voiceSlidersPayload,
     tone_sliders_json: toneSlidersPayload,
+    slider_preferences_json: {
+      voice: Object.fromEntries(voiceTextureSliders.map(s => [s.key, s.baseline])),
+      tone: Object.fromEntries(toneSliders.map(s => [s.key, s.baseline])),
+      voice_presets: [...selectedVoiceOptionIds.value],
+      tone_presets: [...selectedToneOptionIds.value],
+    },
     temperature: Number(advancedConfig.temperature),
     status: profileData.isActive ? 'active' : 'draft',
     is_enabled: Boolean(profileData.isActive),
@@ -1551,6 +1742,19 @@ onBeforeUnmount(() => {
                   >
                     {{ profileData.isActive ? 'Đang sử dụng' : 'Nháp / Lưu trữ' }}
                   </VChip>
+                  <VChip
+                    size="small"
+                    :color="dominantTierMeta.color"
+                    variant="tonal"
+                    label
+                  >
+                    <VIcon
+                      :icon="dominantTierMeta.icon"
+                      size="14"
+                      class="me-1"
+                    />
+                    {{ dominantTierMeta.label }}
+                  </VChip>
                   <VSwitch
                     v-model="profileData.isActive"
                     color="primary"
@@ -1870,7 +2074,7 @@ onBeforeUnmount(() => {
                 Cấu trúc bài viết (từ rules_json)
               </template>
               <template #subtitle>
-                Đổ từ 3 khóa opening / structure_patterns+transitions / ending — chỉnh text sẽ lưu lại
+                Đổ từ 4 khóa opening / structure_patterns / transitions / ending — chỉnh text sẽ lưu lại
               </template>
             </VCardItem>
             <VCardText>
@@ -1879,7 +2083,7 @@ onBeforeUnmount(() => {
                   v-for="sec in structureSections"
                   :key="sec.title"
                   cols="12"
-                  md="4"
+                  md="6"
                 >
                   <div class="border rounded pa-4 h-100 d-flex flex-column">
                     <VChip
@@ -1896,6 +2100,7 @@ onBeforeUnmount(() => {
                     </div>
                     <AppTextarea
                       v-model="sec.sample"
+                      :placeholder="sec.placeholder"
                       label="Nội dung rules_json"
                       rows="6"
                       class="flex-grow-1"
@@ -2422,7 +2627,7 @@ onBeforeUnmount(() => {
                       >
                         <span class="text-medium-emphasis text-truncate me-1">{{ slider.label }}:</span>
                         <span class="font-weight-bold text-high-emphasis flex-shrink-0">
-                          {{ slider.value }}%
+                          {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                         </span>
                       </div>
                     </div>
@@ -2609,7 +2814,7 @@ onBeforeUnmount(() => {
                                   class="text-body-2 font-weight-bold"
                                   :class="`text-${slider.color}`"
                                 >
-                                  {{ slider.value }}%
+                                  {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                                 </span>
                               </div>
                             </div>
@@ -2620,7 +2825,8 @@ onBeforeUnmount(() => {
                             </div>
 
                             <VSlider
-                              v-model="slider.value"
+                              @update:model-value="slider.value = $event"
+                              :model-value="slider.value ?? 50"
                               :min="0"
                               :max="100"
                               :step="1"
@@ -2705,7 +2911,7 @@ onBeforeUnmount(() => {
                       >
                         <span class="text-medium-emphasis text-truncate me-1">{{ slider.label }}:</span>
                         <span class="font-weight-bold text-high-emphasis flex-shrink-0">
-                          {{ slider.value }}%
+                          {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                         </span>
                       </div>
                     </div>
@@ -2892,7 +3098,7 @@ onBeforeUnmount(() => {
                                   class="text-body-2 font-weight-bold"
                                   :class="`text-${slider.color}`"
                                 >
-                                  {{ slider.value }}%
+                                  {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                                 </span>
                               </div>
                             </div>
@@ -2903,7 +3109,8 @@ onBeforeUnmount(() => {
                             </div>
 
                             <VSlider
-                              v-model="slider.value"
+                              @update:model-value="slider.value = $event"
+                              :model-value="slider.value ?? 50"
                               :min="0"
                               :max="100"
                               :step="1"
@@ -2993,12 +3200,13 @@ onBeforeUnmount(() => {
           </VAlert>
 
           <VRow align="start">
-            <!-- ===== VCARD TRÁI: CHỦ ĐỀ THỬ NGHIỆM MỚI ===== -->
+            <!-- ===== CỘT TRÁI: TÁCH 2 VCARD RIÊNG BIỆT (1: CHỦ ĐỀ THỬ NGHIỆM MỚI | 2: CÁC BÀI VĂN THỬ NGHIỆM) ===== -->
             <VCol
               cols="12"
               lg="7"
             >
-              <VCard>
+              <!-- VCARD 1: CHỦ ĐỀ THỬ NGHIỆM MỚI -->
+              <VCard class="mb-6">
                 <VCardItem>
                   <template #title>
                     <div class="d-flex align-center">
@@ -3013,7 +3221,7 @@ onBeforeUnmount(() => {
                   </template>
                   <template #subtitle>
                     <div class="text-caption text-medium-emphasis mt-1">
-                      Nhập chủ đề bất kỳ để kiểm chứng khẩu khí DNA của hồ sơ này
+                      Nhập chủ đề và chọn cấp độ độ dài — hệ thống sẽ khởi tạo bản ghi thử nghiệm theo đúng quy trình các bước trong cấu hình
                     </div>
                   </template>
                 </VCardItem>
@@ -3022,7 +3230,7 @@ onBeforeUnmount(() => {
                   <AppTextField
                     v-model="sandboxForm.topic"
                     label="Chủ đề viết thử"
-                    placeholder="vd: lợi ích của cà phê đen buổi sáng"
+                    placeholder="vd: ly cà phê sớm thơm bên bàn làm việc"
                     persistent-placeholder
                     class="mb-4"
                     @keyup.enter="runSandboxDemo"
@@ -3030,12 +3238,65 @@ onBeforeUnmount(() => {
 
                   <AppSelect
                     v-model="sandboxForm.targetTier"
-                    :items="['micro','short','medium','long'].map(t => ({ title: t, value: t }))"
+                    :items="['micro','short','medium','long'].map(t => ({ title: t.toUpperCase(), value: t }))"
                     label="Cấp độ độ dài mục tiêu (Target Tier)"
                     class="mb-4"
                   />
 
-                  <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-4">
+                  <SandboxWritingBrief v-if="usesPromptV3" v-model="briefForm" />
+
+                  <!-- Hiển thị sơ đồ quy trình các bước của Tier đang chọn (đọc từ config) -->
+                  <div class="tonal-panel pa-3 rounded mb-4">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                      <div class="d-flex align-center gap-2">
+                        <VIcon
+                          icon="tabler-git-branch"
+                          color="primary"
+                          size="16"
+                        />
+                        <span class="text-caption font-weight-bold text-high-emphasis">
+                          Quy trình thực thi của cấp độ "{{ (sandboxForm.targetTier || 'medium').toUpperCase() }}" ({{ currentTierPipelineSteps.length }} bước):
+                        </span>
+                      </div>
+                      <VChip
+                        size="x-small"
+                        :color="currentTierPipelineSteps.length > 1 ? 'warning' : 'success'"
+                        variant="tonal"
+                        label
+                      >
+                        {{ currentTierPipelineSteps.length > 1 ? `Phân tích ${currentTierPipelineSteps.length - 1} bước trước khi viết` : 'Viết trực tiếp 1 bước' }}
+                      </VChip>
+                    </div>
+
+                    <div class="d-flex align-center flex-wrap gap-2">
+                      <template
+                        v-for="(st, sIdx) in currentTierPipelineSteps"
+                        :key="st.step"
+                      >
+                        <VChip
+                          size="small"
+                          :color="sIdx === 0 ? 'primary' : 'secondary'"
+                          :variant="sIdx === 0 ? 'flat' : 'tonal'"
+                          label
+                        >
+                          <VIcon
+                            :icon="st.icon || (st.is_terminal ? 'tabler-writing' : 'tabler-binary-tree')"
+                            size="14"
+                            class="me-1"
+                          />
+                          Bước {{ sIdx + 1 }}: {{ cleanStepLabel(st) }}
+                        </VChip>
+                        <VIcon
+                          v-if="sIdx < currentTierPipelineSteps.length - 1"
+                          icon="tabler-arrow-narrow-right"
+                          size="16"
+                          class="text-disabled"
+                        />
+                      </template>
+                    </div>
+                  </div>
+
+                  <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                     <span class="text-caption text-success d-flex align-center">
                       <VIcon
                         icon="tabler-dna"
@@ -3050,202 +3311,251 @@ onBeforeUnmount(() => {
                       color="primary"
                       size="small"
                       prepend-icon="tabler-player-play"
-                      :loading="store.sandboxing"
+                      :loading="store.sandboxing && !runningSampleStepId"
                       :disabled="store.sandboxing || !profile"
                       @click="runSandboxDemo"
                     >
-                      Viết thử với DNA này
-                    </VBtn>
-                  </div>
-
-                  <!-- Kết quả sinh văn bản -->
-                  <div class="prompt-box pa-4 rounded">
-                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
-                      <div class="d-flex align-center gap-2">
-                        <span class="text-body-2 font-weight-medium text-high-emphasis">
-                          Văn bản sinh thử nghiệm
-                        </span>
-                        <VChip
-                          size="x-small"
-                          color="primary"
-                          variant="tonal"
-                          label
-                        >
-                          Tier: {{ (sandboxForm.targetTier || 'medium').toUpperCase() }}
-                        </VChip>
-                      </div>
-
-                      <div class="d-flex align-center gap-2">
-                        <VBtn
-                          variant="tonal"
-                          color="success"
-                          size="x-small"
-                          prepend-icon="tabler-bookmark-plus"
-                          :loading="savingSandboxSample"
-                          :disabled="!activeSandboxSample || savingSandboxSample"
-                          @click="saveCurrentSandboxSample"
-                        >
-                          Lưu bản thử
-                        </VBtn>
-
-                        <VBtn
-                          variant="text"
-                          color="primary"
-                          size="x-small"
-                          prepend-icon="tabler-copy"
-                          :disabled="!activeSandboxSample"
-                          @click="copyText(activeSandboxSample, 'Đã sao chép văn bản viết thử')"
-                        >
-                          Sao chép
-                        </VBtn>
-                      </div>
-                    </div>
-
-                    <div class="text-body-2 text-high-emphasis sandbox-output">
-                      <template v-if="!sandboxHasRan && !activeSandboxSample">
-                        <span class="text-caption text-medium-emphasis">
-                          Chưa có văn bản. Nhập chủ đề và bấm "Viết thử với DNA này" để sinh.
-                        </span>
-                      </template>
-                      <template v-else-if="sandboxHasRan && !activeSandboxSample">
-                        <span class="text-caption text-warning">
-                          AI chưa sinh được nội dung — thử chủ đề khác hoặc đợi vài giây rồi gọi lại.
-                        </span>
+                      <template v-if="currentTierPipelineSteps.length > 1">
+                        Bắt đầu Bước 1/{{ currentTierPipelineSteps.length }}: {{ cleanStepLabel(currentTierPipelineSteps[0]) }}
                       </template>
                       <template v-else>
-                        {{ activeSandboxSample }}
+                        Viết thử với DNA này
                       </template>
-                    </div>
+                    </VBtn>
                   </div>
+                </VCardText>
+              </VCard>
 
-                  <!-- Snapshot System Prompt đã gửi AI (xem để kiểm chứng) -->
-                  <div
-                    v-if="sandboxSnapshotPrompt"
-                    class="mt-4"
-                  >
-                    <div class="text-caption text-medium-emphasis mb-2 d-flex align-center">
-                      <VIcon
-                        icon="tabler-terminal-2"
-                        size="14"
-                        class="me-1"
-                      />
-                      System Prompt đã gửi cho AI (snapshot đã strip evidence):
-                    </div>
-                    <div class="prompt-box pa-3 rounded font-mono text-caption">
-                      <pre style="white-space: pre-wrap; margin: 0;">{{ sandboxSnapshotPrompt }}</pre>
-                    </div>
-                  </div>
-
-                  <!-- Danh sách các bản viết thử đã lưu trong DB để đọc và so sánh -->
-                  <div class="mt-6 pt-4 border-t">
-                    <div class="d-flex align-center justify-space-between mb-3">
-                      <div class="d-flex align-center gap-2">
+              <!-- VCARD 2: CÁC BÀI VĂN THỬ NGHIỆM (QUẢN LÝ TIẾN TRÌNH TỪNG STEP & BÀI ĐÃ HOÀN THÀNH) -->
+              <VCard>
+                <VCardItem>
+                  <template #title>
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                      <div class="d-flex align-center">
                         <VIcon
                           icon="tabler-bookmarks"
                           color="primary"
-                          size="18"
+                          size="22"
+                          class="me-2"
                         />
-                        <span class="text-subtitle-2 font-weight-bold text-high-emphasis">
-                          Các bản viết thử đã lưu ({{ savedSandboxSamples.length }})
+                        <span class="text-h6 font-weight-bold text-high-emphasis">
+                          Các bài văn thử nghiệm ({{ savedSandboxSamples.length }})
                         </span>
                       </div>
-                      <span class="text-caption text-medium-emphasis">
-                        Lưu cố định vào Database của hồ sơ
-                      </span>
-                    </div>
-
-                    <div
-                      v-if="!savedSandboxSamples.length"
-                      class="pa-4 rounded border border-dashed text-center text-caption text-medium-emphasis"
-                    >
-                      Chưa có bản viết thử nào được lưu. Sau khi chạy viết thử, bấm nút <strong>"Lưu bản thử"</strong> ở trên để ghim lại và đọc đối chiếu.
-                    </div>
-
-                    <div
-                      v-else
-                      class="d-flex flex-column gap-3"
-                    >
-                      <div
-                        v-for="(sample, idx) in savedSandboxSamples"
-                        :key="sample.id || idx"
-                        class="pa-4 rounded border bg-surface"
+                      <VChip
+                        size="x-small"
+                        color="primary"
+                        variant="tonal"
+                        label
                       >
-                        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
-                          <div class="d-flex align-center flex-wrap gap-2">
-                            <VChip
-                              size="x-small"
-                              color="secondary"
-                              variant="tonal"
-                              label
-                            >
-                              #{{ savedSandboxSamples.length - idx }}
-                            </VChip>
-                            <span class="text-body-2 font-weight-bold text-high-emphasis">
-                              {{ sample.topic }}
-                            </span>
-                            <VChip
-                              size="x-small"
-                              color="primary"
-                              variant="tonal"
-                              label
-                            >
-                              {{ (sample.target_tier || 'medium').toUpperCase() }}
-                            </VChip>
-                            <span
-                              v-if="sample.created_at"
-                              class="text-caption text-disabled"
-                            >
-                              {{ new Date(sample.created_at).toLocaleString('vi-VN') }}
-                            </span>
-                          </div>
+                        Theo dõi tiến trình từng Step &amp; So sánh
+                      </VChip>
+                    </div>
+                  </template>
+                  <template #subtitle>
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Các cấp độ có nhiều bước sẽ chạy tuần tự từng bước phân tích theo config cho đến giai đoạn viết văn cuối cùng thì hiển thị Hoàn thành
+                    </div>
+                  </template>
+                </VCardItem>
 
-                          <div class="d-flex align-center gap-1">
-                            <VBtn
-                              v-if="sample.system_prompt"
-                              variant="text"
-                              color="secondary"
-                              size="x-small"
-                              :prepend-icon="expandedSamplePrompts[sample.id] ? 'tabler-eye-off' : 'tabler-terminal-2'"
-                              @click="expandedSamplePrompts[sample.id] = !expandedSamplePrompts[sample.id]"
-                            >
-                              {{ expandedSamplePrompts[sample.id] ? 'Ẩn Prompt' : 'Xem Prompt' }}
-                            </VBtn>
+                <VCardText>
+                  <div
+                    v-if="!savedSandboxSamples.length"
+                    class="pa-6 rounded border border-dashed text-center text-caption text-medium-emphasis"
+                  >
+                    Chưa có bài văn thử nghiệm nào. Hãy nhập chủ đề ở card <strong>"Chủ đề thử nghiệm mới"</strong> phía trên để khởi tạo bản ghi đầu tiên.
+                  </div>
 
-                            <VBtn
-                              variant="text"
-                              color="primary"
-                              size="x-small"
-                              prepend-icon="tabler-copy"
-                              @click="copyText(sample.text, 'Đã sao chép bản viết thử')"
-                            >
-                              Sao chép
-                            </VBtn>
+                  <div
+                    v-else
+                    class="d-flex flex-column gap-4"
+                  >
+                    <div
+                      v-for="(sample, idx) in savedSandboxSamples"
+                      :key="sample.id || idx"
+                      class="pa-4 rounded border bg-surface"
+                      :class="sample.status === 'completed' ? 'sample-card--completed' : 'sample-card--in-progress'"
+                    >
+                      <!-- 1. HEADER BẢN GHI: Số thứ tự, Chủ đề, Tier, Trạng thái Step / Hoàn thành -->
+                      <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
+                        <div class="d-flex align-center flex-wrap gap-2">
+                          <VChip
+                            size="x-small"
+                            color="secondary"
+                            variant="tonal"
+                            label
+                          >
+                            #{{ savedSandboxSamples.length - idx }}
+                          </VChip>
+                          <span class="text-body-2 font-weight-bold text-high-emphasis">
+                            {{ sample.topic }}
+                          </span>
+                          <VChip
+                            size="x-small"
+                            color="primary"
+                            variant="tonal"
+                            label
+                          >
+                            {{ (sample.target_tier || 'medium').toUpperCase() }}
+                          </VChip>
 
-                            <VBtn
-                              variant="text"
-                              color="error"
-                              size="x-small"
-                              icon="tabler-trash"
-                              :loading="deletingSandboxSampleId === sample.id"
-                              @click="removeSandboxSample(sample.id)"
-                            />
-                          </div>
+                          <!-- Badge trạng thái tiến trình bước hoặc Hoàn thành -->
+                          <VChip
+                            v-if="sample.status === 'completed'"
+                            size="x-small"
+                            color="success"
+                            variant="flat"
+                            label
+                            prepend-icon="tabler-circle-check"
+                          >
+                            Hoàn thành ({{ sample.steps?.length || 1 }}/{{ sample.steps?.length || 1 }} bước)
+                          </VChip>
+                          <VChip
+                            v-else
+                            size="x-small"
+                            color="warning"
+                            variant="flat"
+                            label
+                            prepend-icon="tabler-loader"
+                          >
+                            Đang ở Bước {{ (sample.current_step_index ?? 0) + 1 }}/{{ sample.steps?.length || 2 }}:
+                            {{ cleanStepLabel(sample.steps?.[sample.current_step_index ?? 0]) }}
+                          </VChip>
+
+                          <span
+                            v-if="sample.created_at"
+                            class="text-caption text-disabled"
+                          >
+                            {{ new Date(sample.created_at).toLocaleString('vi-VN') }}
+                          </span>
                         </div>
 
-                        <div
-                          class="text-body-2 text-high-emphasis pa-3 rounded prompt-box"
-                          style="white-space: pre-wrap;"
-                        >{{ sample.text }}</div>
+                        <!-- Cụm nút hành động bên phải header -->
+                        <div class="d-flex align-center gap-1">
+                          <VBtn
+                            variant="tonal"
+                            color="primary"
+                            size="x-small"
+                            prepend-icon="tabler-eye"
+                            @click="openSandboxSampleDialog(sample)"
+                          >
+                            Xem bài viết
+                          </VBtn>
 
-                        <div
-                          v-if="sample.system_prompt && expandedSamplePrompts[sample.id]"
-                          class="mt-2 pa-3 rounded prompt-box font-mono text-caption"
+                          <VBtn
+                            v-if="sample.status === 'completed' && !sample.saved_to_db"
+                            variant="tonal"
+                            color="success"
+                            size="x-small"
+                            prepend-icon="tabler-bookmark-plus"
+                            :loading="savingSampleId === sample.id"
+                            @click="saveCurrentSandboxSample(sample)"
+                          >
+                            Lưu bản thử
+                          </VBtn>
+
+                          <VBtn
+                            v-if="sample.text"
+                            variant="text"
+                            color="primary"
+                            size="x-small"
+                            prepend-icon="tabler-copy"
+                            @click="copyText(sample.text, 'Đã sao chép bản viết thử')"
+                          >
+                            Sao chép
+                          </VBtn>
+
+                          <VBtn
+                            variant="text"
+                            color="error"
+                            size="x-small"
+                            icon="tabler-trash"
+                            :loading="deletingSandboxSampleId === sample.id"
+                            @click="removeSandboxSample(sample.id)"
+                          />
+                        </div>
+                      </div>
+
+                      <!-- 2. THANH TIẾN TRÌNH CÁC BƯỚC (PIPELINE STEPPER THEO CONFIG) -->
+                      <div
+                        v-if="sample.steps && sample.steps.length > 1"
+                        class="d-flex align-center flex-wrap gap-2 mb-3 pa-2 rounded bg-var-theme-background"
+                      >
+                        <template
+                          v-for="(st, sIdx) in sample.steps"
+                          :key="`${sample.id}-step-${st.step}`"
                         >
-                          <div class="text-caption text-medium-emphasis mb-1 font-weight-bold">
-                            System Prompt lúc chạy bản này:
+                          <VChip
+                            size="x-small"
+                            :color="sIdx < sample.current_step_index || sample.status === 'completed'
+                              ? 'success'
+                              : (sIdx === sample.current_step_index ? 'warning' : 'secondary')"
+                            :variant="sIdx <= sample.current_step_index ? 'flat' : 'tonal'"
+                            label
+                          >
+                            <VIcon
+                              :icon="sIdx < sample.current_step_index || sample.status === 'completed'
+                                ? 'tabler-check'
+                                : (sIdx === sample.current_step_index ? 'tabler-sparkles' : 'tabler-clock')"
+                              size="12"
+                              class="me-1"
+                            />
+                            Bước {{ sIdx + 1 }}: {{ cleanStepLabel(st) }}
+                          </VChip>
+                          <VIcon
+                            v-if="sIdx < sample.steps.length - 1"
+                            icon="tabler-chevron-right"
+                            size="14"
+                            class="text-disabled"
+                          />
+                        </template>
+                      </div>
+
+                      <!-- 3. NÚT BẤM CHUYỂN SANG BƯỚC PHÂN TÍCH TIẾP THEO / VIẾT VĂN CUỐI CÙNG (KHI ĐANG IN_PROGRESS) -->
+                      <div
+                        v-if="sample.status !== 'completed' && sample.steps && sample.current_step_index + 1 < sample.steps.length"
+                        class="pa-3 rounded border border-dashed d-flex align-center justify-space-between flex-wrap gap-3 bg-var-theme-background"
+                      >
+                        <div class="d-flex align-center gap-2">
+                          <VAvatar
+                            color="primary"
+                            variant="tonal"
+                            size="32"
+                            rounded
+                          >
+                            <VIcon
+                              :icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-arrow-right'"
+                              size="18"
+                            />
+                          </VAvatar>
+                          <div>
+                            <div class="text-body-2 font-weight-bold text-high-emphasis">
+                              Sẵn sàng cho Bước {{ sample.current_step_index + 2 }}/{{ sample.steps.length }}:
+                              {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
+                            </div>
+                            <div class="text-caption text-medium-emphasis">
+                              {{ sample.steps[sample.current_step_index + 1]?.description || 'Sử dụng kết quả phân tích ở bước trước kết hợp với DNA văn phong để xử lý bước tiếp theo.' }}
+                            </div>
                           </div>
-                          <pre style="white-space: pre-wrap; margin: 0;">{{ sample.system_prompt }}</pre>
                         </div>
+
+                        <VBtn
+                          color="primary"
+                          variant="flat"
+                          size="small"
+                          :prepend-icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-player-track-next'"
+                          :loading="runningSampleStepId === sample.id"
+                          :disabled="Boolean(runningSampleStepId)"
+                          @click="runNextSandboxStep(sample)"
+                        >
+                          <template v-if="sample.steps[sample.current_step_index + 1]?.is_terminal">
+                            Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }} (Viết văn hoàn chỉnh)
+                          </template>
+                          <template v-else>
+                            Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }}: {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
+                          </template>
+                        </VBtn>
                       </div>
                     </div>
                   </div>
@@ -3367,11 +3677,12 @@ onBeforeUnmount(() => {
                             class="text-body-2 font-weight-bold"
                             :class="`text-${slider.color}`"
                           >
-                            {{ slider.value }}%
+                            {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                           </span>
                         </div>
                         <VSlider
-                          v-model="slider.value"
+                          @update:model-value="slider.value = $event"
+                              :model-value="slider.value ?? 50"
                           :min="0"
                           :max="100"
                           :step="1"
@@ -3511,11 +3822,12 @@ onBeforeUnmount(() => {
                             class="text-body-2 font-weight-bold"
                             :class="`text-${slider.color}`"
                           >
-                            {{ slider.value }}%
+                            {{ slider.value == null ? 'Chưa xác định' : `${slider.value}%` }}
                           </span>
                         </div>
                         <VSlider
-                          v-model="slider.value"
+                          @update:model-value="slider.value = $event"
+                              :model-value="slider.value ?? 50"
                           :min="0"
                           :max="100"
                           :step="1"
@@ -3536,6 +3848,17 @@ onBeforeUnmount(() => {
         </VWindowItem>
       </VWindow>
     </template>
+
+    <!-- Dialog xem chi tiết bài văn thử nghiệm (Dữ liệu động theo chuẩn §4) -->
+    <SandboxSampleDetailDialog
+      v-model="sandboxDetailDialogOpen"
+      :sample="activeDialogSample"
+      :profile="profile"
+      :running-step="Boolean(runningSampleStepId)"
+      @run-next-step="runNextSandboxStep"
+      @refresh-outline="refreshSandboxOutline"
+      @copy-text="txt => copyText(txt, 'Đã sao chép nội dung')"
+    />
 
     <!-- Snackbar -->
     <VSnackbar
@@ -3775,6 +4098,16 @@ onBeforeUnmount(() => {
 .ver-item--current {
   border-color: rgb(var(--v-theme-primary)) !important;
   background: rgba(var(--v-theme-primary), 0.04);
+}
+
+/* Viền nổi bật cho bản ghi đang chạy từng step (in_progress) trong Phòng thử DNA */
+.sample-card--in-progress {
+  border-color: rgba(var(--v-theme-warning), 0.55) !important;
+  background: rgba(var(--v-theme-warning), 0.02);
+}
+
+.sample-card--completed {
+  border-color: rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .font-mono {

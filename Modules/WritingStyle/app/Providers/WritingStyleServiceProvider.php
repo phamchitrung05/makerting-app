@@ -72,6 +72,9 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
         parent::register();
 
         $this->app->bind(WritingStyleCompilerContract::class, WritingProfileSnapshotService::class);
+        if ($this->app->runningInConsole()) {
+            $this->commands([\Modules\WritingStyle\Console\EvaluateWritingPrompt::class]);
+        }
     }
 
     /**

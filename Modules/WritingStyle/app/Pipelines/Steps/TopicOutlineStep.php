@@ -5,6 +5,10 @@ namespace Modules\WritingStyle\Pipelines\Steps;
 use Modules\CoreAi\Contracts\CoreAiGatewayContract;
 use Modules\CoreAi\DTOs\AiStructuredRequest;
 use Modules\WritingStyle\Models\WritingProfile;
+use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
+use Modules\WritingStyle\DTOs\WritingBrief;
+use Modules\WritingStyle\Pipelines\WritingContentPlan;
+use Modules\WritingStyle\Services\PromptV3;
 use Modules\WritingStyle\Pipelines\Contracts\SandboxStepContract;
 
 /**
@@ -72,6 +76,10 @@ class TopicOutlineStep implements SandboxStepContract
      */
     public function validateArtifact(array $artifact): bool
     {
+        if (PromptV3::enabled() && ($artifact['schema_version'] ?? null) === 3) {
+            return is_array($artifact['sections'] ?? null) && $artifact['sections'] !== [];
+        }
+
         $thesis = trim((string) ($artifact['thesis'] ?? ''));
         if ($thesis === '') {
             return false;
@@ -101,6 +109,10 @@ class TopicOutlineStep implements SandboxStepContract
      */
     public function compileToPromptBlock(array $artifact): string
     {
+        if (PromptV3::enabled() && ($artifact['schema_version'] ?? null) === 3) {
+            return WritingContentPlan::promptBlock($artifact);
+        }
+
         $lines = ['PHÂN TÍCH CHỦ ĐỀ & DÀN Ý ĐÃ DUYỆT:'];
 
         $thesis = trim((string) ($artifact['thesis'] ?? ''));
@@ -161,6 +173,10 @@ class TopicOutlineStep implements SandboxStepContract
         array $upstreamPromptBlocks,
         array $overrides = [],
     ): array {
+        if (PromptV3::enabled()) {
+            return $this->executeV3($profile, $topic, $targetTier, $overrides);
+        }
+
         $cfg = (array) config('writingstyle.prompts.steps.topic_outline', []);
         $tierLabel = (string) (\Modules\WritingStyle\Services\WritingProfileDefinition::tierLabel($targetTier));
         $sentenceHint = $tierLabel;
@@ -208,6 +224,43 @@ class TopicOutlineStep implements SandboxStepContract
      * additionalProperties:false ở mọi tầng.
      * =====================================================================
      */
+    private function executeV3(WritingProfile $profile, string $topic, string $tier, array $overrides): array
+    {
+        $brief = WritingBrief::fromInput($topic, $tier, $overrides);
+        $snapshot = app(WritingStyleCompilerContract::class)->buildSnapshot(
+            $profile,
+            $tier,
+            (int) ($overrides['target_sentences'] ?? 0),
+            array_replace($overrides, ['brief' => $brief->data]),
+        );
+        $system = (string) config('writingstyle.v3.planner');
+        $prompt = PromptV3::json(['brief' => $brief->data, 'style_summary' => $snapshot->styleSummary]);
+        PromptV3::checkContext($system, $prompt);
+        $options = ['temperature' => (float) config('writingstyle.v3.planner_temperature'), 'max_tokens' => 4096];
+        $response = $this->ai->executeStructured(AiStructuredRequest::fromPrompt(
+            $prompt,
+            system: $system,
+            schema: WritingContentPlan::schema(),
+            options: $options,
+            module: 'writingstyle',
+            operation: 'sandbox_step_topic_outline_v3',
+        ));
+        PromptV3::requireComplete($response);
+        $plan = WritingContentPlan::validate($response->data ?? [], $brief);
+
+        return [
+            ...$plan,
+            'schema_version' => 3,
+            'input_fingerprint' => WritingContentPlan::fingerprint($snapshot, $brief),
+            'ai_run_id' => $this->ai->lastRun()?->id,
+            'provenance' => array_replace($snapshot->provenance, [
+                'schema_version' => 3,
+                'model' => $response->remoteModelId,
+                'options' => $options,
+            ]),
+        ];
+    }
+
     protected function outputSchema(): array
     {
         return [

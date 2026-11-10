@@ -57,8 +57,7 @@ function submit() {
           variant="tonal"
           class="mb-4"
         >
-          Đã gửi giải mã — đang phân tích trong nền (demo). Khi xong, profile mới
-          sẽ hiện trong danh sách.
+          Đang chuyển đến trang duyệt kết quả phân tích.
         </VAlert>
         <AppTextField
           v-model="name"
@@ -69,7 +68,7 @@ function submit() {
         <div class="d-flex gap-4 mb-4">
           <AppSelect
             v-model="sourceType"
-            :items="[{title:'Dán nội dung',value:'paste'},{title:'Từ URL',value:'url'},{title:'Từ file',value:'file'}]"
+            :items="[{title:'Dán nội dung',value:'paste'},{title:'Từ URL',value:'url'},{title:'Từ file',value:'file',props:{disabled:true}}]"
             label="Nguồn"
             style="max-width:220px"
           />

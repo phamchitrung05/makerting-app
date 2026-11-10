@@ -4,6 +4,7 @@ namespace Modules\WritingStyle\Services;
 
 use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
 use Modules\WritingStyle\DTOs\WritingProfileSnapshotDto;
+use Modules\WritingStyle\DTOs\WritingBrief;
 use Modules\WritingStyle\Models\WritingProfile;
 
 /**
@@ -34,6 +35,10 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         $tier = in_array($targetTier, WritingProfile::TIERS, true)
             ? $targetTier
             : ($profile->dominant_tier ?? WritingProfile::TIER_MEDIUM);
+
+        if (PromptV3::enabled()) {
+            return $this->buildV3Snapshot($profile, $tier, $targetSentences, $overrides);
+        }
 
         // Lọc rules theo tier + loại bỏ evidence.
         $rules = $profile->snapshotRules($tier);
@@ -95,6 +100,85 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
             rulesJson: $rules,
             sentenceHint: $sentenceHint,
             evidenceStripped: true,
+        );
+    }
+
+    private function buildV3Snapshot(WritingProfile $profile, string $tier, int $targetSentences, array $overrides): WritingProfileSnapshotDto
+    {
+        $brief = WritingBrief::fromInput('', $tier, array_replace($overrides, ['target_sentences' => $targetSentences]));
+        $analysis = $profile->style_analysis_json ?? [];
+        $rules = array_intersect_key($profile->rules_json ?? [], config('writingstyle.v3.questions'));
+        $format = $brief->data['format'];
+        foreach (['headings', 'bullets'] as $key) {
+            if (($format[$key] ?? null) === false) {
+                unset($rules[$key]);
+            }
+        }
+
+        $features = [];
+        foreach ($rules as $key => $text) {
+            if (! is_string($text) || trim($text) === '') {
+                unset($rules[$key]);
+                continue;
+            }
+            $observed = $analysis['features'][$key] ?? null;
+            $state = ($observed['description'] ?? null) === $text ? $observed['state'] : 'profile';
+            if ($state !== 'unknown') {
+                $features[$key] = ['description' => $text, 'state' => $state];
+            }
+        }
+
+        $guidance = [];
+        $seen = array_fill_keys(array_column($features, 'description'), true);
+        foreach (['style_instructions', 'voice_texture_instructions', 'tone_instructions'] as $key) {
+            $isOverride = array_key_exists($key, $overrides);
+            $value = $isOverride ? $overrides[$key] : $profile->{$key};
+            foreach (preg_split('/\R/u', (string) $value) ?: [] as $line) {
+                $line = trim($line);
+                if ($line !== '' && ! isset($seen[$line])) {
+                    $guidance[$key]['lines'][] = $line;
+                    $guidance[$key]['source'] = $isOverride ? 'current_request' : 'profile';
+                    $seen[$line] = true;
+                }
+            }
+        }
+
+        $axes = [];
+        $definitions = config('writingstyle.v3.axes');
+        foreach (['voice_texture_sliders_json' => 'voice_texture_sliders_json', 'tone_overrides' => 'tone_sliders_json'] as $key => $field) {
+            $stored = (array) $profile->{$field};
+            $current = array_key_exists($key, $overrides)
+                ? ($overrides[$key] === null ? [] : array_replace($stored, $overrides[$key]))
+                : $stored;
+            $axisKeys = $key === 'tone_overrides' ? WritingProfile::TONE_AXIS_KEYS : WritingProfile::VOICE_TEXTURE_KEYS;
+            foreach (array_intersect_key($current, array_flip($axisKeys)) as $axis => $score) {
+                if ($score !== null && isset($definitions[$axis])) {
+                    $axes[$axis] = [
+                        'score' => (int) $score,
+                        'anchors' => $definitions[$axis],
+                        'source' => isset($overrides[$key]) && array_key_exists($axis, $overrides[$key]) ? 'current_request' : 'profile',
+                    ];
+                }
+            }
+        }
+
+        $style = ['features' => $features, 'guidance' => $guidance, 'axes' => $axes];
+        $system = (string) config('writingstyle.v3.compiler');
+        $prompt = $system."\n\nPhong cách hiệu lực:\n".PromptV3::json($style);
+
+        return new WritingProfileSnapshotDto(
+            profileId: (int) $profile->id,
+            name: (string) $profile->name,
+            targetTier: $tier,
+            systemPrompt: $prompt,
+            rulesJson: $rules,
+            sentenceHint: $brief->lengthHint(),
+            evidenceStripped: true,
+            styleSummary: [
+                'features' => array_intersect_key($features, array_flip(['tone', 'pronouns', 'opening', 'structure_patterns', 'transitions', 'ending', 'bullets', 'headings'])),
+                'guidance' => array_intersect_key($guidance, array_flip(['style_instructions', 'tone_instructions'])),
+            ],
+            provenance: ['prompt_version' => 3, 'schema_version' => $analysis['schema_version'] ?? 'legacy', 'compiler_version' => 3, 'profile_id' => $profile->id, 'profile_version' => $profile->version],
         );
     }
 
@@ -188,7 +272,7 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         $lines = ['THÔNG SỐ CHẤT VĂN & ĐỘ TỰ NHIÊN (VOICE TEXTURE CALIBRATION):'];
 
         foreach ($axes as $key => $meta) {
-            if (! array_key_exists($key, $sliders)) {
+            if (! isset($sliders[$key])) {
                 continue;
             }
 
@@ -223,7 +307,7 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         $lines = ['HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):'];
 
         foreach ($axes as $key => $label) {
-            if (! array_key_exists($key, $toneOverrides)) {
+            if (! isset($toneOverrides[$key])) {
                 continue;
             }
 

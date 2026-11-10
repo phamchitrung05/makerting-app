@@ -25,6 +25,7 @@ import TiptapEditor from '@core/components/TiptapEditor.vue'
 import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
 import { firstErrorMessage } from '@/utils/api'
 import { useWritingStyleStore } from '../../../stores/writingStyle'
+import { htmlToText, textToHtml } from '../../../utils/sampleText.js'
 
 definePage({ meta: { layout: 'default' } })
 
@@ -149,22 +150,6 @@ const selectedFile = reactive({
   status: '',
 })
 
-function htmlToText(html) {
-  const BLOCK_TAGS = 'p|li|h[1-6]|div|blockquote|pre|tr|table|ul|ol'
-
-  return String(html ?? '')
-    .replace(new RegExp(`</(?:${BLOCK_TAGS})>`, 'gi'), '\n\n')
-    .replace(/<(?:br|hr)[^>]*>/gi, '\n')
-    .replace(new RegExp(`<(?:${BLOCK_TAGS})[^>]*>`, 'gi'), '\n\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .trim()
-}
-
 const wordCount = computed(() => {
   const t = htmlToText(articleContent.value)
   if (!t) return 0
@@ -220,13 +205,14 @@ const lastSubmittedAnalysisId = ref(null)
  * profile vào run log (analysis.draft_profile_id) + suy origin=reference. */
 const lastSucceededAnalysisId = ref(null)
 const rawRulesJson = ref(null)
+const styleAnalysis = ref(null)
 const isAnalyzing = computed(() => store.analyzing || store.analysisPolling)
 
 const hasAnalysisResult = computed(() => !!rawRulesJson.value)
 
 /* Các khóa bị lược bỏ theo tier đang chọn */
 const droppedRuleKeys = computed(() => {
-  return TIER_DROP_RULES[selectedDnaTierFilter.value] ?? []
+  return styleAnalysis.value?.schema_version === 3 ? [] : (TIER_DROP_RULES[selectedDnaTierFilter.value] ?? [])
 })
 
 /* Câu hỏi giải mã từ API: key -> question */
@@ -407,6 +393,7 @@ function applyAnalysisResult(analysis) {
     : {}
 
   rawRulesJson.value = rulesObj
+  styleAnalysis.value = result.style_analysis_json ?? null
 
   const backendTier = analysis?.detected_tier || result.detected_tier || detectedTier.value
   if (backendTier) {
@@ -424,7 +411,7 @@ function applyAnalysisResult(analysis) {
     .map(key => ({
       key,
       title: ruleLabel(key),
-      desc: formatRuleDesc(rulesObj[key]),
+      desc: `${styleAnalysis.value?.features?.[key]?.state === 'inferred' ? 'Suy luận: ' : ''}${formatRuleDesc(rulesObj[key])}`,
     }))
 
   const evidencesRaw = Array.isArray(result.evidence_json) ? result.evidence_json : []
@@ -448,7 +435,7 @@ function applyAnalysisResult(analysis) {
 
   if (result.voice_texture_sliders_json && typeof result.voice_texture_sliders_json === 'object') {
     for (const k of Object.keys(voiceTextureSliders)) {
-      if (typeof result.voice_texture_sliders_json[k] === 'number') {
+      if (Object.hasOwn(result.voice_texture_sliders_json, k)) {
         voiceTextureSliders[k] = result.voice_texture_sliders_json[k]
       }
     }
@@ -456,7 +443,7 @@ function applyAnalysisResult(analysis) {
 
   if (result.tone_sliders_json && typeof result.tone_sliders_json === 'object') {
     for (const k of Object.keys(toneSliders)) {
-      if (typeof result.tone_sliders_json[k] === 'number') {
+      if (Object.hasOwn(result.tone_sliders_json, k)) {
         toneSliders[k] = result.tone_sliders_json[k]
       }
     }
@@ -535,11 +522,7 @@ async function awaitAndApply(dispatched, okMessage) {
 async function runAnalysis() {
   if (isAnalyzing.value) return
 
-  const plainText = articleContent.value
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+  const plainText = htmlToText(articleContent.value)
 
   if (plainText.length < 50) {
     snack.text = 'Nội dung bài viết mẫu phải có tối thiểu 50 ký tự để giải mã DNA'
@@ -620,7 +603,7 @@ async function fetchFromUrl() {
     URL_PREVIEW_META.fetchedAt = 'Vừa trích xuất xong'
 
     if (dispatched?.reference_text) {
-      articleContent.value = `<p>${String(dispatched.reference_text).replace(/\n+/g, '</p><p>')}</p>`
+      articleContent.value = textToHtml(dispatched.reference_text)
     }
 
     await awaitAndApply(dispatched, 'Đã trích xuất & giải mã DNA từ URL thành công')
@@ -651,12 +634,7 @@ function handleFileChange(event) {
   reader.onload = () => {
     const rawText = String(reader.result || '').trim()
     if (rawText) {
-      const paragraphs = rawText
-        .split(/\r?\n\r?\n/)
-        .map(p => `<p>${p.replace(/\r?\n/g, '<br>')}</p>`)
-        .join('')
-
-      articleContent.value = paragraphs
+      articleContent.value = textToHtml(rawText)
       selectedFile.words = `${wordCount.value} từ`
     }
     snack.text = `Đã nạp nội dung từ file "${file.name}"`
@@ -776,6 +754,19 @@ onMounted(async () => {
     snack.color = 'error'
     snack.show = true
   }
+
+  const imported = store.pendingImport
+  store.pendingImport = null
+  if (!imported) return
+
+  profileForm.name = imported.name ?? ''
+  if (imported.source_type === 'url') {
+    sourceUrl.value = imported.source_url ?? ''
+    await fetchFromUrl()
+  } else {
+    articleContent.value = textToHtml(imported.reference_text ?? '')
+    await runAnalysis()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -831,6 +822,11 @@ onBeforeUnmount(() => {
     </div>
 
     <VRow>
+      <VCol v-if="styleAnalysis?.uncertainties?.length" cols="12">
+        <VAlert type="info" variant="tonal" title="Những điểm chưa đủ dữ liệu">
+          <div v-for="item in styleAnalysis.uncertainties" :key="item">{{ item }}</div>
+        </VAlert>
+      </VCol>
       <!-- ===== CỘT TRÁI: Nhập bài viết & Kết quả phân tích chi tiết ===== -->
       <VCol
         cols="12"
@@ -1584,7 +1580,7 @@ onBeforeUnmount(() => {
                     variant="tonal"
                     label
                   >
-                    {{ label }}: {{ voiceTextureSliders[key] }}%
+                    {{ label }}: {{ voiceTextureSliders[key] == null ? 'Chưa xác định' : `${voiceTextureSliders[key]}%` }}
                   </VChip>
                 </div>
               </template>
