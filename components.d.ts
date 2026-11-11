@@ -417,7 +417,6 @@ declare module 'vue' {
     UserInfoEditDialog: typeof import('./resources/js/components/dialogs/UserInfoEditDialog.vue')['default']
     UsersRolesTab: typeof import('./Modules/Settings/resources/js/components/tabs/UsersRolesTab.vue')['default']
     UserUpgradePlanDialog: typeof import('./resources/js/components/dialogs/UserUpgradePlanDialog.vue')['default']
-    VueApexCharts: typeof import('vue3-apexcharts')['default']
     WritingProfileEdit: typeof import('./Modules/WritingStyle/resources/js/components/WritingProfileEdit.vue')['default']
     WritingProfileList: typeof import('./Modules/WritingStyle/resources/js/components/WritingProfileList.vue')['default']
     WritingSandboxCard: typeof import('./Modules/WritingStyle/resources/js/components/WritingSandboxCard.vue')['default']

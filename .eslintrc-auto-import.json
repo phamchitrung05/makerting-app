@@ -370,6 +370,9 @@
     "useMediaAssetStore": true,
     "useAiConfigStore": true,
     "useWritingStyleStore": true,
-    "useCardLoading": true
+    "useCardLoading": true,
+    "htmlToText": true,
+    "mergeRuleEdits": true,
+    "textToHtml": true
   }
 }
