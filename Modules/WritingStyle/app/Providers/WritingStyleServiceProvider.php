@@ -14,7 +14,7 @@ use Modules\WritingStyle\Models\WritingProfile;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Service Provider khởi động của module WritingStyle (Tầng 2).
+ * CHỨC NĂNG FILE: Đăng ký compiler, CLI và các registry của module WritingStyle.
  * =====================================================================
  *
  * Phân tích bài mẫu trích xuất 16 quy tắc văn phong, kiểm chứng trích dẫn và xuất snapshot không đạo văn.
@@ -22,12 +22,17 @@ use Modules\WritingStyle\Models\WritingProfile;
  * Provider do nwidart/laravel-modules sinh và quản lý: gom các provider con
  * (Event, Route) và là nơi đăng ký binding, registry, event listener của module.
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - register(): đăng ký binding container của module
- * - provides(): danh sách service provider cung cấp
+ * - register(): Đăng ký binding compiler và command đánh giá khi chạy console.
+ * - boot(): Đăng ký adapter TaskCenter, alias slug và quyền module.
+ *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : cấu hình module từ module.json và protected $name/$nameLower
- * - OUTPUT: đăng ký providers con và binding vào container khi boot
+ * - INPUT : Container, module config và registry dùng chung.
+ * - OUTPUT: Binding compiler, command eval và các adapter/permission/slug registry.
+ *
+ * BỐI CẢNH SỬ DỤNG: Laravel Modules gọi provider trong quá trình khởi động ứng dụng.
  * =====================================================================
  */
 class WritingStyleServiceProvider extends ModuleServiceProvider
@@ -61,10 +66,28 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Đăng ký binding compiler và command đánh giá khi chạy console
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Đăng ký binding container của module.
      * =====================================================================
      * Bind WritingStyleCompilerContract -> WritingProfileSnapshotService
      * (compiler duy nhất cấp DNA văn phong đã strip evidence cho AI).
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Thay đổi container và danh sách command trong ứng dụng.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi container/provider có thể truyền lên. Không mở transaction.
      * =====================================================================
      */
     public function register(): void
@@ -79,7 +102,25 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Đăng ký adapter TaskCenter, alias slug và quyền module
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Đăng ký adapter TaskCenter để popup hiển thị task.
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Cập nhật registry trong bộ nhớ; parent provider khởi tạo tài nguyên module.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi registry/provider có thể truyền lên. Không mở transaction.
      * =====================================================================
      */
     public function boot(): void
@@ -108,7 +149,7 @@ class WritingStyleServiceProvider extends ModuleServiceProvider
 
     /**
      * Define module schedules.
-     * 
+     *
      * @param $schedule
      */
     // protected function configureSchedules(Schedule $schedule): void

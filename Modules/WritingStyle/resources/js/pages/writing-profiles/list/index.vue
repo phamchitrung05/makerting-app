@@ -1,9 +1,10 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Trang quản lý DNA Văn phong (Writing Profiles).
+  CHỨC NĂNG FILE: Danh sách Writing Profile lấy từ backend.
   =====================================================================
-  Hiển thị danh sách hồ sơ văn phong (16 RULE_KEYS) — giao diện demo tĩnh
-  chờ nối API /api/v1/writing-style/profiles (P2-02).
+
+  Hiển thị danh sách hồ sơ văn phong (16 RULE_KEYS) — giao diện dùng dữ liệu API
+  nạp qua store từ API /v1/admin/writing-style/writing-profiles.
 
   CHUẨN UI (docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §2–3):
   - Icon Tabler (tabler-*), KHÔNG mdi-*.
@@ -13,9 +14,21 @@
   - Không inline font-size / !important — dùng text-h4/body/caption.
   - Spacing class Vuetify chuẩn (gap-2, pa-4, mb-3...).
 
-  CÁC HÀM/METHOD TRONG FILE: chỉ filter computed (demo).
-  INPUT/OUTPUT: route /admin/writing-style/writing-profiles/list.
-  SIDE EFFECT: không.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - fmtDate(): Định dạng ngày cập nhật theo locale vi-VN.
+  - dnaScore(): Ước tính độ đầy đủ DNA theo số giá trị có nội dung chia cho 16.
+  - toCardProps(): Ánh xạ resource hồ sơ sang dữ liệu card danh sách.
+  - onAnalyze(): Chuyển payload nhập mẫu sang trang tạo để phân tích và duyệt.
+  - openReverseDialog(): Mở dialog nhập bài mẫu trên trang danh sách.
+  - openCreateDialog(): Chuyển tới trang tạo Writing Profile.
+  - scoreColor(): Cấp màu primary cho thanh độ đầy đủ DNA.
+  - Computed: profileCards, filteredProfiles, kpiCards, statusTabs, sortedProfiles, pagedProfiles.
+  - Watcher/lifecycle: onMounted, onBeforeUnmount.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : Route, form và state useWritingStyleStore; không có props/emits riêng.
+  - OUTPUT: Render UI, gọi store/API, cập nhật snackbar và điều hướng theo thao tác.
   =====================================================================
 -->
 <template>
@@ -402,6 +415,24 @@ const STATUS_META = {
   archived: { label: 'Đã lưu trữ',   color: 'secondary' },
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Định dạng ngày cập nhật theo locale vi-VN
+ * =====================================================================
+ *
+ * INPUT:
+ * - iso
+ *
+ * OUTPUT:
+ * - string ngày hiển thị hoặc chuỗi đầu vào khi xảy ra lỗi
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý ngày trong bộ nhớ.
+ *
+ * EXCEPTION:
+ * - Trả rỗng khi không có ngày; bắt lỗi định dạng.
+ * =====================================================================
+ */
 function fmtDate(iso) {
   if (!iso) return ''
   try {
@@ -411,6 +442,24 @@ function fmtDate(iso) {
 
 /* Độ hoàn thiện DNA = % trong số 16 RULE_KEYS có nội dung (không rỗng).
  * Với profile 'manual' mới tạo có thể < 100%. */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Ước tính độ đầy đủ DNA theo số giá trị có nội dung chia cho 16
+ * =====================================================================
+ *
+ * INPUT:
+ * - rules
+ *
+ * OUTPUT:
+ * - number tỷ lệ làm tròn; 0 khi rules không hợp lệ
+ *
+ * SIDE EFFECT:
+ * - Chỉ đếm trường; đây không phải điểm chất lượng văn phong.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function dnaScore(rules) {
   if (!rules || typeof rules !== 'object') return 0
   const total = 16
@@ -424,6 +473,24 @@ function dnaScore(rules) {
   return Math.round((filled / total) * 100)
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Ánh xạ resource hồ sơ sang dữ liệu card danh sách
+ * =====================================================================
+ *
+ * INPUT:
+ * - p
+ *
+ * OUTPUT:
+ * - Object nhãn/trạng thái/tags/điểm/ngày/icon/màu
+ *
+ * SIDE EFFECT:
+ * - Đọc metadata, fallback tier/origin và trạng thái archived khi tắt hồ sơ.
+ *
+ * EXCEPTION:
+ * - Không gọi API; caller cung cấp resource hồ sơ.
+ * =====================================================================
+ */
 function toCardProps(p) {
   const tier = TIER_META[p.dominant_tier] ?? TIER_META.medium
 
@@ -532,18 +599,90 @@ const pagedProfiles = computed(() => {
   return sortedProfiles.value.slice(start, start + itemsPerPage.value)
 })
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển payload nhập mẫu sang trang tạo để phân tích và duyệt
+ * =====================================================================
+ *
+ * INPUT:
+ * - payload
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gán store.pendingImport, đóng dialog và điều hướng đến trang create.
+ *
+ * EXCEPTION:
+ * - Lỗi điều hướng có thể được router xử lý.
+ * =====================================================================
+ */
 function onAnalyze(payload) {
   store.pendingImport = payload
   reverseDialog.value = false
   openCreateDialog()
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Mở dialog nhập bài mẫu trên trang danh sách
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đặt reverseDialog=true.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function openReverseDialog() { reverseDialog.value = true }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển tới trang tạo Writing Profile
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi router.push route create.
+ *
+ * EXCEPTION:
+ * - Lỗi điều hướng do router quản lý.
+ * =====================================================================
+ */
 function openCreateDialog() {
   router.push({ name: 'admin-writing-style-writing-profiles-create' })
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Cấp màu primary cho thanh độ đầy đủ DNA
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - string primary
+ *
+ * SIDE EFFECT:
+ * - Không đổi state hoặc gọi API.
+ *
+ * EXCEPTION:
+ * - Không ném lỗi chủ động.
+ * =====================================================================
+ */
 const scoreColor = () => 'primary'
 
 onMounted(() => {

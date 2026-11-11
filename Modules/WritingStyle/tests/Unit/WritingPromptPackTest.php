@@ -14,17 +14,80 @@ use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
 use Modules\WritingStyle\Pipelines\SandboxPipelineRunner;
 use Modules\WritingStyle\Pipelines\WritingContentPlan;
 use Modules\WritingStyle\Services\WritingProfileSnapshotService;
+use Modules\WritingStyle\Services\PromptPack;
 use Modules\WritingStyle\Services\WritingStyleAnalysisV3;
 use Tests\TestCase;
 
-class WritingPromptV3Test extends TestCase
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Bộ kiểm thử prompt V3
+ * =====================================================================
+ *
+ * PHPUnit chạy các ca hồi quy với fixture/mock trong môi trường kiểm thử.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - setUp(): Khởi tạo test và bật cấu hình prompt V3 trong ứng dụng kiểm thử.
+ * - test_analysis_preserves_bullets_and_drops_unsupported_observations(): Kiểm chứng phân tích giữ bullet, loại trích dẫn sai và giữ slider chưa biết là null.
+ * - test_compiler_preserves_signature_and_honors_explicit_removal(): Kiểm chứng compiler giữ dấu ấn, xóa chỉ dẫn theo null và áp dụng brief.
+ * - test_brief_rejects_required_information_absent_from_provided_facts(): Kiểm chứng brief từ chối chi tiết bắt buộc chưa được cung cấp.
+ * - test_plan_rejects_unknown_fact_references(): Kiểm chứng dàn ý từ chối fact ID ngoài brief.
+ * - test_long_pipeline_passes_style_to_planner_and_rejects_stale_plan_before_writing(): Kiểm chứng planner nhận văn phong, writer nhận dàn ý và từ chối dàn ý cũ.
+ * - test_writer_reports_length_format_and_missing_cta(): Kiểm chứng báo cáo nhận ra sai độ dài, headings bị cấm và CTA thiếu.
+ * - test_truncated_writer_response_is_not_a_completed_article(): Kiểm chứng response AI bị cắt không được coi là bài hoàn tất.
+ * - brief(): Cấp brief mẫu cấm headings và yêu cầu CTA, độ dài 20–40 từ.
+ * - plan(): Cấp kế hoạch nội dung mẫu có một mục và ngân sách 30 từ.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Container, fixtures và các request giả lập.
+ * - OUTPUT: Assertions thành công hoặc lỗi kiểm thử.
+ *
+ * BỐI CẢNH SỬ DỤNG: PHPUnit chạy các ca hồi quy với fixture/mock trong môi trường kiểm thử.
+ * =====================================================================
+ */
+class WritingPromptPackTest extends TestCase
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo test và bật cấu hình prompt V3 trong ứng dụng kiểm thử
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Gọi parent setUp, thay config của ứng dụng kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi khởi tạo được truyền lên; không tự mở transaction.
+     * =====================================================================
+     */
     protected function setUp(): void
     {
         parent::setUp();
         config(['writingstyle.prompt_version' => 3]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng phân tích giữ bullet, loại trích dẫn sai và giữ slider chưa biết là null
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên request và kết quả normalize
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_analysis_preserves_bullets_and_drops_unsupported_observations(): void
     {
         $analyzer = new WritingStyleAnalysisV3("Nhà em gửi dâu rể vài lựa chọn.\n\n• Mẫu giấy nhám\n• Mẫu giấy mịn");
@@ -34,7 +97,7 @@ class WritingPromptV3Test extends TestCase
         $this->assertStringContainsString('• Mẫu giấy nhám', $request->messages[1]['content']);
 
         $data = [
-            'features' => array_fill_keys(array_keys(config('writingstyle.v3.questions')), [
+            'features' => array_fill_keys(array_keys(PromptPack::dict('questions')), [
                 'state' => 'unknown', 'description' => '', 'confidence' => 'low', 'evidence_ids' => [],
             ]),
             'evidence' => [
@@ -66,6 +129,24 @@ class WritingPromptV3Test extends TestCase
         $this->assertSame($result['style_analysis_json'], $serialized['style_analysis_json']);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng compiler giữ dấu ấn, xóa chỉ dẫn theo null và áp dụng brief
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên snapshot và prompt
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_compiler_preserves_signature_and_honors_explicit_removal(): void
     {
         $profile = new WritingProfile([
@@ -91,12 +172,48 @@ class WritingPromptV3Test extends TestCase
         $this->assertSame('4–10 câu', $snapshot->sentenceHint);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng brief từ chối chi tiết bắt buộc chưa được cung cấp
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; mong đợi ValidationException
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_brief_rejects_required_information_absent_from_provided_facts(): void
     {
         $this->expectException(ValidationException::class);
         WritingBrief::fromInput('Thiệp cưới', 'short', ['brief' => ['required_details' => ['Giá 80.000đ']]]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng dàn ý từ chối fact ID ngoài brief
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; mong đợi InvalidPipelineException
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_plan_rejects_unknown_fact_references(): void
     {
         $brief = WritingBrief::fromInput('Thiệp cưới', 'long', ['brief' => $this->brief()]);
@@ -106,6 +223,24 @@ class WritingPromptV3Test extends TestCase
         WritingContentPlan::validate($plan, $brief);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng planner nhận văn phong, writer nhận dàn ý và từ chối dàn ý cũ
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions bằng gateway mock và exception
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_long_pipeline_passes_style_to_planner_and_rejects_stale_plan_before_writing(): void
     {
         $ai = $this->mock(CoreAiGatewayContract::class);
@@ -137,6 +272,24 @@ class WritingPromptV3Test extends TestCase
         $runner->runStep($profile, 'long', 'article_writer', 'Thiệp cưới', ['topic_outline' => $result['artifact']], $overrides);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng báo cáo nhận ra sai độ dài, headings bị cấm và CTA thiếu
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên quality_report
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_writer_reports_length_format_and_missing_cta(): void
     {
         $ai = $this->mock(CoreAiGatewayContract::class);
@@ -150,6 +303,24 @@ class WritingPromptV3Test extends TestCase
         $this->assertSame(['Inbox để xem mẫu'], $report['missing_details']);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng response AI bị cắt không được coi là bài hoàn tất
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; mong đợi InvalidPipelineException
+     *
+     * SIDE EFFECT:
+     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
+     * =====================================================================
+     */
     public function test_truncated_writer_response_is_not_a_completed_article(): void
     {
         $this->mock(CoreAiGatewayContract::class)->shouldReceive('executeStructured')->once()->andReturn(
@@ -159,6 +330,24 @@ class WritingPromptV3Test extends TestCase
         app(SandboxPipelineRunner::class)->runStep(new WritingProfile, 'short', 'article_writer', 'Thiệp cưới');
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Cấp brief mẫu cấm headings và yêu cầu CTA, độ dài 20–40 từ
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array brief fixture
+     *
+     * SIDE EFFECT:
+     * - Tạo dữ liệu trong bộ nhớ, không gọi AI/DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction.
+     * =====================================================================
+     */
     private function brief(): array
     {
         return [
@@ -168,6 +357,24 @@ class WritingPromptV3Test extends TestCase
         ];
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Cấp kế hoạch nội dung mẫu có một mục và ngân sách 30 từ
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array content plan fixture
+     *
+     * SIDE EFFECT:
+     * - Tạo dữ liệu trong bộ nhớ, không gọi AI/DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction.
+     * =====================================================================
+     */
     private function plan(): array
     {
         return [

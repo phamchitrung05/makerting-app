@@ -9,7 +9,7 @@ use Modules\Taxonomy\Traits\HasTaxonomy;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Model `writing_profiles` — hồ sơ DNA văn phong.
+ * CHỨC NĂNG FILE: Model hồ sơ văn phong cùng quan hệ phân tích, taxonomy và slug.
  * =====================================================================
  *
  * Một profile = "bộ gen" 16 khóa thuộc tính văn phong (`rules_json`) trả
@@ -22,15 +22,22 @@ use Modules\Taxonomy\Traits\HasTaxonomy;
  * `version` tăng mỗi lần sửa; `status` chỉ 'active' mới được dùng để sinh.
  * `HasTaxonomy` scope 'writing_profile' cho phân loại chéo.
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - rules()/evidence()/analyses() : casts + quan hệ.
- * - applicableRules(?tier)        : rules_json lọc theo cấp độ áp dụng.
- * - snapshotRules()                : rules_json loại bỏ evidence (dùng khi
- *                                   cấp prompt cho AI — tránh đạo văn).
- * - isActive()                     : status==='active' && is_enabled.
+ * - booted(): Đăng ký hook xóa sạch slug khi profile bị xóa.
+ * - casts(): Khai báo kiểu cast để đọc/ghi JSON, số và trạng thái model.
+ * - analyses(): Khai báo quan hệ các analysis gắn với profile.
+ * - scopeActive(): Giới hạn query ở profile status=active và is_enabled=true.
+ * - scopeEnabled(): Giới hạn query ở profile is_enabled=true.
+ * - scopeOfTier(): Giới hạn query theo dominant_tier.
+ * - isActive(): Kiểm tra đồng thời status active và is_enabled.
+ *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : attributes (name, rules_json, evidence_json, ...).
- * - OUTPUT: WritingProfile model + derived snapshot.
+ * - INPUT : Thuộc tính writing_profiles, JSON V3 và quan hệ Eloquent.
+ * - OUTPUT: Model, query scopes, rules được lọc theo tier hoặc trạng thái active.
+ *
+ * BỐI CẢNH SỬ DỤNG: CRUD lưu các giá trị này; compiler đọc hồ sơ để xây prompt.
  * =====================================================================
  */
 class WritingProfile extends Model
@@ -38,6 +45,11 @@ class WritingProfile extends Model
     use HasTaxonomy, HasSlug;
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký hook xóa sạch slug khi profile bị xóa
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * =====================================================================
      * XÓA CỨNG THẬT — giải phóng slug ngay khi xóa profile.
      * =====================================================================
@@ -47,6 +59,19 @@ class WritingProfile extends Model
      * dung public), trái yêu cầu này — nên đăng ký thêm listener DELETE HẾT
      * row slugs. Listener của trait chạy trước (hạ primary), listener này
      * chạy sau (xóa sạch) — kết quả cuối: bảng slugs không còn row nào.
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Đăng ký listener deleted; lúc xóa model sẽ DELETE slugs sau hook trait.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB ở callback truyền lên. Hook không tự mở transaction.
      * =====================================================================
      */
     protected static function booted(): void
@@ -159,6 +184,24 @@ class WritingProfile extends Model
         'created_by',
     ];
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khai báo kiểu cast để đọc/ghi JSON, số và trạng thái model
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array tên thuộc tính => kiểu cast
+     *
+     * SIDE EFFECT:
+     * - Được Eloquent dùng khi truy cập thuộc tính; không tự truy vấn DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction.
+     * =====================================================================
+     */
     protected function casts(): array
     {
         return [
@@ -181,8 +224,26 @@ class WritingProfile extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Khai báo quan hệ các analysis gắn với profile
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Danh sách phân tích đã tạo ra profile này.
      * INPUT: không. OUTPUT: HasMany.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - HasMany theo draft_profile_id
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function analyses(): HasMany
     {
@@ -194,8 +255,26 @@ class WritingProfile extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Giới hạn query ở profile status=active và is_enabled=true
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Chỉ profile đang dùng được (status active + enabled).
      * INPUT: query. OUTPUT: query đã lọc.
+     *
+     * INPUT:
+     * - $q
+     *
+     * OUTPUT:
+     * - Query builder đã lọc, không thực thi truy vấn
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function scopeActive($q)
     {
@@ -204,8 +283,26 @@ class WritingProfile extends Model
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Giới hạn query ở profile is_enabled=true
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Profile đang bật (bỏ qua status).
      * INPUT: query. OUTPUT: query đã lọc.
+     *
+     * INPUT:
+     * - $q
+     *
+     * OUTPUT:
+     * - Query builder đã lọc
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function scopeEnabled($q)
     {
@@ -213,8 +310,26 @@ class WritingProfile extends Model
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Giới hạn query theo dominant_tier
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Profile theo cấp độ độ dài chủ đạo.
      * INPUT: query + tier. OUTPUT: query đã lọc.
+     *
+     * INPUT:
+     * - $q, string $tier
+     *
+     * OUTPUT:
+     * - Query builder đã lọc
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function scopeOfTier($q, string $tier)
     {
@@ -225,80 +340,33 @@ class WritingProfile extends Model
      * LOGIC
      * ===================================================================== */
 
+
     /**
      * =====================================================================
-     * CHỨC NĂNG: Lấy rules_json lọc theo cấp độ độ dài áp dụng.
+     * CHỨC NĂNG: Kiểm tra đồng thời status active và is_enabled
      * =====================================================================
-     * Lọc theo config('writingstyle.tier_drop_rules') (PLAN-WRITING-STYLE-
-     * PROMPT-V2 §3): micro giữ 7 lõi, short 10, medium 14, long 15.
-     * Các khóa bị lược bỏ KHÔNG đưa vào rules trả về — `uncertainties` cũng
-     * được tách ra khỏi output (chỉ là báo cáo cho người đọc lúc phân tích;
-     * nhúng vào prompt sinh bài sẽ làm loãng sự tập trung của LLM và ép AI
-     * viết cẩn trọng/công thức).
      *
-     * INPUT: ?string $tier (null -> dominant_tier của profile).
-     * OUTPUT: array rules_json đã lọc (không chứa uncertainties).
-     * =====================================================================
-     */
-    public function applicableRules(?string $tier = null): array
-    {
-        $rules = $this->rules_json ?? [];
-        $tier = $tier ?? $this->dominant_tier;
-
-        $drop = (array) (config('writingstyle.tier_drop_rules', [])[$tier] ?? []);
-        if ($drop !== []) {
-            foreach ($drop as $key) {
-                unset($rules[$key]);
-            }
-        }
-
-        // `uncertainties` là ghi chú báo cáo — không bao giờ vào prompt sinh bài.
-        unset($rules['uncertainties']);
-
-        return $rules;
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Snapshot an toàn để cấp cho AI sinh văn bản.
-     * =====================================================================
-     * Trả rules_json đã lọc theo tier + loại bỏ mọi trường chứa trích dẫn
-     * mẫu (`evidence_json`) — AI học cách hành văn nhưng KHÔNG BAO GIỜ nhìn
-     * thấy câu chữ thật để đạo văn (PLAN.md §309-310).
-     *
-     * INPUT: ?string $tier. OUTPUT: array — rules_json sạch.
-     * =====================================================================
-     */
-    public function snapshotRules(?string $tier = null): array
-    {
-        return $this->applicableRules($tier);
-    }
-
-    /**
+     * Chi tiết triển khai:
      * =====================================================================
      * CHỨC NĂNG: Profile có đang dùng được (active + enabled).
      * INPUT: không. OUTPUT: bool.
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - bool trạng thái có thể sử dụng
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
      * =====================================================================
      */
     public function isActive(): bool
     {
         return $this->status === self::STATUS_ACTIVE && $this->is_enabled;
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Helper lấy số câu/từ từ analysis_metadata (để detectTier
-     * không phải đếm lại nếu đã lưu).
-     * INPUT: không. OUTPUT: array{word_count:int,sentence_count:int}.
-     * =====================================================================
-     */
-    public function metadataStats(): array
-    {
-        $meta = $this->analysis_metadata_json ?? [];
-
-        return [
-            'word_count'     => (int) ($meta['word_count'] ?? 0),
-            'sentence_count' => (int) ($meta['sentence_count'] ?? 0),
-        ];
     }
 }

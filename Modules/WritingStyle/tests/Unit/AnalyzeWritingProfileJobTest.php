@@ -63,11 +63,28 @@ class AnalyzeWritingProfileJobTest extends TestCase
         $this->assertSame($a['taskRun']->id, $b['taskRun']->id);
         $this->assertSame(1, SystemTaskRun::count());
     }
+    private function v3Payload(): array
+    {
+        return [
+            'features' => array_fill_keys(array_keys(config('writingstyle.v3.questions')), [
+                'state' => 'unknown', 'description' => '', 'confidence' => 'low', 'evidence_ids' => [],
+            ]),
+            'evidence' => [],
+            'signature_language' => ['self_reference' => [], 'audience_reference' => [], 'particles' => []],
+            'source_specific_items' => [],
+            'uncertainties' => [],
+            'style_instructions' => '',
+            'voice_texture_instructions' => '',
+            'voice_texture_sliders_json' => array_fill_keys(\Modules\WritingStyle\Models\WritingProfile::VOICE_TEXTURE_KEYS, null),
+            'tone_sliders_json' => array_fill_keys(\Modules\WritingStyle\Models\WritingProfile::TONE_AXIS_KEYS, null),
+        ];
+    }
+
     public function test_handle_chay_pipeline_va_complete_taskrun(): void
     {
         $resp = new \Modules\CoreAi\DTOs\AiStructuredResponse(
             text: '{}',
-            data: ['rules_json' => ['tone' => 'x'], 'evidence_json' => []],
+            data: $this->v3Payload(),
             remoteModelId: 'fake',
         );
         $this->app->instance(\Modules\CoreAi\Contracts\CoreAiGatewayContract::class,

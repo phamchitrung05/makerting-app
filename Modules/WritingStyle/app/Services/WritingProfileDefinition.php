@@ -9,20 +9,14 @@ use Modules\WritingStyle\Models\WritingProfile;
  * CHỨC NĂNG FILE: Định nghĩa & tiện ích DNA văn phong.
  * =====================================================================
  *
- * Lõi "Giải mã DNA Văn phong" (PLAN.md §298-311):
- * - 16 `RULE_KEYS` (đọc từ `config('writingstyle.rule_keys')`).
+ * - `ruleKeys()` — mảng khóa DNA (đọc `config('writingstyle.rule_keys')`).
  * - `detectTier()` — phân tầng 4 cấp độ độ dài (micro|short|medium|long)
  *   theo số câu/số từ của văn bản mẫu.
- * - `applicableKeys(tier)` — khóa áp dụng cho tier (micro đẩy `headings`/
- *   `bullets`/`paragraph_rhythm`/`structure_patterns` vào `uncertainties`).
- * - `tierLabel(tier)` — nhãn ngữ nghĩa cho System Prompt ("2–3 câu",
- *   "3–4 câu", "20–30 câu", "bài dài").
- * - `validateEvidence()` — kiểm chứng excerpt có `str_contains` nguyên văn
- *   trong reference_text (chống AI bịa trích dẫn).
+ * - `countSentences()` / `countWords()` — đếm câu/từ (htmlToText giữ \n).
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : văn bản mẫu / tier / evidence_json.
- * - OUTPUT: tier, keys áp dụng, label, kết quả kiểm chứng.
+ * - INPUT : văn bản mẫu.
+ * - OUTPUT: tier + thống kê câu/từ.
  * =====================================================================
  */
 class WritingProfileDefinition
@@ -32,21 +26,12 @@ class WritingProfileDefinition
      * ===================================================================== */
 
     /**
-     * CHỨC NĂNG: Mảng 16 khóa DNA theo thứ tự spec.
+     * CHỨC NĂNG: Mảng khóa DNA theo thứ tự spec (rule_keys trong config chung).
      * INPUT: không. OUTPUT: string[].
      */
     public static function ruleKeys(): array
     {
         return config('writingstyle.rule_keys', WritingProfile::RULE_KEYS);
-    }
-
-    /**
-     * CHỨC NĂNG: Mô tả câu hỏi giải mã của 1 khóa.
-     * INPUT: rule_key. OUTPUT: string.
-     */
-    public static function ruleQuestion(string $ruleKey): string
-    {
-        return config("writingstyle.rules.{$ruleKey}", "Yếu tố {$ruleKey} trong bài mẫu là gì?");
     }
 
     /* =====================================================================
@@ -130,46 +115,6 @@ class WritingProfileDefinition
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: Khóa áp dụng cho 1 cấp độ độ dài.
-     * =====================================================================
-     * Lọc theo config('writingstyle.tier_drop_rules') — mỗi tier khai báo
-     * danh sách rule_keys được lược bỏ (PLAN-WRITING-STYLE-PROMPT-V2 §3):
-     *   micro  : bỏ 8 khóa (giữ 7 lõi + uncertainties).
-     *   short  : bỏ 5 khóa (giữ 10 + uncertainties).
-     *   medium : bỏ headings (giữ 14 + uncertainties).
-     *   long   : đủ 16 (trọn vẹn).
-     * Khóa bị bỏ không được hỏi ở phân tích lẫn dùng khi sinh bài — AI báo
-     * lại qua `uncertainties` (báo cáo cho người đọc, không đưa vào prompt).
-     *
-     * INPUT: tier. OUTPUT: string[] rule_keys áp dụng.
-     * =====================================================================
-     */
-    public static function applicableKeys(string $tier): array
-    {
-        $all = self::ruleKeys();
-        $dropMap = config('writingstyle.tier_drop_rules', []);
-        $drop = $dropMap[$tier] ?? [];
-
-        return array_values(array_diff($all, $drop));
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Nhãn câu cho System Prompt theo cấp độ độ dài.
-     * =====================================================================
-     * Dùng khi biên dịch System Prompt trong SnapshotService (§310):
-     * "viết 2–3 câu" / "3–4 câu" / "20–30 câu" / "bài dài".
-     *
-     * INPUT: tier. OUTPUT: string nhãn mô tả độ dài.
-     * =====================================================================
-     */
-    public static function tierLabel(string $tier): string
-    {
-        return config("writingstyle.tiers.{$tier}.sentence_hint", 'văn bản phù hợp');
-    }
-
-    /**
-     * =====================================================================
      * CHỨC NĂNG: Số câu của văn bản (ước tính bằng dấu câu kết thúc).
      * =====================================================================
      * Tách theo [.!?…] + xuống dòng đôi; câu rỗng bỏ qua. Không dùng NLP
@@ -210,109 +155,4 @@ class WritingProfileDefinition
         return count(preg_split('/\s+/u', $t, -1, PREG_SPLIT_NO_EMPTY) ?: []);
     }
 
-    /* =====================================================================
-     * Kiểm chứng trích dẫn (chống AI bịa excerpt).
-     * ===================================================================== */
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Kiểm chứng evidence_json — mọi excerpt phải xuất hiện
-     * nguyên văn trong reference_text (PLAN.md §309).
-     * =====================================================================
-     * Chuẩn hóa khoảng trắng/HTML trước khi `str_contains`:
-     * - strip_tags, decode &entity;, gộp mọi chuỗi whitespace unicode
-     *   thành 1 khoảng trắng đơn (xử lý &nbsp;, newline lẫn trong câu).
-     * - excerpt được chuẩn hóa giống hệt.
-     *
-     * INPUT: string $referenceText, array $evidence (mảng {rule_key,excerpt,note}).
-     * OUTPUT: array{
-     *   valid:bool,
-     *   checked:int,
-     *   failed:string[],          // excerpt không tồn tại nguyên văn
-     *   by_rule:array<string,int> // số excerpt hợp lệ theo rule_key
-     * }
-     * =====================================================================
-     */
-    public static function validateEvidence(string $referenceText, array $evidence): array
-    {
-        $haystack = self::normalizeForMatch($referenceText);
-        $checked = 0;
-        $failed = [];
-        $byRule = [];
-
-        foreach ($evidence as $item) {
-            if (! is_array($item)) {
-                continue;
-            }
-            $excerpt = (string) ($item['excerpt'] ?? '');
-            $ruleKey = (string) ($item['rule_key'] ?? 'unknown');
-            $checked++;
-
-            $needle = self::normalizeForMatch($excerpt);
-            if ($needle === '' || str_contains($haystack, $needle)) {
-                $byRule[$ruleKey] = ($byRule[$ruleKey] ?? 0) + 1;
-            } else {
-                $failed[] = $excerpt;
-            }
-        }
-
-        return [
-            'valid'   => $failed === [],
-            'checked' => $checked,
-            'failed'  => $failed,
-            'by_rule' => $byRule,
-        ];
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Chuẩn hóa văn bản để so khớp excerpt.
-     * =====================================================================
-     * strip_tags → html_entity_decode → thay &nbsp;/whitespace unicode thành
-     * 1 khoảng trắng → trim. Để excerpt có xuống dòng/tab trong DB vẫn khớp.
-     *
-     * INPUT: text. OUTPUT: string chuẩn hóa.
-     * =====================================================================
-     */
-    private static function normalizeForMatch(string $text): string
-    {
-        // Giữ \n giữa block trước — excerpt trong DB có thể cách đoạn bằng \n\n.
-        $t = self::htmlToText($text);
-        // NBSP và mọi whitespace unicode (kể cả \n\n) -> 1 space.
-        $t = preg_replace('/[\xC2\xA0\s]+/u', ' ', $t);
-
-        return trim((string) $t);
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Loại excerpt không kiểm chứng được khỏi evidence_json.
-     * =====================================================================
-     * Dùng sau khi `validateEvidence()` — giữ lại chỉ excerpt `str_contains`
-     * thật (theo §309 "tự động loại bỏ trích dẫn do AI suy diễn").
-     *
-     * INPUT: reference_text + evidence_json.
-     * OUTPUT: array evidence_json đã lọc (vẫn đủ cấu trúc {rule_key,excerpt,note}).
-     * =====================================================================
-     */
-    public static function filterValidEvidence(string $referenceText, array $evidence): array
-    {
-        $haystack = self::normalizeForMatch($referenceText);
-        $kept = [];
-
-        foreach ($evidence as $item) {
-            if (! is_array($item)) {
-                continue;
-            }
-            $excerpt = self::normalizeForMatch((string) ($item['excerpt'] ?? ''));
-            if ($excerpt === '') {
-                continue;
-            }
-            if (str_contains($haystack, $excerpt)) {
-                $kept[] = $item;
-            }
-        }
-
-        return array_values($kept);
-    }
 }

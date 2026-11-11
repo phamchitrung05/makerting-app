@@ -3,12 +3,68 @@
 namespace Modules\WritingStyle\DTOs;
 
 use Illuminate\Validation\ValidationException;
-use Modules\WritingStyle\Services\PromptV3;
+use Modules\WritingStyle\Services\PromptPack;
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Chuẩn hóa yêu cầu bài viết thành brief bất biến dùng chung cho planner và writer.
+ * =====================================================================
+ *
+ * FormRequest dùng rules(); controller và các bước pipeline gọi fromInput() sau validation.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - __construct(): Giữ dữ liệu brief đã chuẩn hóa trong DTO readonly.
+ * - rules(): Cấp validation cho brief lồng trong các API sandbox.
+ * - fromInput(): Hợp nhất chủ đề, preset độ dài và brief rồi kiểm tra dữ kiện bắt buộc.
+ * - lengthHint(): Diễn đạt khoảng độ dài của brief bằng tiếng Việt.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Chủ đề, tier, brief và runtime overrides đã qua validation cấu trúc.
+ * - OUTPUT: WritingBrief chứa dữ kiện, format và một khoảng độ dài có hiệu lực.
+ *
+ * BỐI CẢNH SỬ DỤNG: FormRequest dùng rules(); controller và các bước pipeline gọi fromInput() sau validation.
+ * =====================================================================
+ */
 final readonly class WritingBrief
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Giữ dữ liệu brief đã chuẩn hóa trong DTO readonly
+     * =====================================================================
+     *
+     * INPUT:
+     * - public array $data
+     *
+     * OUTPUT:
+     * - WritingBrief
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     private function __construct(public array $data) {}
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Cấp validation cho brief lồng trong các API sandbox
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array quy tắc giới hạn trường, loại nội dung, facts, định dạng và độ dài
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public static function rules(): array
     {
         return [
@@ -41,6 +97,24 @@ final readonly class WritingBrief
         ];
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Hợp nhất chủ đề, preset độ dài và brief rồi kiểm tra dữ kiện bắt buộc
+     * =====================================================================
+     *
+     * INPUT:
+     * - string $topic, string $tier, array $overrides
+     *
+     * OUTPUT:
+     * - WritingBrief đã sắp facts theo ID và giữ các cờ định dạng
+     *
+     * SIDE EFFECT:
+     * - Xử lý trong bộ nhớ và đọc preset cấu hình.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException khi chủ đề/độ dài xung đột, quá 200 câu, thiếu dữ kiện bắt buộc hoặc quá giới hạn context. Không mở transaction. Caller phải validate cấu trúc bằng rules() trước.
+     * =====================================================================
+     */
     public static function fromInput(string $topic, string $tier, array $overrides): self
     {
         $input = $overrides['brief'] ?? [];
@@ -49,7 +123,8 @@ final readonly class WritingBrief
             throw ValidationException::withMessages(['brief.topic' => 'Chủ đề trong brief khác chủ đề của yêu cầu.']);
         }
         $topic = $input['topic'] ?? $topic;
-        $length = config('writingstyle.v3.lengths.'.$tier, config('writingstyle.v3.lengths.medium'));
+        $lengths = (array) (PromptPack::dict('lengths', $input['content_type'] ?? null) ?? []);
+        $length = $lengths[$tier] ?? $lengths['medium'];
         if (isset($input['length'])) {
             $length = ['unit' => $input['length']['unit'], 'min' => (int) $input['length']['min'], 'max' => (int) $input['length']['max']];
         }
@@ -93,11 +168,29 @@ final readonly class WritingBrief
         if ($missing !== []) {
             throw ValidationException::withMessages(['missing_fields' => $missing]);
         }
-        PromptV3::checkContext(PromptV3::json($data));
+        PromptPack::checkContext(PromptPack::json($data));
 
         return new self($data);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Diễn đạt khoảng độ dài của brief bằng tiếng Việt
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - string số từ hoặc số câu, dùng một số khi min=max
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public function lengthHint(): string
     {
         $length = $this->data['length'];

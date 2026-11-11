@@ -1,7 +1,8 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Dialog "Chi tiết bài văn thử nghiệm" trong Phòng thử DNA.
+  CHỨC NĂNG FILE: Xem, duyệt dàn ý V2/V3 và kiểm tra bài viết thử theo từng bước.
   =====================================================================
+
   Component dialog riêng dùng khung 3 vùng bắt buộc AppDialogLayout
   (header cố định -> body cuộn -> footer cố định), đúng chuẩn
   docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §3.5 & §4.
@@ -13,9 +14,25 @@
   - Cột bên phải: Kết quả AI trả về tương ứng với từng Step trong `sample.artifacts`
   và nội dung bài viết hoàn chỉnh trong `sample.text`.
 
-  CÁC HÀM/METHOD TRONG FILE:
-  - closeDialog(), resetAfterLeave(), cleanStepLabel(), isStepCompleted()
-  - addOutlineSection(), removeOutlineSection()
+
+  V3 hiển thị sections, cảnh báo chất lượng và thao tác lập lại dàn ý; V2
+  giữ outline H2/H3. Thay title trực tiếp trên artifact của sample trước khi
+  emit runNextStep; backend kiểm tra lại kế hoạch khi chạy bước tiếp theo.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - plainTextToEditorHtml(): Chuyển text/Markdown cơ bản thành HTML hiển thị bài thử.
+  - cleanStepLabel(): Rút gọn nhãn bước bằng cách bỏ tiền tố Bước kèm số.
+  - isStepCompleted(): Xác định bước có artifact hoặc bài terminal để hiển thị đã hoàn tất.
+  - addOutlineSection(): Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh.
+  - removeOutlineSection(): Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục.
+  - closeDialog(): Đóng dialog bản thử khi không đang chạy bước AI.
+  - resetAfterLeave(): Dọn state dialog sau khi animation đóng kết thúc.
+  - Computed: topicOutlineArtifact, isV3Outline, qualityWarnings, sampleSteps, nextPendingStep, finalArticleText, finalSystemPrompt, articleWordCount.
+  - Watcher: đồng bộ tab theo model/sample/bước/trạng thái và nạp articleEditorHtml khi text thay đổi.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : Props sample, profile, runningStep; modelValue bool mở dialog.
+  - OUTPUT: Emit update:modelValue, runNextStep, refreshOutline, copyText; sửa artifact đang xem trên sample.
   =====================================================================
 -->
 <script setup>
@@ -48,6 +65,24 @@ const showSystemPrompt = ref(false)
 const articleEditorHtml = ref('')
 
 /* Chuyển văn bản thuần / markdown nhẹ từ AI sang HTML chuẩn cho TiptapEditor */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển text/Markdown cơ bản thành HTML hiển thị bài thử
+ * =====================================================================
+ *
+ * INPUT:
+ * - rawText
+ *
+ * OUTPUT:
+ * - string HTML; đầu vào đã giống HTML được giữ nguyên
+ *
+ * SIDE EFFECT:
+ * - Escape text thuần, đổi heading/đậm/đoạn; không sanitize nhánh HTML có sẵn.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function plainTextToEditorHtml(rawText) {
   const txt = String(rawText ?? '').trim()
   if (!txt) return ''
@@ -157,6 +192,24 @@ const articleWordCount = computed(() => {
 })
 
 /* Rút gọn nhãn bước (bỏ tiền tố "Bước X:" để đánh số đồng nhất) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Rút gọn nhãn bước bằng cách bỏ tiền tố Bước kèm số
+ * =====================================================================
+ *
+ * INPUT:
+ * - stepObj
+ *
+ * OUTPUT:
+ * - string nhãn đã trim hoặc rỗng khi không có step
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý chuỗi.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function cleanStepLabel(stepObj) {
   if (!stepObj) return ''
 
@@ -166,6 +219,24 @@ function cleanStepLabel(stepObj) {
 }
 
 /* Kiểm tra bước thứ `idx` đã hoàn thành dữ liệu hay chưa */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xác định bước có artifact hoặc bài terminal để hiển thị đã hoàn tất
+ * =====================================================================
+ *
+ * INPUT:
+ * - st, idx
+ *
+ * OUTPUT:
+ * - bool theo trạng thái sample và chỉ mục hiện tại
+ *
+ * SIDE EFFECT:
+ * - Đọc sample cùng finalArticleText; không xác minh nội dung artifact.
+ *
+ * EXCEPTION:
+ * - Trả false khi chưa có sample.
+ * =====================================================================
+ */
 function isStepCompleted(st, idx) {
   if (!props.sample) return false
   if (props.sample.status === 'completed') {
@@ -231,6 +302,24 @@ watch(
 )
 
 /* Thêm 1 mục H2/H3 mới vào dàn ý của Bước 1 (`topic_outline`) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Mutate outline của sample hiện tại.
+ *
+ * EXCEPTION:
+ * - Bỏ qua khi sample chưa có artifact.
+ * =====================================================================
+ */
 function addOutlineSection() {
   const outlineArtifact = props.sample?.artifacts?.topic_outline
   if (!outlineArtifact) return
@@ -246,6 +335,24 @@ function addOutlineSection() {
 }
 
 /* Xóa 1 mục khỏi dàn ý của Bước 1 (`topic_outline`) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục
+ * =====================================================================
+ *
+ * INPUT:
+ * - idx
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Mutate outline của sample hiện tại.
+ *
+ * EXCEPTION:
+ * - Bỏ qua dữ liệu chưa có hoặc chỉ còn một mục.
+ * =====================================================================
+ */
 function removeOutlineSection(idx) {
   const outline = props.sample?.artifacts?.topic_outline?.outline
   if (!Array.isArray(outline) || outline.length <= 1) return
@@ -253,6 +360,24 @@ function removeOutlineSection(idx) {
 }
 
 /* Đóng dialog nếu không đang chạy step AI */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đóng dialog bản thử khi không đang chạy bước AI
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đặt isOpen=false nếu runningStep tắt.
+ *
+ * EXCEPTION:
+ * - Không phát yêu cầu ghi DB.
+ * =====================================================================
+ */
 function closeDialog() {
   if (!props.runningStep) {
     isOpen.value = false
@@ -260,6 +385,24 @@ function closeDialog() {
 }
 
 /* Reset state phụ sau khi animation đóng hoàn tất (chuẩn §4.2) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Dọn state dialog sau khi animation đóng kết thúc
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Reset showSystemPrompt và activeStep nếu dialog đã đóng.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function resetAfterLeave() {
   if (isOpen.value) return
   showSystemPrompt.value = false

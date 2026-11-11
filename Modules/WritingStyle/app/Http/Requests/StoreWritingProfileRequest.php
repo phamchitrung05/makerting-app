@@ -7,7 +7,7 @@ use Illuminate\Validation\Rule;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: FormRequest validate dữ liệu tạo/sửa WritingProfile.
+ * CHỨC NĂNG FILE: Validate dữ liệu tạo/cập nhật profile và cấu hình slider.
  * =====================================================================
  *
  * Kiểm tra tính hợp lệ của payload gửi lên:
@@ -16,22 +16,62 @@ use Illuminate\Validation\Rule;
  *
  * Hỗ trợ đồng bộ Taxonomy (categories, tags, new_tags) qua HasTaxonomy trait.
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - authorize(): Xác thực phân quyền request (kiểm tra qua permission middleware).
- * - rules(): Tập luật validation cho các trường thông tin hồ sơ và taxonomy.
+ * - authorize(): Cho phép FormRequest tiếp tục sau middleware xác thực và phân quyền.
+ * - rules(): Khai báo kiểu dữ liệu, giới hạn và validation cho payload request.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : HTTP Request payload (name, dominant_tier, rules_json, tags, ...)
- * - OUTPUT: Mảng dữ liệu đã validate an toàn qua validated()
+ * - INPUT : Tên, DNA, Ô 1–3, slider preferences, analysis_id, slug và taxonomy.
+ * - OUTPUT: validated() cung cấp dữ liệu hợp lệ.
+ *
+ * BỐI CẢNH SỬ DỤNG: Controller chỉ lưu các trường được cho phép; quyền do route middleware kiểm tra.
  * =====================================================================
  */
 class StoreWritingProfileRequest extends FormRequest
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Cho phép FormRequest tiếp tục; quyền cụ thể được kiểm tra qua middleware route
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - bool true; xác thực và permission do route xử lý.
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public function authorize(): bool
     {
         return true;
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khai báo tập validation cho các trường đầu vào của request
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array theo hợp đồng của method.
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public function rules(): array
     {
         return [

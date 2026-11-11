@@ -1,16 +1,37 @@
 /*
- * =====================================================================
- * CHỨC NĂNG FILE: Service gọi API module WritingStyle (DNA văn phong).
- * =====================================================================
- * Bọc $api (ofetch, tự unwrap BaseResponse.data) cho endpoint:
- * - GET    /v1/admin/writing-style/writing-profiles            -> dataTable
- * - GET    /v1/admin/writing-style/writing-profiles/options    -> tiers+rules
- * - CRUD   /v1/admin/writing-style/writing-profiles            -> create/upd/del
- * - POST   /v1/admin/writing-style/writing-profiles/analyze    -> 202 dispatch
- * - GET    /v1/admin/writing-style/writing-profiles/analyses/{id} -> trạng thái + kết quả
- * - POST   /v1/admin/writing-style/writing-profiles/{id}/sandbox -> DNA Sandbox
- * =====================================================================
- */
+  =====================================================================
+  CHỨC NĂNG FILE: Service gọi REST API WritingStyle qua $api.
+  =====================================================================
+
+  Bọc $api (ofetch, tự unwrap BaseResponse.data) cho endpoint:
+  - GET    /v1/admin/writing-style/writing-profiles            -> dataTable
+  - GET    /v1/admin/writing-style/writing-profiles/options    -> tiers+rules
+  - CRUD   /v1/admin/writing-style/writing-profiles            -> create/upd/del
+  - POST   /v1/admin/writing-style/writing-profiles/analyze    -> 202 dispatch
+  - GET    /v1/admin/writing-style/writing-profiles/analyses/{id} -> trạng thái + kết quả
+  - POST   /v1/admin/writing-style/writing-profiles/{id}/sandbox -> DNA Sandbox
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - profiles(): Lấy danh sách hồ sơ văn phong phân trang kèm bộ lọc.
+  - profile(): Lấy thông tin chi tiết một hồ sơ văn phong theo ID.
+  - options(): Lấy danh mục cấu hình cấp độ (tiers) và 16 câu hỏi giải mã.
+  - createProfile(): Tạo mới một hồ sơ văn phong thủ công (origin=manual).
+  - updateProfile(): Cập nhật thông tin hồ sơ văn phong (PUT partial).
+  - deleteProfile(): Xóa một hồ sơ văn phong khỏi hệ thống.
+  - analyze(): Gửi văn bản mẫu yêu cầu AI giải mã DNA văn phong trong nền.
+  - analysis(): Đọc trạng thái và kết quả phân tích theo ID (cho FE poll).
+  - sandbox(): Chạy thử nghiệm viết bài mới (Sandbox) theo DNA hồ sơ.
+  - runSandboxStep(): Chạy 1 bước (step) trong quy trình Sandbox Pipeline theo tier.
+  - saveSandboxSample(): Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong.
+  - deleteSandboxSample(): Xóa 1 bản viết thử đã lưu khỏi hồ sơ văn phong.
+  - Computed: Không có.
+  - Watcher/lifecycle: Không có.
+
+  INPUT/OUTPUT CỦA FILE (tổng thể):
+  - INPUT : Payload từ component hoặc action gọi service.
+  - OUTPUT: Promise chứa BaseResponse.data đã được $api unwrap; lỗi trả về caller.
+  =====================================================================
+*/
 import { $api } from '@/utils/api'
 
 const BASE = '/v1/admin/writing-style'
@@ -224,6 +245,11 @@ export const writingStyleApi = {
    * CHỨC NĂNG: Chạy 1 bước (step) trong quy trình Sandbox Pipeline theo tier
    * =====================================================================
    *
+   * Chi tiết triển khai:
+   * =====================================================================
+   * CHỨC NĂNG: Chạy 1 bước (step) trong quy trình Sandbox Pipeline theo tier
+   * =====================================================================
+   *
    * INPUT:
    * - id (number|string): ID hồ sơ văn phong
    * - step (string): Mã bước cần chạy (vd: 'topic_outline', 'article_writer')
@@ -231,6 +257,19 @@ export const writingStyleApi = {
    *
    * OUTPUT:
    * - Promise<Object>: { step: string, artifact: Object }
+   * =====================================================================
+   *
+   * INPUT:
+   * - id, step, payload
+   *
+   * OUTPUT:
+   * - Promise chứa data do $api unwrap từ BaseResponse.
+   *
+   * SIDE EFFECT:
+   * - Gửi HTTP qua $api tới endpoint tương ứng.
+   *
+   * EXCEPTION:
+   * - ApiError hoặc lỗi mạng truyền về caller.
    * =====================================================================
    */
   runSandboxStep(id, step, payload) {
@@ -241,6 +280,24 @@ export const writingStyleApi = {
    * =====================================================================
    * CHỨC NĂNG: Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong
    * =====================================================================
+   *
+   * Chi tiết triển khai:
+   * =====================================================================
+   * CHỨC NĂNG: Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong
+   * =====================================================================
+   *
+   * INPUT:
+   * - id, payload
+   *
+   * OUTPUT:
+   * - Promise chứa data do $api unwrap từ BaseResponse.
+   *
+   * SIDE EFFECT:
+   * - Gửi HTTP qua $api tới endpoint tương ứng.
+   *
+   * EXCEPTION:
+   * - ApiError hoặc lỗi mạng truyền về caller.
+   * =====================================================================
    */
   saveSandboxSample(id, payload) {
     return $api(`${BASE}/writing-profiles/${id}/sandbox-samples`, { method: 'POST', body: payload })
@@ -249,6 +306,24 @@ export const writingStyleApi = {
   /**
    * =====================================================================
    * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi hồ sơ văn phong
+   * =====================================================================
+   *
+   * Chi tiết triển khai:
+   * =====================================================================
+   * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi hồ sơ văn phong
+   * =====================================================================
+   *
+   * INPUT:
+   * - id, sampleId
+   *
+   * OUTPUT:
+   * - Promise chứa data do $api unwrap từ BaseResponse.
+   *
+   * SIDE EFFECT:
+   * - Gửi HTTP qua $api tới endpoint tương ứng.
+   *
+   * EXCEPTION:
+   * - ApiError hoặc lỗi mạng truyền về caller.
    * =====================================================================
    */
   deleteSandboxSample(id, sampleId) {

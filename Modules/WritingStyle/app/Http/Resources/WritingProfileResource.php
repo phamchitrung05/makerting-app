@@ -7,7 +7,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Serialize WritingProfile cho API/UI.
+ * CHỨC NĂNG FILE: Serialize hồ sơ văn phong và metadata V3 cho API/UI.
  * =====================================================================
  *
  * Chuyển đổi model WritingProfile thành cấu trúc dữ liệu JSON trả về cho FE:
@@ -16,16 +16,38 @@ use Illuminate\Http\Resources\Json\JsonResource;
  *   voice_texture_instructions và voice_texture_sliders_json.
  * - Danh mục (categories) và thẻ phân loại (tags) khi được eager load.
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - toArray(Request $request): Serialize thuộc tính model WritingProfile thành mảng.
+ * - toArray(): Serialize hồ sơ, trường V3 và các quan hệ đã được nạp.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : WritingProfile model
- * - OUTPUT: Mảng JSON-serializable của WritingProfile
+ * - INPUT : WritingProfile và Request.
+ * - OUTPUT: array có DNA, Ô 1–3, slider, style_analysis_json, slider_preferences_json và quan hệ.
+ *
+ * BỐI CẢNH SỬ DỤNG: Dùng cho response CRUD; relations chỉ xuất khi đã eager load.
  * =====================================================================
  */
 class WritingProfileResource extends JsonResource
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Serialize hồ sơ, trường V3 và các quan hệ đã được nạp
+     * =====================================================================
+     *
+     * INPUT:
+     * - Request $request
+     *
+     * OUTPUT:
+     * - array profile với giá trị mặc định tương thích bản cũ
+     *
+     * SIDE EFFECT:
+     * - Đọc model và relations khi đã load; không ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction; lỗi serialize có thể truyền lên.
+     * =====================================================================
+     */
     public function toArray(Request $request): array
     {
         return [

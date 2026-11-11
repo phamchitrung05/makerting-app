@@ -1,3 +1,21 @@
+<!--
+  =====================================================================
+  CHỨC NĂNG FILE: Form nhập brief cho bài viết trong sandbox V3.
+  =====================================================================
+
+  Form trong Phòng thử DNA V3; trang edit chuyển dữ liệu phẳng từ form
+  thành WritingBrief trước khi gửi API. Chưa validate nghiệp vụ hoặc lưu ở đây.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - Không có hàm nghiệp vụ cục bộ.
+  - Computed: Không có.
+  - Watcher/lifecycle: Không có.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : modelValue: Object bắt buộc, chứa fields brief dạng phẳng.
+  - OUTPUT: Sửa các trường trên object v-model của cha; defineModel khai báo update:modelValue. Không gọi API.
+  =====================================================================
+-->
 <script setup>
 const brief = defineModel({ type: Object, required: true })
 

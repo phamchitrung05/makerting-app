@@ -3,7 +3,6 @@
 namespace Modules\WritingStyle\Services;
 
 use Modules\CoreAi\Contracts\CoreAiGatewayContract;
-use Modules\CoreAi\DTOs\AiStructuredRequest;
 use Modules\WritingStyle\DTOs\WritingAnalysisResultDto;
 use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Models\WritingProfileAnalysis;
@@ -11,7 +10,7 @@ use Modules\TaskCenter\Contracts\TaskTrackerContract;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Service phân tích, giải mã DNA văn phong qua AI và quản lý tác vụ ngầm.
+ * CHỨC NĂNG FILE: Giải mã DNA (Prompt Pack V3) và quản lý tác vụ phân tích bất đồng bộ.
  * =====================================================================
  *
  * Thực hiện 2 nhiệm vụ cốt lõi trong hệ thống WritingStyle:
@@ -20,29 +19,48 @@ use Modules\TaskCenter\Contracts\TaskTrackerContract;
  *    AnalyzeWritingProfileJob vào queue để xử lý bất đồng bộ (trả 202 cho FE).
  * 2. analyze(): Thực thi giải mã DNA bằng AI (chạy trong Queue Worker hoặc gọi đồng bộ):
  *    - Tự động nhận diện phân tầng độ dài (Tier: micro | short | medium | long).
- *    - Biên dịch prompt trắc nghiệm bộ quy tắc tương ứng qua WritingProfileDefinition.
- *    - Gọi CoreAiGatewayContract::executeStructured với JSON Schema nghiêm ngặt.
- *    - Lọc kiểm chứng bằng chứng nguyên văn (evidence_json) có thật trong bài mẫu.
- *    - Trích xuất cả Ô 1 (style_instructions) và Ô 2 (voice_texture_instructions +
- *      5 thanh trượt voice_texture_sliders_json).
+ *    - Gọi CoreAiGatewayContract::executeStructured với JSON Schema nghiêm ngặt
+ *      của `WritingStyleAnalysisV3` (features/state/evidence có ID).
+ *    - Trích xuất Ô 1 (style_instructions) + Ô 2 (voice_texture_instructions +
+ *      sliders) + signature_language + source_specific_items + uncertainties.
  *    - Đóng gói DTO và lưu result_json vào writing_profile_analyses.
  *    - KHÔNG tạo WritingProfile: `draft_profile_id` được gán khi người dùng
  *      bấm Lưu trên trang create (POST /writing-profiles kèm analysis_id).
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - __construct(CoreAiGatewayContract $ai, TaskTrackerContract $tracker): Khởi tạo service
- * - analyze(...): Giải mã DNA văn phong qua AI và lưu kết quả vào analysis
- * - buildPrompt(string $referenceText, string $tier): Ghép prompt phân tích kèm câu hỏi quy tắc
- * - outputSchema(string $tier): Tạo JSON Schema nghiêm ngặt cho phản hồi AI
- * - dispatchAnalysis(...): Khởi tạo bản ghi phân tích, SystemTaskRun và đẩy job vào hàng đợi
+ * - __construct(): Khởi tạo thuộc tính hoặc nhận các dependency của WritingStyleAnalyzerService.
+ * - analyze(): Giải mã mẫu và lưu kết quả cùng metadata.
+ * - dispatchAnalysis(): Dedupe phân tích đang chạy theo source_hash rồi tạo job nếu cần.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : reference_text (văn bản mẫu), source_type, source_url, name, created_by
- * - OUTPUT: WritingProfileAnalysis (kèm result_json) hoặc array{analysis, taskRun}
+ * - INPUT : Bài mẫu, loại nguồn, URL, người tạo và analysis có thể đã tồn tại.
+ * - OUTPUT: WritingProfileAnalysis hoặc cặp analysis/taskRun.
+ *
+ * BỐI CẢNH SỬ DỤNG: Controller dispatch job; worker hoặc bộ eval gọi analyze(). Phiên bản được ghim trên analysis.
  * =====================================================================
  */
 class WritingStyleAnalyzerService
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo thuộc tính hoặc nhận các dependency của WritingStyleAnalyzerService
+     * =====================================================================
+     *
+     * INPUT:
+     * - protected readonly CoreAiGatewayContract $ai, protected readonly TaskTrackerContract $tracker,
+     *
+     * OUTPUT:
+     * - Instance giữ các thuộc tính/dependency theo chữ ký
+     *
+     * SIDE EFFECT:
+     * - Gán thuộc tính trong bộ nhớ; không gọi AI hoặc ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi kiểu dữ liệu truyền về caller; không mở transaction.
+     * =====================================================================
+     */
     public function __construct(
         protected readonly CoreAiGatewayContract $ai,
         protected readonly TaskTrackerContract $tracker,
@@ -50,7 +68,25 @@ class WritingStyleAnalyzerService
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Phân tích mẫu theo phiên bản đã ghim và lưu kết quả cùng metadata
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Thực thi giải mã DNA văn phong đồng bộ qua CoreAiGateway
+     * =====================================================================
+     *
+     * INPUT:
+     * - string $referenceText, string $sourceType = WritingProfileAnalysis::SOURCE_PASTE, ?string $sourceUrl = null, ?int $createdBy = null, ?WritingProfileAnalysis $analysis = null,
+     *
+     * OUTPUT:
+     * - WritingProfileAnalysis fresh có trạng thái succeeded/failed hoặc giữ running để retry
+     *
+     * SIDE EFFECT:
+     * - Gọi gateway, ghi analysis và log AI. V3 kiểm tra hoàn tất, normalize bằng chứng và giữ slider null. Chưa tạo WritingProfile.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi transient được ghi rồi ném lại; lỗi khác được chuyển failed. Không tự mở transaction.
      * =====================================================================
      */
     public function analyze(
@@ -65,7 +101,7 @@ class WritingStyleAnalyzerService
             'source_type'     => $sourceType,
             'source_url'      => $sourceUrl,
             'reference_text'  => $referenceText,
-            'prompt_version'  => PromptV3::enabled() ? 3 : 2,
+            'prompt_version'  => 3,
             'status'          => WritingProfileAnalysis::STATUS_PENDING,
             'expires_at'      => now()->addDays((int) config('writingstyle.analysis_retention_days', 30)),
         ]);
@@ -74,53 +110,33 @@ class WritingStyleAnalyzerService
         try {
             $tier = WritingProfileDefinition::detectTier($referenceText);
 
-            $v3 = $analysis->prompt_version === 3 ? new WritingStyleAnalysisV3($referenceText) : null;
-            $resp = $this->ai->executeStructured(
-                $v3?->request() ?? AiStructuredRequest::fromPrompt(
-                    $this->buildPrompt($referenceText, $tier),
-                    system: (string) config(
-                        'writingstyle.prompts.analyzer.system',
-                        'Bạn là chuyên gia phân tích văn phong. Chỉ trả JSON đúng schema, không thêm lời dẫn.'
-                    ),
-                    schema: $this->outputSchema($tier),
-                    options: ['temperature' => 0.2],
-                    module: 'writingstyle',
-                    operation: 'analyze',
-                )
-            );
+            $analysisService = new WritingStyleAnalysisV3($referenceText);
+            $resp = $this->ai->executeStructured($analysisService->request());
             $data = $resp->data ?? [];
-            if ($v3 !== null) {
-                PromptV3::requireComplete($resp);
-                $data = $v3->normalize($data);
-            }
+            PromptPack::requireComplete($resp);
+            $data = $analysisService->normalize($data);
             $aiRunId = $this->ai->lastRun()?->id;
 
             $rawEvidence = is_array($data['evidence_json'] ?? null) ? $data['evidence_json'] : [];
-            $evidence = $v3 !== null ? $rawEvidence : WritingProfileDefinition::filterValidEvidence($referenceText, $rawEvidence);
+            $evidence = $rawEvidence;
             $rules = is_array($data['rules_json'] ?? null) ? $data['rules_json'] : [];
             $styleInstructions = trim((string) ($data['style_instructions'] ?? ''));
             $voiceTextureInstructions = trim((string) ($data['voice_texture_instructions'] ?? ''));
 
-            // Chuẩn hóa 5 thanh trượt Chất văn (0..100).
-            $rawSliders = is_array($data['voice_texture_sliders_json'] ?? null)
-                ? $data['voice_texture_sliders_json']
-                : [];
-            $axesConfig = config('writingstyle.voice_texture_axes', []);
+            // Chuẩn hóa 5 thanh trượt Chất văn (0..100, giữ null khi thiếu).
             $voiceTextureSliders = [];
             foreach (WritingProfile::VOICE_TEXTURE_KEYS as $axisKey) {
-                $defaultVal = (int) ($axesConfig[$axisKey]['default'] ?? 70);
-                $val = isset($rawSliders[$axisKey]) ? (int) $rawSliders[$axisKey] : $defaultVal;
-                $voiceTextureSliders[$axisKey] = $v3 !== null ? $rawSliders[$axisKey] : max(0, min(100, $val));
+                $voiceTextureSliders[$axisKey] = isset($data['voice_texture_sliders_json'][$axisKey])
+                    ? $data['voice_texture_sliders_json'][$axisKey]
+                    : null;
             }
 
-            // Chuẩn hóa 8 thanh trượt Sandbox sắc thái cảm xúc (0..100, mặc định 50).
-            $rawToneSliders = is_array($data['tone_sliders_json'] ?? null)
-                ? $data['tone_sliders_json']
-                : [];
+            // Chuẩn hóa 8 thanh trượt Sắc thái cảm xúc (0..100, giữ null khi thiếu).
             $toneSliders = [];
             foreach (WritingProfile::TONE_AXIS_KEYS as $toneKey) {
-                $val = isset($rawToneSliders[$toneKey]) ? (int) $rawToneSliders[$toneKey] : 50;
-                $toneSliders[$toneKey] = $v3 !== null ? $rawToneSliders[$toneKey] : max(0, min(100, $val));
+                $toneSliders[$toneKey] = isset($data['tone_sliders_json'][$toneKey])
+                    ? $data['tone_sliders_json'][$toneKey]
+                    : null;
             }
 
             $metadata = [
@@ -128,8 +144,8 @@ class WritingStyleAnalyzerService
                 'sentence_count' => WritingProfileDefinition::countSentences($referenceText),
                 'detected_tier'  => $tier,
                 'ai_model_used'  => $resp->remoteModelId,
-                'prompt_version' => $v3 !== null ? 3 : 2,
-                'schema_version' => $v3 !== null ? 3 : 2,
+                'prompt_version' => 3,
+                'schema_version' => 3,
             ];
 
             $result = new WritingAnalysisResultDto(
@@ -175,126 +191,25 @@ class WritingStyleAnalyzerService
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: Ghép nối câu lệnh prompt phân tích văn phong theo các quy tắc áp dụng cho tier độ dài
+     * CHỨC NĂNG: Dedupe phân tích đang chạy theo source_hash và phiên bản rồi tạo job nếu cần
      * =====================================================================
-     */
-    protected function buildPrompt(string $referenceText, string $tier): string
-    {
-        $cfg = config('writingstyle.prompts.analyzer', []);
-
-        $lines = (array) ($cfg['intro'] ?? [
-            'Hãy giải mã DNA văn phong của bài mẫu dưới đây.',
-            'Trả lời các khía cạnh sau (mỗi khía cạnh trả lời ngắn gọn câu hỏi kèm theo):',
-        ]);
-
-        foreach (WritingProfileDefinition::applicableKeys($tier) as $key) {
-            $lines[] = '- ' . $key . ': ' . WritingProfileDefinition::ruleQuestion($key);
-        }
-
-        $lines[] = '';
-        $lines[] = (string) ($cfg['evidence_instruction'] ?? 'Với mỗi khía cạnh cũng trích 1 câu NGUYÊN VĂN trong bài mẫu làm bằng chứng (evidence_json[].excerpt) — PHẢI là chữ có thật trong bài, không được suy diễn.');
-        $guide = trim((string) ($cfg['style_instructions_guide'] ?? ''));
-        if ($guide !== '') {
-            $lines[] = '';
-            $lines[] = $guide;
-        }
-        $voiceGuide = trim((string) ($cfg['voice_texture_guide'] ?? ''));
-        if ($voiceGuide !== '') {
-            $lines[] = '';
-            $lines[] = $voiceGuide;
-        }
-        $lines[] = '';
-        $lines[] = 'BÀI MẪU:';
-        $lines[] = $referenceText;
-
-        return implode(PHP_EOL, $lines);
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Khởi tạo cấu trúc JSON Schema nghiêm ngặt cho kết quả phản hồi của AI
-     * =====================================================================
-     */
-    protected function outputSchema(string $tier): array
-    {
-        $rulesProps = [];
-        foreach (WritingProfileDefinition::applicableKeys($tier) as $k) {
-            $rulesProps[$k] = ['type' => 'string'];
-        }
-        // uncertainties luôn là mảng chuỗi.
-        $rulesProps['uncertainties'] = ['type' => 'array', 'items' => ['type' => 'string']];
-
-        // OpenAI strict json_schema: additionalProperties:false ở MỌI object
-        // + required phải liệt kê toàn bộ properties ở mỗi tầng.
-        $rulesRequired = array_keys($rulesProps);
-        $evidenceItemProps = [
-            'rule_key' => ['type' => 'string'],
-            'excerpt'  => ['type' => 'string'],
-            'note'     => ['type' => 'string'],
-        ];
-
-        $sliderProps = [];
-        foreach (WritingProfile::VOICE_TEXTURE_KEYS as $axisKey) {
-            $sliderProps[$axisKey] = ['type' => 'integer'];
-        }
-
-        $toneSliderProps = [];
-        foreach (WritingProfile::TONE_AXIS_KEYS as $toneKey) {
-            $toneSliderProps[$toneKey] = ['type' => 'integer'];
-        }
-
-        return [
-            'type' => 'object',
-            'properties' => [
-                'rules_json' => [
-                    'type' => 'object',
-                    'properties' => $rulesProps,
-                    'required' => $rulesRequired,
-                    'additionalProperties' => false,
-                ],
-                'evidence_json' => [
-                    'type' => 'array',
-                    'items' => [
-                        'type' => 'object',
-                        'properties' => $evidenceItemProps,
-                        'required' => array_keys($evidenceItemProps),
-                        'additionalProperties' => false,
-                    ],
-                ],
-                'style_instructions' => ['type' => 'string'],
-                'voice_texture_instructions' => ['type' => 'string'],
-                // KHÔNG có 'tone_instructions': Ô 3 do người dùng soạn tay
-                // theo mục đích viết bài — không phải thứ AI giải mã ra.
-                // Trước đây khai property lỏng (không required, không đọc,
-                // không lưu) nên bị bỏ rơi — xóa để schema strict hợp lệ.
-                'voice_texture_sliders_json' => [
-                    'type' => 'object',
-                    'properties' => $sliderProps,
-                    'required' => array_keys($sliderProps),
-                    'additionalProperties' => false,
-                ],
-                'tone_sliders_json' => [
-                    'type' => 'object',
-                    'properties' => $toneSliderProps,
-                    'required' => array_keys($toneSliderProps),
-                    'additionalProperties' => false,
-                ],
-            ],
-            'required' => [
-                'rules_json',
-                'evidence_json',
-                'style_instructions',
-                'voice_texture_instructions',
-                'voice_texture_sliders_json',
-                'tone_sliders_json',
-            ],
-            'additionalProperties' => false,
-        ];
-    }
-
-    /**
+     *
+     * Chi tiết triển khai:
      * =====================================================================
      * CHỨC NĂNG: Tiếp nhận yêu cầu giải mã, xử lý chống trùng lặp (dedupe), tạo task tracking và dispatch job
+     * =====================================================================
+     *
+     * INPUT:
+     * - string $referenceText, string $sourceType = WritingProfileAnalysis::SOURCE_PASTE, ?string $sourceUrl = null, ?string $name = null, ?int $createdBy = null,
+     *
+     * OUTPUT:
+     * - array analysis và taskRun, có thể tái sử dụng bản pending/running
+     *
+     * SIDE EFFECT:
+     * - Truy vấn analysis mới nhất theo id; tạo analysis/taskRun và dispatch queue ai-text sau commit của caller.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Có thể phát sinh lỗi DB/tracker/queue. Không bao transaction cho cả chuỗi, không giữ khóa ghi.
      * =====================================================================
      */
     public function dispatchAnalysis(
@@ -305,15 +220,8 @@ class WritingStyleAnalyzerService
         ?int $createdBy = null,
     ): array {
         $hash = WritingProfileAnalysis::sourceHashOf($referenceText);
-        $promptVersion = PromptV3::enabled() ? 3 : 2;
         $existing = WritingProfileAnalysis::query()
             ->where('source_hash', $hash)
-            ->where(function ($query) use ($promptVersion): void {
-                $query->where('prompt_version', $promptVersion);
-                if ($promptVersion === 2) {
-                    $query->orWhereNull('prompt_version');
-                }
-            })
             ->whereIn('status', [WritingProfileAnalysis::STATUS_PENDING, WritingProfileAnalysis::STATUS_RUNNING])
             ->latest('id')
             ->first();
@@ -334,7 +242,7 @@ class WritingStyleAnalyzerService
             'source_type'    => $sourceType,
             'source_url'     => $sourceUrl,
             'reference_text' => $referenceText,
-            'prompt_version' => $promptVersion,
+            'prompt_version' => 3,
             'status'         => WritingProfileAnalysis::STATUS_PENDING,
             'expires_at'     => now()->addDays((int) config('writingstyle.analysis_retention_days', 30)),
         ]);

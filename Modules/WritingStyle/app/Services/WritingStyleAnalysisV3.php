@@ -6,72 +6,164 @@ use Illuminate\Support\Facades\Validator;
 use Modules\CoreAi\DTOs\AiStructuredRequest;
 use Modules\WritingStyle\Models\WritingProfile;
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Tạo yêu cầu giải mã V3 và chuẩn hóa bằng chứng, DNA cùng điểm slider trả về.
+ * =====================================================================
+ *
+ * WritingStyleAnalyzerService tạo instance theo bài mẫu và dùng kết quả để lưu analysis.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - __construct(): Tách mẫu thành các block không rỗng và đánh số từ 1 khi xây prompt.
+ * - request(): Ghép định nghĩa đặc điểm, thang slider và source_blocks thành yêu cầu AI.
+ * - schema(): Tạo schema cho 15 đặc điểm, bằng chứng, Ô 1/2 và slider nullable.
+ * - normalize(): Validate kết quả và loại trích dẫn sai trước khi chiếu DNA về cấu trúc tương thích.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Văn bản mẫu và mảng structured output do gateway trả về.
+ * - OUTPUT: AiStructuredRequest hoặc dữ liệu V3 kèm rules/evidence tương thích V2.
+ *
+ * BỐI CẢNH SỬ DỤNG: WritingStyleAnalyzerService tạo instance theo bài mẫu và dùng kết quả để lưu analysis.
+ * =====================================================================
+ */
 final class WritingStyleAnalysisV3
 {
     private readonly array $blocks;
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tách mẫu thành các block không rỗng và đánh số từ 1 khi xây prompt
+     * =====================================================================
+     *
+     * INPUT:
+     * - string $sample
+     *
+     * OUTPUT:
+     * - Instance giữ blocks để kiểm tra bằng chứng
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public function __construct(string $sample)
     {
         $this->blocks = array_values(array_filter(array_map('trim', preg_split('/\R+/u', $sample) ?: []), 'strlen'));
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghép định nghĩa đặc điểm, thang slider và source_blocks thành yêu cầu AI
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - AiStructuredRequest operation analyze_v3, temperature 0.2, max_tokens 8192
+     *
+     * SIDE EFFECT:
+     * - Đọc cấu hình và dựng yêu cầu, chưa gọi gateway.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException khi context quá dài; JsonException khi mã hóa thất bại. Không mở transaction.
+     * =====================================================================
+     */
     public function request(): AiStructuredRequest
     {
-        $system = (string) config('writingstyle.v3.analyzer');
-        $prompt = PromptV3::json([
-            'feature_definitions' => config('writingstyle.v3.questions'),
-            'axis_definitions' => config('writingstyle.v3.axes'),
+        $system = PromptPack::role('analyzer');
+        $prompt = PromptPack::json([
+            'feature_definitions' => PromptPack::dict('questions'),
+            'axis_definitions' => PromptPack::dict('axes'),
             'source_blocks' => array_map(
                 static fn (string $text, int $index) => ['id' => $index + 1, 'text' => $text],
                 $this->blocks,
                 array_keys($this->blocks),
             ),
         ]);
-        PromptV3::checkContext($system, $prompt);
+        PromptPack::checkContext($system, $prompt);
 
         return AiStructuredRequest::fromPrompt(
             $prompt,
             system: $system,
             schema: $this->schema(),
-            options: ['temperature' => 0.2, 'max_tokens' => 8192],
+            options: ['temperature' => PromptPack::temperature('analyzer'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096) * 2],
             module: 'writingstyle',
             operation: 'analyze_v3',
         );
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tạo schema cho 15 đặc điểm, bằng chứng, Ô 1/2 và slider nullable
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array JSON Schema với toàn bộ thuộc tính required; không yêu cầu Ô 3
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     private function schema(): array
     {
         $string = ['type' => 'string'];
         $strings = ['type' => 'array', 'items' => $string];
         $score = ['type' => ['integer', 'null']];
-        $feature = PromptV3::objectSchema([
+        $feature = PromptPack::objectSchema([
             'state' => ['type' => 'string', 'enum' => ['observed', 'inferred', 'unknown']],
             'description' => $string,
             'confidence' => ['type' => 'string', 'enum' => ['low', 'medium', 'high']],
             'evidence_ids' => $strings,
         ]);
 
-        return PromptV3::objectSchema([
-            'features' => PromptV3::objectSchema(array_fill_keys(array_keys(config('writingstyle.v3.questions')), $feature)),
-            'evidence' => ['type' => 'array', 'items' => PromptV3::objectSchema([
+        return PromptPack::objectSchema([
+            'features' => PromptPack::objectSchema(array_fill_keys(array_keys((array) PromptPack::dict('questions')), $feature)),
+            'evidence' => ['type' => 'array', 'items' => PromptPack::objectSchema([
                 'id' => $string,
                 'kind' => ['type' => 'string', 'enum' => ['excerpt', 'structure_observation']],
                 'block_ids' => ['type' => 'array', 'items' => ['type' => 'integer']],
                 'text' => $string,
             ])],
-            'signature_language' => PromptV3::objectSchema(array_fill_keys(['self_reference', 'audience_reference', 'particles'], $strings)),
+            'signature_language' => PromptPack::objectSchema(array_fill_keys(['self_reference', 'audience_reference', 'particles'], $strings)),
             'source_specific_items' => $strings,
             'uncertainties' => $strings,
             'style_instructions' => $string,
             'voice_texture_instructions' => $string,
-            'voice_texture_sliders_json' => PromptV3::objectSchema(array_fill_keys(WritingProfile::VOICE_TEXTURE_KEYS, $score)),
-            'tone_sliders_json' => PromptV3::objectSchema(array_fill_keys(WritingProfile::TONE_AXIS_KEYS, $score)),
+            'voice_texture_sliders_json' => PromptPack::objectSchema(array_fill_keys(WritingProfile::VOICE_TEXTURE_KEYS, $score)),
+            'tone_sliders_json' => PromptPack::objectSchema(array_fill_keys(WritingProfile::TONE_AXIS_KEYS, $score)),
         ]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Validate kết quả và loại trích dẫn sai trước khi chiếu DNA về cấu trúc tương thích
+     * =====================================================================
+     *
+     * INPUT:
+     * - array $data
+     *
+     * OUTPUT:
+     * - array rules_json, evidence_json, style_analysis_json, Ô 1/2 và slider giữ nguyên null
+     *
+     * SIDE EFFECT:
+     * - Loại evidence thiếu block hoặc excerpt không khớp; observed mất bằng chứng chuyển unknown, inferred hạ confidence low. Nhận xét cấu trúc chỉ kiểm tra block tham chiếu.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException khi sai cấu trúc hoặc giới hạn đầu ra. Không ghi DB, không mở transaction.
+     * =====================================================================
+     */
     public function normalize(array $data): array
     {
-        $keys = array_keys(config('writingstyle.v3.questions'));
+        $keys = array_keys((array) PromptPack::dict('questions'));
         $rules = [
             'features' => ['required', 'array:'.implode(',', $keys), 'required_array_keys:'.implode(',', $keys)],
             'features.*' => ['required', 'array:state,description,confidence,evidence_ids'],

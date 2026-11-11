@@ -1,31 +1,38 @@
 /*
- * =====================================================================
- * CHỨC NĂNG FILE: Pinia store DNA văn phong (WritingStyle profiles).
- * =====================================================================
- * Load-once pattern aiConfig: profiles + options (tiers/rules) nạp 1 lần,
- * mọi component dùng chung; thêm/sửa/xóa cập nhật mảng in-place (không refetch).
- * Quản lý vòng lặp polling giải mã DNA có token chống xung đột phiên.
- *
- * CÁC HÀM/METHOD TRONG FILE:
- * - fetchProfiles(params): nạp danh sách profile phân trang
- * - fetchOptions(): nạp 4 tiers và 16 câu hỏi giải mã
- * - ensureLoaded(): nạp đồng thời profiles và options
- * - createProfile(payload): tạo profile mới và thêm vào danh sách
- * - updateProfile(id, payload): sửa profile và cập nhật in-place
- * - deleteProfile(id): xóa profile khỏi server và local store
- * - fetchProfile(id): tải chi tiết một profile
- * - analyze(payload): gửi văn bản giải mã DNA (nhận 202)
- * - fetchAnalysis(id, opts): đọc 1 lần kết quả giải mã theo UUID (nhận AbortSignal)
- * - waitForAnalysis(id, opts): poll kết quả giải mã định kỳ kèm cơ chế hủy sạch
- *   (deadline timer + AbortController nên request treo vẫn bị cắt đúng hạn)
- * - stopPolling(): ngắt chu kỳ poll, abort request đang bay, giải phóng Promise
- * - sandbox(id, payload): gọi AI viết thử nghiệm theo DNA
- *
- * INPUT/OUTPUT CỦA STORE (tổng thể):
- * - INPUT : payload từ UI components qua writingStyleApi
- * - OUTPUT: state phản ứng (profiles, options, analysisResult, sandboxResult)
- * =====================================================================
- */
+  =====================================================================
+  CHỨC NĂNG FILE: Pinia store hồ sơ, options và vòng polling giải mã DNA.
+  =====================================================================
+
+  Load-once pattern aiConfig: profiles + options (tiers/rules) nạp 1 lần,
+  mọi component dùng chung; thêm/sửa/xóa cập nhật mảng in-place (không refetch).
+  Quản lý vòng lặp polling giải mã DNA có token chống xung đột phiên.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - fetchProfiles(): Nạp danh sách profile từ API theo tiêu chí lọc.
+  - fetchOptions(): Nạp danh mục cấp độ độ dài (tiers) và 16 câu hỏi giải mã.
+  - ensureLoaded(): Đảm bảo cả profiles và options đều được nạp sẵn sàng.
+  - createProfile(): Tạo mới hồ sơ văn phong thủ công và chèn vào đầu danh sách.
+  - suggestSlug(): Gợi ý slug khả dụng cho trường tên/slug đang gõ (realtime)..
+  - updateProfile(): Cập nhật thông tin hồ sơ và thay thế in-place trong store.
+  - deleteProfile(): Xóa hồ sơ trên server và loại bỏ khỏi mảng state profiles.
+  - fetchProfile(): Tải thông tin chi tiết một hồ sơ (kèm rules và evidence).
+  - analyze(): Gửi văn bản bài mẫu yêu cầu backend tạo phiên giải mã DNA.
+  - fetchAnalysis(): Đọc trạng thái và kết quả 1 lần giải mã DNA theo UUID.
+  - waitForAnalysis(): Poll analysis tới khi succeeded/failed, bị hủy hoặc hết hạn.
+  - stopPolling(): Ngắt vòng lặp polling đang chạy và giải phóng Promise lập tức.
+  - sandbox(): Chạy thử nghiệm viết bài theo DNA văn phong (DNA Sandbox).
+  - runSandboxStep(): Thực thi 1 bước (step) trong quy trình Sandbox Pipeline.
+  - saveSandboxSample(): Lưu 1 bản viết thử vào Database của hồ sơ văn phong.
+  - deleteSandboxSample(): Xóa 1 bản viết thử đã lưu khỏi Database của hồ sơ văn phong.
+  - Getters: tiers/ruleKeys/tierPipelines đọc options; enabledProfiles lọc hồ sơ đang bật.
+  - statusCounts: đếm active/draft đang bật và archived là hồ sơ tắt.
+  - Watcher/lifecycle: Không có.
+
+  INPUT/OUTPUT CỦA FILE (tổng thể):
+  - INPUT : Payload từ component hoặc action gọi service.
+  - OUTPUT: State hồ sơ/options/analysis/sandbox phản ứng; actions trả dữ liệu hoặc Promise.
+  =====================================================================
+*/
 /* eslint-disable camelcase */
 import { defineStore } from 'pinia'
 import { writingStyleApi } from '@modules/WritingStyle/resources/js/services/writingStyleApi'
@@ -444,6 +451,24 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * thay vì dừng sớm — nếu backend đổi lại thành markFailed ngay khi lỗi
      * tạm thời thì khoảng đệm 420s này mất ý nghĩa.
      */
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Poll analysis tới khi succeeded/failed, bị hủy hoặc hết hạn
+     * =====================================================================
+     *
+     * INPUT:
+     * - id, { intervalMs = 3000, timeoutMs = 420000 } = {}
+     *
+     * OUTPUT:
+     * - Promise<Object|null>; null khi dừng polling hoặc lượt chờ bị thay thế
+     *
+     * SIDE EFFECT:
+     * - Dừng lượt cũ, tạo AbortController/timer, gọi fetchAnalysis lặp lại và dọn tài nguyên trong finally.
+     *
+     * EXCEPTION:
+     * - Retry lỗi mạng trong thời hạn; hết hạn ném lỗi. stopPolling hủy fetch và đánh thức vòng chờ.
+     * =====================================================================
+     */
     async waitForAnalysis(id, { intervalMs = 3000, timeoutMs = 420000 } = {}) {
       this.stopPolling()
 
@@ -627,6 +652,11 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * CHỨC NĂNG: Thực thi 1 bước (step) trong quy trình Sandbox Pipeline
      * =====================================================================
      *
+     * Chi tiết triển khai:
+     * =====================================================================
+     * CHỨC NĂNG: Thực thi 1 bước (step) trong quy trình Sandbox Pipeline
+     * =====================================================================
+     *
      * INPUT:
      * - id (number|string): ID hồ sơ văn phong
      * - step (string): Mã step trong pipeline (vd: 'topic_outline', 'article_writer')
@@ -634,6 +664,19 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      *
      * OUTPUT:
      * - Promise<Object>: { step, artifact }
+     * =====================================================================
+     *
+     * INPUT:
+     * - id, step, payload
+     *
+     * OUTPUT:
+     * - Giá trị hoặc Promise kết quả của action theo mô tả chi tiết.
+     *
+     * SIDE EFFECT:
+     * - Đọc/cập nhật state Pinia và gọi API khi action yêu cầu.
+     *
+     * EXCEPTION:
+     * - Lỗi API/polling được xử lý hoặc truyền lên theo action hiện tại.
      * =====================================================================
      */
     async runSandboxStep(id, step, payload) {
@@ -649,6 +692,24 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      * =====================================================================
      * CHỨC NĂNG: Lưu 1 bản viết thử vào Database của hồ sơ văn phong
      * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
+     * CHỨC NĂNG: Lưu 1 bản viết thử vào Database của hồ sơ văn phong
+     * =====================================================================
+     *
+     * INPUT:
+     * - id, payload
+     *
+     * OUTPUT:
+     * - Giá trị hoặc Promise kết quả của action theo mô tả chi tiết.
+     *
+     * SIDE EFFECT:
+     * - Đọc/cập nhật state Pinia và gọi API khi action yêu cầu.
+     *
+     * EXCEPTION:
+     * - Lỗi API/polling được xử lý hoặc truyền lên theo action hiện tại.
+     * =====================================================================
      */
     async saveSandboxSample(id, payload) {
       return await writingStyleApi.saveSandboxSample(id, payload)
@@ -657,6 +718,24 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     /**
      * =====================================================================
      * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database của hồ sơ văn phong
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
+     * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database của hồ sơ văn phong
+     * =====================================================================
+     *
+     * INPUT:
+     * - id, sampleId
+     *
+     * OUTPUT:
+     * - Giá trị hoặc Promise kết quả của action theo mô tả chi tiết.
+     *
+     * SIDE EFFECT:
+     * - Đọc/cập nhật state Pinia và gọi API khi action yêu cầu.
+     *
+     * EXCEPTION:
+     * - Lỗi API/polling được xử lý hoặc truyền lên theo action hiện tại.
      * =====================================================================
      */
     async deleteSandboxSample(id, sampleId) {

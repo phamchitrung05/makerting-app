@@ -1,14 +1,15 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Trang Chỉnh sửa Writing Profile (route edit).
+  CHỨC NĂNG FILE: Chỉnh sửa Writing Profile, chỉ dẫn Ô 1–3 và vận hành sandbox nhiều bước.
   =====================================================================
+
   Route: /admin/writing-style/writing-profiles/edit/:id
   Tự nạp qua file-based routing — tên 'admin-writing-style-writing-profiles-edit-id'.
 
   Nối API thật:
   - onMounted: store.fetchProfile(id) -> GET /writing-profiles/{id}
   (kèm categories/tags/analyses eager-load từ controller show()).
-  - Map vào 8 tab theo rule_key:
+  - Map dữ liệu vào 9 tab, gồm Phòng thử DNA:
   Banner+Tổng quan: name/version/description/is_enabled/slug/status
   Đặc điểm văn phong: rules_json.tone|emotion|pronouns|vocabulary + style_instructions
   Cấu trúc nội dung: rules_json.opening|structure_patterns|transitions|ending
@@ -18,17 +19,74 @@
   Cài đặt nâng cao: style_instructions + ai_model_used (hiển thị)
   Lịch sử: analyses (đã load) + version hiện tại
   - saveProfile() -> PUT /writing-profiles/{id}: chỉ merge các khóa rules_json
-  user được chỉnh trên UI (không đè 9 khóa còn lại) + categories/tags +
-  status/is_enabled + slug + description + style_instructions.
+  user đã sửa trên UI (giữ nguyên khóa chưa sửa) + categories/tags +
+  status/is_enabled + slug + description + Ô 1–3 + slider/baseline/preset và temperature.
 
   UI-only giữ nguyên (KHÔNG map, không lưu — doc §10.3):
   radar 6 trục, expressionLevel, sampleQuotes, displayChannels,
   overviewForm.industry/primaryGoal/targetAudience/brandPillars, avatar,
-  emojiDensity, ctaList, temperature, autoScoreCheck, nút "Khôi phục" lịch sử.
+  emojiDensity, ctaList, autoScoreCheck, nút "Khôi phục" lịch sử.
 
   CHUẨN UI (docs/architecture/VUEXY_LARAVEL_ARCHITECTURE_GUIDE.md §3.5):
   PascalCase V*/App*, icon tabler-*, màu theme, spacing logical me/ms,
   không inline font-size, không mồi dữ liệu giả cho phần đã có API.
+
+  V3 lấy preset từ options, giữ slider null, lưu baseline riêng với lựa chọn.
+  Sandbox lưu brief/artifacts theo bản thử; duyệt dàn ý trước khi viết và
+  cho phép lập lại dàn ý khi fingerprint không còn khớp. Không tự lưu profile
+  khi chỉ thay đổi các ô trên form.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - prevQuote(): Chuyển sang trích dẫn trước và quay vòng khi ở đầu danh sách.
+  - nextQuote(): Chuyển sang trích dẫn sau và quay vòng khi ở cuối danh sách.
+  - addSampleQuote(): Thêm trích dẫn với nội dung giữ chỗ để chỉnh trên giao diện.
+  - ruleLabel(): Đổi khóa DNA sang nhãn hiển thị tiếng Việt, fallback về khóa gốc.
+  - addPowerWord(): Thêm từ ưu tiên chưa có vào danh sách rồi xóa ô nhập.
+  - addNegativeWord(): Thêm từ cần tránh chưa có vào danh sách rồi xóa ô nhập.
+  - recalculateVoiceTextureFromCheckboxes(): Tính chất văn theo baseline và các lựa chọn, đồng bộ directive vào Ô 2.
+  - toggleVoiceStyleOption(): Bật/tắt lựa chọn chất văn rồi tính lại slider và chỉ dẫn Ô 2.
+  - recalculateToneFromSelect(): Tính sắc thái theo baseline và lựa chọn, đồng bộ directive vào Ô 3.
+  - resetToneSliders(): Khôi phục slider cảm xúc về baseline, bỏ lựa chọn và directive preset.
+  - resetVoiceTextureSliders(): Khôi phục slider chất văn về baseline, bỏ lựa chọn và directive preset.
+  - openSandboxSampleDialog(): Mở dialog xem bản thử được chọn.
+  - getPipelineStepsForTier(): Lấy danh sách các bước (steps) từ config cho 1 cấp độ độ dài (tier).
+  - cleanStepLabel(): Rút gọn nhãn bước bằng cách bỏ tiền tố Bước kèm số.
+  - normalizeSandboxSample(): Chuẩn hóa sample cũ/mới cho giao diện pipeline.
+  - applyTonePreset(): Áp dụng preset cảm xúc, đồng bộ lựa chọn, slider và chỉ dẫn Ô 3.
+  - resetToneToBaseline(): Chọn preset default để trả cảm xúc về baseline.
+  - buildSandboxBrief(): Đóng gói form sandbox thành brief V3 theo chủ đề.
+  - buildCurrentSandboxOverrides(): Lấy thay đổi Ô 1–3 và slider để gửi từng bước sandbox.
+  - runSandboxDemo(): Tải options và chạy bước đầu để tạo bản thử theo tier.
+  - runNextSandboxStep(): Gửi bước kế tiếp cùng artifact và xác nhận duyệt dàn ý.
+  - refreshSandboxOutline(): Lập lại dàn ý của bản thử với brief đã lưu và style hiện tại.
+  - addOutlineSection(): Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh.
+  - removeOutlineSection(): Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục.
+  - persistSampleToDb(): Upsert sample đang dở hoặc hoàn chỉnh vào hồ sơ.
+  - saveCurrentSandboxSample(): Lưu bản thử với thông báo lỗi cho thao tác lưu thủ công.
+  - removeSandboxSample(): Xóa 1 bản viết thử (khỏi danh sách tạm hoặc khỏi Database).
+  - copyText(): Sao chép văn bản vào clipboard và thông báo kết quả.
+  - extractQuotedWords(): Lấy các cụm trong dấu ngoặc kép để tạo danh sách từ ưu tiên.
+  - splitPronouns(): Tách mô tả xưng hô thành cách xưng của thương hiệu và cách gọi khách.
+  - joinPronouns(): Ghép hai ô xưng hô thành mô tả để lưu rules_json.pronouns.
+  - avoidToRules(): Tách mô tả điều tránh thành các quy tắc cấm cho form.
+  - vocabToRules(): Chuyển cụm từ trong ngoặc kép thành quy tắc từ ngữ được khuyến khích.
+  - applyProfileToForm(): Nạp hồ sơ vào form, baseline slider, presets và danh sách sample.
+  - readEditableRules(): Đọc các ô chỉnh DNA thành một mảng khóa thống nhất để so với bản ban đầu.
+  - buildRulesJsonPayload(): Tạo rules_json từ các ô đã sửa, giữ nguyên nội dung chưa đổi.
+  - buildEvidenceJsonPayload(): Chuẩn bị bằng chứng trích dẫn cho payload lưu hồ sơ.
+  - saveProfile(): Lưu form hồ sơ, DNA và baseline/preset slider qua PUT.
+  - runSlugSuggest(): Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại.
+  - onNameBlur(): Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên.
+  - onSlugBlur(): Kiểm tra và gợi ý slug từ ô slug khi mất focus.
+  - onSlugInput(): Ghi nhận slug người dùng tự sửa để chỉ gửi trường này khi thay đổi.
+  - updateAdvancedCardHeight(): Căn chiều cao panel nâng cao theo viewport và footer.
+  - Computed: dominantTierMeta, VOICE_STYLE_OPTIONS, voiceStyleSelectItems, hasModifiedVoiceSliders, TONE_STYLE_OPTIONS, toneStyleSelectItems, hasModifiedToneSliders, usesPromptV3, currentTierPipelineSteps, activeSandboxSample.
+  - Watcher: theo dõi activeTab/loading để đo lại panel sau render.
+  - onMounted: nạp profile/options, bind resize; onBeforeUnmount: gỡ listener và class body.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : Route, form và state useWritingStyleStore; không có props/emits riêng.
+  - OUTPUT: Render UI, gọi store/API, cập nhật snackbar và điều hướng theo thao tác.
   =====================================================================
 -->
 <script setup>
@@ -108,14 +166,68 @@ const displayChannels = ref([
   { name: 'Khác', icon: 'tabler-dots', color: '#4b5563', enabled: false },
 ])
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển sang trích dẫn trước và quay vòng khi ở đầu danh sách
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật currentQuoteIdx trong trang edit.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 const prevQuote = () => {
   currentQuoteIdx.value = (currentQuoteIdx.value - 1 + sampleQuotes.value.length) % sampleQuotes.value.length
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển sang trích dẫn sau và quay vòng khi ở cuối danh sách
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật currentQuoteIdx trong trang edit.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 const nextQuote = () => {
   currentQuoteIdx.value = (currentQuoteIdx.value + 1) % sampleQuotes.value.length
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Thêm trích dẫn với nội dung giữ chỗ để chỉnh trên giao diện
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Thêm phần tử sampleQuotes và chuyển chỉ mục hiện tại; dữ liệu này chỉ ở UI.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 const addSampleQuote = () => {
   sampleQuotes.value.push({ text: 'Nội dung mẫu mới…', image: '', tags: [] })
   currentQuoteIdx.value = sampleQuotes.value.length - 1
@@ -171,6 +283,24 @@ const RULE_LABELS = {
   uncertainties: 'Điểm chưa xác định',
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đổi khóa DNA sang nhãn hiển thị tiếng Việt, fallback về khóa gốc
+ * =====================================================================
+ *
+ * INPUT:
+ * - key
+ *
+ * OUTPUT:
+ * - string nhãn của quy tắc
+ *
+ * SIDE EFFECT:
+ * - Tra bảng nhãn, không đổi dữ liệu.
+ *
+ * EXCEPTION:
+ * - Không bắt hoặc ném lỗi chủ động.
+ * =====================================================================
+ */
 function ruleLabel(key) {
   return RULE_LABELS[key] || key
 }
@@ -202,6 +332,24 @@ const vocabConfig = reactive({
   newNegativeWord: '',
 })
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Thêm từ ưu tiên chưa có vào danh sách rồi xóa ô nhập
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Sửa vocabConfig trên form; bỏ qua từ rỗng hoặc trùng.
+ *
+ * EXCEPTION:
+ * - Không gọi API; lưu khi người dùng lưu profile.
+ * =====================================================================
+ */
 function addPowerWord() {
   const w = vocabConfig.newPowerWord.trim()
   if (w && !vocabConfig.powerWords.includes(w)) {
@@ -210,6 +358,24 @@ function addPowerWord() {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Thêm từ cần tránh chưa có vào danh sách rồi xóa ô nhập
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Sửa vocabConfig trên form; bỏ qua từ rỗng hoặc trùng.
+ *
+ * EXCEPTION:
+ * - Không gọi API; lưu khi người dùng lưu profile.
+ * =====================================================================
+ */
 function addNegativeWord() {
   const w = vocabConfig.newNegativeWord.trim()
   if (w && !vocabConfig.negativeWords.includes(w)) {
@@ -334,6 +500,24 @@ const hasModifiedVoiceSliders = computed(() =>
   voiceTextureSliders.some(s => s.value !== s.baseline),
 )
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Tính chất văn theo baseline và các lựa chọn, đồng bộ directive vào Ô 2
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đổi giá trị slider và voiceTexturePrompt theo presets từ options.
+ *
+ * EXCEPTION:
+ * - Trục chưa xác định giữ null khi tổng delta bằng 0.
+ * =====================================================================
+ */
 function recalculateVoiceTextureFromCheckboxes() {
   const checkedItems = VOICE_STYLE_OPTIONS.value.filter(opt =>
     selectedVoiceOptionIds.value.includes(opt.id),
@@ -369,6 +553,24 @@ function recalculateVoiceTextureFromCheckboxes() {
   advancedConfig.voiceTexturePrompt = [...currentLines, ...selectedLines].join('\n')
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Bật/tắt lựa chọn chất văn rồi tính lại slider và chỉ dẫn Ô 2
+ * =====================================================================
+ *
+ * INPUT:
+ * - optId
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Sửa selectedVoiceOptionIds và gọi recalculateVoiceTextureFromCheckboxes.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function toggleVoiceStyleOption(optId) {
   const idx = selectedVoiceOptionIds.value.indexOf(optId)
   if (idx >= 0) {
@@ -420,6 +622,11 @@ const hasModifiedToneSliders = computed(() =>
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Tính sắc thái theo baseline và lựa chọn, đồng bộ directive vào Ô 3
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
  * CHỨC NĂNG HÀM: Tính lại điểm 8 thanh trượt và đồng bộ chỉ đạo vào Ô 3
  * =====================================================================
  * Được gọi khi người dùng chọn / bỏ chọn sắc thái trong AppSelect gợi ý.
@@ -427,6 +634,19 @@ const hasModifiedToneSliders = computed(() =>
  * INPUT/OUTPUT:
  * - INPUT : selectedToneOptionIds (ref mảng ID đã chọn)
  * - OUTPUT: Cập nhật trực tiếp toneSliders (8 sliders) và advancedConfig.tonePrompt
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đổi slider và tonePrompt; bỏ dòng directive preset cũ trước khi thêm dòng mới.
+ *
+ * EXCEPTION:
+ * - Trục chưa xác định giữ null khi tổng delta bằng 0.
  * =====================================================================
  */
 function recalculateToneFromSelect() {
@@ -466,7 +686,25 @@ function recalculateToneFromSelect() {
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Khôi phục slider cảm xúc về baseline, bỏ lựa chọn và directive preset
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
  * CHỨC NĂNG HÀM: Reset 8 thanh trượt Cảm xúc về baseline và xóa gợi ý đã chọn
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Giữ baseline có thể null, sửa Ô 3 và hiển thị snackbar.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
  * =====================================================================
  */
 function resetToneSliders() {
@@ -488,6 +726,24 @@ function resetToneSliders() {
   snack.show = true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Khôi phục slider chất văn về baseline, bỏ lựa chọn và directive preset
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Giữ baseline có thể null, sửa Ô 2 và hiển thị snackbar.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function resetVoiceTextureSliders() {
   selectedVoiceOptionIds.value = []
   voiceTextureSliders.forEach(s => {
@@ -538,6 +794,24 @@ const expandedSampleSteps = reactive({})
 const sandboxDetailDialogOpen = ref(false)
 const activeDialogSample = ref(null)
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Mở dialog xem bản thử được chọn
+ * =====================================================================
+ *
+ * INPUT:
+ * - sample
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đặt activeDialogSample và bật sandboxDetailDialogOpen.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function openSandboxSampleDialog(sample) {
   activeDialogSample.value = sample
   sandboxDetailDialogOpen.value = true
@@ -601,8 +875,26 @@ const DEFAULT_TIER_PIPELINES = {
 }
 
 /**
+ * =====================================================================
+ * CHỨC NĂNG: Lấy danh sách các bước (steps) từ config cho 1 cấp độ độ dài (tier).
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
  * Lấy danh sách các bước (steps) từ config cho 1 cấp độ độ dài (tier).
  * Tự động đọc động từ `store.tierPipelines[tier].steps` (từ config.php).
+ *
+ * INPUT:
+ * - tier
+ *
+ * OUTPUT:
+ * - Kết quả hiển thị hoặc cập nhật state theo mô tả chi tiết.
+ *
+ * SIDE EFFECT:
+ * - Xử lý state hoặc dữ liệu của component theo luồng đang gọi.
+ *
+ * EXCEPTION:
+ * - Các lỗi API được xử lý ở hàm nghiệp vụ gọi helper này.
+ * =====================================================================
  */
 function getPipelineStepsForTier(tier) {
   const t = tier || 'medium'
@@ -619,14 +911,52 @@ const currentTierPipelineSteps = computed(() =>
   getPipelineStepsForTier(sandboxForm.targetTier || profile.value?.dominant_tier || 'medium'),
 )
 
-/** Rút gọn nhãn bước (bỏ tiền tố "Bước X:" nếu cần hiển thị ngắn gọn) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Rút gọn nhãn bước bằng cách bỏ tiền tố Bước kèm số
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ *
+ * INPUT:
+ * - stepObj
+ *
+ * OUTPUT:
+ * - string nhãn đã trim hoặc rỗng khi không có step
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý chuỗi.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function cleanStepLabel(stepObj) {
   if (!stepObj) return ''
 
   return String(stepObj.label || stepObj.step || '').replace(/^Bước\s+\d+\s*:\s*/i, '').trim()
 }
 
-/** Chuẩn hóa 1 bản ghi bài văn thử nghiệm (tương thích cả bản lưu từ DB lẫn bản đang chạy từng step) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuẩn hóa sample cũ/mới cho giao diện pipeline
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ *
+ * INPUT:
+ * - raw
+ *
+ * OUTPUT:
+ * - Object sample gồm brief, steps, trạng thái, artifacts và nội dung
+ *
+ * SIDE EFFECT:
+ * - Tạo object từ raw, dùng pipeline options làm fallback.
+ *
+ * EXCEPTION:
+ * - Không xác minh tính hợp lệ của artifact ở đây; backend kiểm tra khi chạy.
+ * =====================================================================
+ */
 function normalizeSandboxSample(raw) {
   const tier = raw.target_tier || profile.value?.dominant_tier || 'medium'
   const steps = Array.isArray(raw.steps) && raw.steps.length > 0
@@ -691,6 +1021,24 @@ const toneSliders = reactive([
   { key: 'urgency',       category: 'tone',    label: 'Khẩn thiết & Kêu gọi',     baseline: 50, value: 50, color: 'error',    icon: 'tabler-alarm',        hint: 'Nhấn mạnh cấp thiết của thời điểm, thôi thúc hành động ngay' },
 ])
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Áp dụng preset cảm xúc, đồng bộ lựa chọn, slider và chỉ dẫn Ô 3
+ * =====================================================================
+ *
+ * INPUT:
+ * - presetKey
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Tính lại từ presets options; một số preset phổ biến ghi đè mức slider cố định, default trả baseline.
+ *
+ * EXCEPTION:
+ * - Không gọi API; chưa lưu profile.
+ * =====================================================================
+ */
 function applyTonePreset(presetKey) {
   activeTonePreset.value = presetKey
   selectedToneOptionIds.value = presetKey === 'default' ? [] : [presetKey]
@@ -735,8 +1083,44 @@ function applyTonePreset(presetKey) {
   snack.show = true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chọn preset default để trả cảm xúc về baseline
+ * =====================================================================
+ *
+ * INPUT:
+ * - ) { applyTonePreset('default'
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi applyTonePreset và cập nhật snackbar.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function resetToneToBaseline() { applyTonePreset('default') }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đóng gói form sandbox thành brief V3 theo chủ đề
+ * =====================================================================
+ *
+ * INPUT:
+ * - topic
+ *
+ * OUTPUT:
+ * - Object brief hoặc null khi đang dùng V2
+ *
+ * SIDE EFFECT:
+ * - Đọc form và phiên bản từ store.
+ *
+ * EXCEPTION:
+ * - Validation nghiệp vụ do backend xử lý.
+ * =====================================================================
+ */
 function buildSandboxBrief(topic) {
   if (!usesPromptV3.value) return null
 
@@ -762,7 +1146,26 @@ function buildSandboxBrief(topic) {
   }
 }
 
-/** Gom runtime overrides hiện tại từ Tab 7 & Tab 9 để gửi kèm mỗi bước Sandbox */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lấy thay đổi Ô 1–3 và slider để gửi từng bước sandbox
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Object overrides; V3 chỉ gửi nội dung khác hồ sơ, null thể hiện xóa
+ *
+ * SIDE EFFECT:
+ * - Đọc profile và form, không lưu DB.
+ *
+ * EXCEPTION:
+ * - Hàm được gọi sau khi profile đã tải.
+ * =====================================================================
+ */
 function buildCurrentSandboxOverrides() {
   const current = profile.value
   const instructions = {
@@ -795,6 +1198,11 @@ function buildCurrentSandboxOverrides() {
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Tải options và chạy bước đầu để tạo bản thử theo tier
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
  * CHỨC NĂNG: Bắt đầu tạo 1 bản ghi bài văn thử nghiệm mới (chạy Bước 1)
  * =====================================================================
  * - Với văn phong/cấp độ có nhiều step (vd: 'long' có Bước 1: Phân tích dàn ý -> Bước 2: Viết bài):
@@ -802,6 +1210,19 @@ function buildCurrentSandboxOverrides() {
  *   hiển thị kết quả Bước 1 và hiện nút "Tiếp tục phân tích lần thứ 2...".
  * - Với văn phong/cấp độ chỉ có 1 step ('article_writer'):
  *   Chạy bước viết bài, tạo bản ghi ở trạng thái "Hoàn thành" và tự động lưu vào hồ sơ.
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi API step, thêm sample vào state và lưu sample cả khi mới có dàn ý.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi API, hiển thị snackbar; kiểm tra profile/chủ đề trước khi chạy.
  * =====================================================================
  */
 async function runSandboxDemo() {
@@ -888,11 +1309,29 @@ async function runSandboxDemo() {
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Gửi bước kế tiếp cùng artifact và xác nhận duyệt dàn ý
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
  * CHỨC NĂNG: Chạy bước tiếp theo cho 1 bản ghi đang ở trạng thái in_progress
  * =====================================================================
  * Dựa theo mảng `sample.steps` từ config có bao nhiêu bước phân tích thì
  * chạy tuần tự từng bước (`current_step_index + 1`) cho tới bước viết văn
  * cuối cùng (`is_terminal = true`) thì chuyển trạng thái sang "Hoàn thành".
+ * =====================================================================
+ *
+ * INPUT:
+ * - sample
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi API, cập nhật tiến trình/text/snapshot và lưu sample. Backend kiểm tra fingerprint V3.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi API và giải phóng runningSampleStepId trong finally.
  * =====================================================================
  */
 async function runNextSandboxStep(sample) {
@@ -954,6 +1393,24 @@ async function runNextSandboxStep(sample) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lập lại dàn ý của bản thử với brief đã lưu và style hiện tại
+ * =====================================================================
+ *
+ * INPUT:
+ * - sample
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi topic_outline, thay artifacts của sample, lưu DB và cập nhật trạng thái loading/snackbar.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi API qua firstErrorMessage và giải phóng loading trong finally.
+ * =====================================================================
+ */
 async function refreshSandboxOutline(sample) {
   if (!profile.value?.id || runningSampleStepId.value) return
 
@@ -978,7 +1435,26 @@ async function refreshSandboxOutline(sample) {
   }
 }
 
-/** Thêm 1 mục H2/H3 mới vào dàn ý của Bước 1 (`topic_outline`) trên bản ghi */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ *
+ * INPUT:
+ * - sample
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Mutate outline của sample hiện tại.
+ *
+ * EXCEPTION:
+ * - Bỏ qua khi sample chưa có artifact.
+ * =====================================================================
+ */
 function addOutlineSection(sample) {
   const outlineArtifact = sample?.artifacts?.topic_outline
   if (!outlineArtifact) return
@@ -993,7 +1469,26 @@ function addOutlineSection(sample) {
   })
 }
 
-/** Xóa 1 mục khỏi dàn ý của Bước 1 (`topic_outline`) */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ *
+ * INPUT:
+ * - sample, idx
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Mutate outline của sample hiện tại.
+ *
+ * EXCEPTION:
+ * - Bỏ qua dữ liệu chưa có hoặc chỉ còn một mục.
+ * =====================================================================
+ */
 function removeOutlineSection(sample, idx) {
   const outline = sample?.artifacts?.topic_outline?.outline
   if (!Array.isArray(outline) || outline.length <= 1) return
@@ -1002,11 +1497,29 @@ function removeOutlineSection(sample, idx) {
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Upsert sample đang dở hoặc hoàn chỉnh vào hồ sơ
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
  * CHỨC NĂNG: Lưu / Cập nhật (Upsert) bản viết thử vào Database của hồ sơ
  * =====================================================================
  * Lưu cả trạng thái đang chạy dở (Bước 1 in_progress + artifacts) lẫn
  * bản đã hoàn thành (completed + text) để khi F5/tải lại trang vẫn tiếp tục
  * phân tích bước 2 được bình thường.
+ * =====================================================================
+ *
+ * INPUT:
+ * - sample, silent = false
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi saveSandboxSample, cập nhật ID và cờ lưu; gửi cả brief/steps/artifacts.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi; chỉ hiển thị snackbar khi silent=false. Luôn giải phóng cờ đang lưu.
  * =====================================================================
  */
 async function persistSampleToDb(sample, silent = false) {
@@ -1057,6 +1570,24 @@ async function persistSampleToDb(sample, silent = false) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lưu bản thử với thông báo lỗi cho thao tác lưu thủ công
+ * =====================================================================
+ *
+ * INPUT:
+ * - sample
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi persistSampleToDb(sample, false) để upsert backend.
+ *
+ * EXCEPTION:
+ * - Lỗi được persistSampleToDb bắt và hiển thị snackbar.
+ * =====================================================================
+ */
 async function saveCurrentSandboxSample(sample) {
   await persistSampleToDb(sample, false)
 }
@@ -1064,6 +1595,24 @@ async function saveCurrentSandboxSample(sample) {
 /**
  * =====================================================================
  * CHỨC NĂNG: Xóa 1 bản viết thử (khỏi danh sách tạm hoặc khỏi Database)
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
+ * =====================================================================
+ * CHỨC NĂNG: Xóa 1 bản viết thử (khỏi danh sách tạm hoặc khỏi Database)
+ * =====================================================================
+ *
+ * INPUT:
+ * - sampleId
+ *
+ * OUTPUT:
+ * - Kết quả hiển thị hoặc cập nhật state theo mô tả chi tiết.
+ *
+ * SIDE EFFECT:
+ * - Xử lý state hoặc dữ liệu của component theo luồng đang gọi.
+ *
+ * EXCEPTION:
+ * - Các lỗi API được xử lý ở hàm nghiệp vụ gọi helper này.
  * =====================================================================
  */
 async function removeSandboxSample(sampleId) {
@@ -1095,6 +1644,24 @@ async function removeSandboxSample(sampleId) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Sao chép văn bản vào clipboard và thông báo kết quả
+ * =====================================================================
+ *
+ * INPUT:
+ * - text, successMessage = 'Đã sao chép'
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi navigator.clipboard.writeText; thay snackbar.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi clipboard và báo sao chép thủ công.
+ * =====================================================================
+ */
 async function copyText(text, successMessage = 'Đã sao chép') {
   try {
     await navigator.clipboard.writeText(text)
@@ -1128,6 +1695,24 @@ const profileTabs = [
 
 /* Trích nhanh các từ in nháy trong vocabulary thành powerWords.
  * rules_json.vocabulary thường dạng: '...: "từ1", "từ2"...' */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lấy các cụm trong dấu ngoặc kép để tạo danh sách từ ưu tiên
+ * =====================================================================
+ *
+ * INPUT:
+ * - text
+ *
+ * OUTPUT:
+ * - string[] cụm duy nhất không quá 40 ký tự
+ *
+ * SIDE EFFECT:
+ * - Chỉ đọc chuỗi và tạo mảng mới.
+ *
+ * EXCEPTION:
+ * - Không ném lỗi chủ động; đầu vào được chuyển qua String().
+ * =====================================================================
+ */
 function extractQuotedWords(text) {
   const out = []
   const re = /["“”«»]([^"“”«»]+)["“”«»]/g
@@ -1142,6 +1727,24 @@ function extractQuotedWords(text) {
 
 /* Tách pronouns thành "xưng của brand" và "gọi khách" theo các dấu phân
  * tách phổ biến trong mô tả AI ("xưng X, gọi Y", "X xưng A, gọi B"...). */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Tách mô tả xưng hô thành cách xưng của thương hiệu và cách gọi khách
+ * =====================================================================
+ *
+ * INPUT:
+ * - text
+ *
+ * OUTPUT:
+ * - Object brand/customer; ưu tiên tách ở từ gọi, fallback dấu phân cách
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý chuỗi; cách tách là heuristic để điền form.
+ *
+ * EXCEPTION:
+ * - Không gọi API hoặc kiểm chứng ngữ nghĩa.
+ * =====================================================================
+ */
 function splitPronouns(text) {
   const t = String(text ?? '').trim()
   if (!t) return { brand: '', customer: '' }
@@ -1163,6 +1766,24 @@ function splitPronouns(text) {
 }
 
 /* Ghép lại pronouns từ 2 ô nhập — giữ cấu trúc "xưng X, gọi Y". */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Ghép hai ô xưng hô thành mô tả để lưu rules_json.pronouns
+ * =====================================================================
+ *
+ * INPUT:
+ * - brand, customer
+ *
+ * OUTPUT:
+ * - string mô tả; ghép bằng dấu phẩy và từ gọi khi đủ hai vế
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý chuỗi.
+ *
+ * EXCEPTION:
+ * - Không ném lỗi chủ động.
+ * =====================================================================
+ */
 function joinPronouns(brand, customer) {
   const b = String(brand ?? '').trim()
   const c = String(customer ?? '').trim()
@@ -1173,6 +1794,24 @@ function joinPronouns(brand, customer) {
 
 /* Convert rules_json.avoid text -> mảng {text, allowed:false}.
  * Trong mẫu, avoid thường là câu dài liệt kê — tách bằng dấu chấm câu. */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Tách mô tả điều tránh thành các quy tắc cấm cho form
+ * =====================================================================
+ *
+ * INPUT:
+ * - text
+ *
+ * OUTPUT:
+ * - Object[] text/allowed=false, bỏ đoạn ngắn hơn bốn ký tự
+ *
+ * SIDE EFFECT:
+ * - Tạo mảng từ dấu chấm và xuống dòng; không sửa DNA gốc.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function avoidToRules(text) {
   const items = String(text ?? '')
     .split(/[.\n]+/)
@@ -1182,6 +1821,24 @@ function avoidToRules(text) {
   return items.map(s => ({ text: s, allowed: false }))
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển cụm từ trong ngoặc kép thành quy tắc từ ngữ được khuyến khích
+ * =====================================================================
+ *
+ * INPUT:
+ * - text
+ *
+ * OUTPUT:
+ * - Object[] text/allowed=true hoặc mảng rỗng
+ *
+ * SIDE EFFECT:
+ * - Dùng extractQuotedWords, chỉ tạo dữ liệu trong bộ nhớ.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function vocabToRules(text) {
   const words = extractQuotedWords(text)
 
@@ -1193,6 +1850,24 @@ function vocabToRules(text) {
 /* ===================================================================
  * APPLY PROFILE -> FORM
  * =================================================================== */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Nạp hồ sơ vào form, baseline slider, presets và danh sách sample
+ * =====================================================================
+ *
+ * INPUT:
+ * - p
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Thay state trang và initialRuleEdits; khôi phục baseline đã lưu để tránh cộng preset lần hai.
+ *
+ * EXCEPTION:
+ * - Caller truyền resource profile từ API.
+ * =====================================================================
+ */
 function applyProfileToForm(p) {
   profile.value = p
 
@@ -1359,6 +2034,24 @@ function applyProfileToForm(p) {
  * BUILD PAYLOAD PUT — merge các khóa rules_json user chỉnh trên UI,
  * giữ nguyên 9 khóa còn lại từ profile.rules_json hiện tại.
  * =================================================================== */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đọc các ô chỉnh DNA thành một mảng khóa thống nhất để so với bản ban đầu
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Object chứa cấu trúc, xưng hô, vốn từ, điều tránh và CTA
+ *
+ * SIDE EFFECT:
+ * - Đọc form, không ghi profile.
+ *
+ * EXCEPTION:
+ * - Caller chuẩn bị các danh sách form trước khi gọi.
+ * =====================================================================
+ */
 function readEditableRules() {
   const keys = ['opening', 'structure_patterns', 'transitions', 'ending']
   const sections = Object.fromEntries(keys.map((key, index) => [key, String(structureSections.value[index]?.sample ?? '').trim()]))
@@ -1374,16 +2067,70 @@ function readEditableRules() {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Tạo rules_json từ các ô đã sửa, giữ nguyên nội dung chưa đổi
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Object DNA dùng khi lưu profile
+ *
+ * SIDE EFFECT:
+ * - Đọc profile/form; không gọi API.
+ *
+ * EXCEPTION:
+ * - Các lỗi validation độ dài/kiểu dữ liệu được backend trả khi lưu.
+ * =====================================================================
+ */
 function buildRulesJsonPayload() {
   return mergeRuleEdits(profile.value?.rules_json, initialRuleEdits, readEditableRules())
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuẩn bị bằng chứng trích dẫn cho payload lưu hồ sơ
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - array bằng chứng theo cấu trúc rule_key/excerpt/note
+ *
+ * SIDE EFFECT:
+ * - Trang create đổi tên khóa từ form; trang edit giữ evidence_json đã tải vì chưa có editor bằng chứng.
+ *
+ * EXCEPTION:
+ * - Không xác minh lại trích dẫn tại frontend; validation thuộc backend.
+ * =====================================================================
+ */
 function buildEvidenceJsonPayload() {
   // Giữ nguyên evidence_json hiện tại — tab Mẫu nội dung chỉ hiển thị,
   // không cho chỉnh sửa (chưa thiết kế edit từng excerpt).
   return Array.isArray(profile.value?.evidence_json) ? profile.value.evidence_json : []
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lưu form hồ sơ, DNA và baseline/preset slider qua PUT
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Cập nhật backend rồi nạp response vào form; thay loading/snackbar.
+ *
+ * EXCEPTION:
+ * - Kiểm tra tên trước khi gọi, bắt lỗi API và giải phóng saving trong finally.
+ * =====================================================================
+ */
 async function saveProfile() {
   const name = profileData.name.trim()
   if (!name) {
@@ -1453,6 +2200,24 @@ async function saveProfile() {
 }
 
 /* Slug — blur ô name/slug gọi suggest, loại trừ chính id này. */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại
+ * =====================================================================
+ *
+ * INPUT:
+ * - source
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi suggestSlug, cập nhật slug/available/takenBy nếu có response.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi và đặt trạng thái kiểm tra về null.
+ * =====================================================================
+ */
 async function runSlugSuggest(source) {
   const src = String(source ?? '').trim()
   if (!src) return
@@ -1474,10 +2239,64 @@ async function runSlugSuggest(source) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên
+ * =====================================================================
+ *
+ * INPUT:
+ * - ) { runSlugSuggest(profileData.name
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi bất đồng bộ runSlugSuggest để cập nhật trạng thái slug.
+ *
+ * EXCEPTION:
+ * - Lỗi API do runSlugSuggest xử lý.
+ * =====================================================================
+ */
 function onNameBlur() { runSlugSuggest(profileData.name) }
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra và gợi ý slug từ ô slug khi mất focus
+ * =====================================================================
+ *
+ * INPUT:
+ * - ) { runSlugSuggest(profileData.slug
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi bất đồng bộ runSlugSuggest.
+ *
+ * EXCEPTION:
+ * - Lỗi API do runSlugSuggest xử lý.
+ * =====================================================================
+ */
 function onSlugBlur() { runSlugSuggest(profileData.slug) }
 
 /* SlugField update → đánh dấu dirty để chỉ gửi khi đổi. */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Ghi nhận slug người dùng tự sửa để chỉ gửi trường này khi thay đổi
+ * =====================================================================
+ *
+ * INPUT:
+ * - v
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật profileData.slug và bật slugDirty.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function onSlugInput(v) {
   profileData.slug = v
   slugDirty.value = true
@@ -1489,6 +2308,24 @@ function onSlugInput(v) {
 const advancedCardHeight = ref('calc(100vh - 435px)')
 const sliderScrollHeight = ref('220px')
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Căn chiều cao panel nâng cao theo viewport và footer
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Bật/tắt class body, đo DOM sau nextTick, cập nhật chiều cao và vị trí cuộn.
+ *
+ * EXCEPTION:
+ * - Bỏ qua khi không có window/document hoặc panel chưa render.
+ * =====================================================================
+ */
 function updateAdvancedCardHeight() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return
 

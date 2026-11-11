@@ -49,26 +49,46 @@ class WritingStyleAnalyzerServiceTest extends TestCase
             "Đây là câu bốn để đủ tier short. Câu năm tiếp theo. Câu sáu nữa. Câu bảy. Câu tám. Câu chín. Câu mười. Câu mười một.";
     }
 
+    private function v3Payload(array $overrides = []): array
+    {
+        return array_replace([
+            'features' => array_fill_keys(array_keys(config('writingstyle.v3.questions')), [
+                'state' => 'unknown', 'description' => '', 'confidence' => 'low', 'evidence_ids' => [],
+            ]),
+            'evidence' => [],
+            'signature_language' => ['self_reference' => [], 'audience_reference' => [], 'particles' => []],
+            'source_specific_items' => [],
+            'uncertainties' => [],
+            'style_instructions' => 'Mở bằng câu hỏi.',
+            'voice_texture_instructions' => '',
+            'voice_texture_sliders_json' => array_fill_keys(WritingProfile::VOICE_TEXTURE_KEYS, null),
+            'tone_sliders_json' => array_fill_keys(WritingProfile::TONE_AXIS_KEYS, null),
+        ], $overrides);
+    }
+
     public function test_analyze_khong_tao_profile_chi_ghi_result(): void
     {
-        $this->fakeGateway([
-            'rules_json' => ['tone' => 'trang trọng', 'pronouns' => 'tôi/bạn'],
-            'evidence_json' => [
-                ['rule_key' => 'tone', 'excerpt' => 'nội dung là vua', 'note' => 'x'],
-                ['rule_key' => 'tone', 'excerpt' => 'excerpt không có trong bài', 'note' => 'bia'],
-            ],
-            'style_instructions' => 'Mở bằng câu hỏi.',
-        ]);
+        $payload = $this->v3Payload();
+        $payload['features']['tone'] = ['state' => 'observed', 'description' => 'Giọng trang trọng', 'confidence' => 'high', 'evidence_ids' => ['ev_01']];
+        $payload['evidence'] = [
+            ['id' => 'ev_01', 'kind' => 'excerpt', 'block_ids' => [1], 'text' => 'Tôi tin rằng nội dung là vua'],
+            ['id' => 'ev_02', 'kind' => 'excerpt', 'block_ids' => [1], 'text' => 'excerpt bịa không có'],
+        ];
+
+        $this->fakeGateway($payload);
 
         $a = app(WritingStyleAnalyzerService::class)->analyze($this->referenceText());
 
         $this->assertSame(WritingProfileAnalysis::STATUS_SUCCEEDED, $a->status);
         $this->assertSame('medium', $a->detected_tier);
         $this->assertNotNull($a->result_json);
-        $this->assertSame('trang trọng', $a->result_json['rules_json']['tone']);
-        // excerpt bịa bị lọc — chỉ giữ excerpt có thật trong bài.
+        $this->assertSame('Giọng trang trọng', $a->result_json['rules_json']['tone']);
+        // Excerpt bịa bị lọc — chỉ giữ excerpt có thật trong bài.
         $this->assertCount(1, $a->result_json['evidence_json']);
-        $this->assertSame('nội dung là vua', $a->result_json['evidence_json'][0]['excerpt']);
+        $this->assertSame('Tôi tin rằng nội dung là vua', $a->result_json['evidence_json'][0]['excerpt']);
+        // Style analysis giữ schema V3.
+        $this->assertSame(3, $a->result_json['style_analysis_json']['schema_version']);
+        $this->assertSame('observed', $a->result_json['style_analysis_json']['features']['tone']['state']);
 
         // Phân tích KHÔNG tạo WritingProfile (chỉ khi Lưu mới tạo).
         $this->assertNull($a->draft_profile_id);
@@ -78,7 +98,7 @@ class WritingStyleAnalyzerServiceTest extends TestCase
     public function test_analyze_ghi_ai_run_id(): void
     {
         $this->fakeGateway(
-            ['rules_json' => ['tone' => 'x'], 'evidence_json' => []],
+            $this->v3Payload(),
             (object) ['id' => 'run-uuid-123'],
         );
 

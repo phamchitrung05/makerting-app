@@ -16,25 +16,75 @@ use Modules\WritingStyle\Services\WritingStyleSandboxService;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Endpoint DNA Sandbox — viết thử & quản lý bản viết thử đã lưu.
+ * CHỨC NĂNG FILE: Thực thi sandbox và quản lý các bản thử đã lưu trong profile.
  * =====================================================================
  * - POST   /v1/admin/writing-style/writing-profiles/{profile}/sandbox
  * - POST   /v1/admin/writing-style/writing-profiles/{profile}/sandbox/steps/{step}
  * - POST   /v1/admin/writing-style/writing-profiles/{profile}/sandbox-samples
  * - DELETE /v1/admin/writing-style/writing-profiles/{profile}/sandbox-samples/{sampleId}
  * =====================================================================
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - __construct(): Khởi tạo thuộc tính hoặc nhận các dependency của WritingSandboxController.
+ * - store(): Chạy API sandbox trực tiếp với các override có mặt trong request.
+ * - runStep(): Chạy một bước sandbox với brief, artifacts và override hiện tại.
+ * - saveSample(): Tạo/cập nhật sample theo ID và giữ tối đa 30 bản trong profile.
+ * - deleteSample(): Loại sample có ID tương ứng khỏi JSON của profile.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : FormRequest sandbox/step hoặc request lưu sample; profile được route binding.
+ * - OUTPUT: BaseResponse chứa kết quả AI, artifact hoặc danh sách sample.
+ *
+ * BỐI CẢNH SỬ DỤNG: Các route yêu cầu auth:sanctum và writing.evaluate qua middleware.
+ * =====================================================================
  */
 class WritingSandboxController extends Controller
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo thuộc tính hoặc nhận các dependency của WritingSandboxController
+     * =====================================================================
+     *
+     * INPUT:
+     * - protected readonly WritingStyleSandboxService $sandbox, protected readonly SandboxPipelineRunner $pipelineRunner,
+     *
+     * OUTPUT:
+     * - Instance giữ các thuộc tính/dependency theo chữ ký
+     *
+     * SIDE EFFECT:
+     * - Gán thuộc tính trong bộ nhớ; không gọi AI hoặc ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi kiểu dữ liệu truyền về caller; không mở transaction.
+     * =====================================================================
+     */
     public function __construct(
         protected readonly WritingStyleSandboxService $sandbox,
         protected readonly SandboxPipelineRunner $pipelineRunner,
     ) {}
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Chạy API sandbox trực tiếp với các override có mặt trong request
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * POST /sandbox — viết thử từ DNA + topic + tier.
      * INPUT: topic + ?target_tier + ?target_sentences + runtime overrides.
      * OUTPUT: {text, target_tier, snapshot, ai_run_id}.
+     *
+     * INPUT:
+     * - SandboxRequest $request, WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse SandboxResultDto
+     *
+     * SIDE EFFECT:
+     * - Tăng giới hạn thực thi PHP; gọi AI qua service. Giữ null để xóa lớp chỉ dẫn. Quyền writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException, lỗi AI/compiler truyền lên. Không mở transaction.
+     * =====================================================================
      */
     public function store(SandboxRequest $request, WritingProfile $writingProfile)
     {
@@ -60,9 +110,27 @@ class WritingSandboxController extends Controller
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Chạy một bước sandbox với brief, artifacts và override hiện tại
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Thực thi 1 step trong Sandbox Pipeline theo tier.
      * =====================================================================
      * POST /writing-profiles/{profile}/sandbox/steps/{step}
+     * =====================================================================
+     *
+     * INPUT:
+     * - RunSandboxStepRequest $request, WritingProfile $writingProfile, string $step
+     *
+     * OUTPUT:
+     * - BaseResponse step/artifact
+     *
+     * SIDE EFFECT:
+     * - Tăng giới hạn thực thi PHP và gọi runner. Bước AI ghi log qua gateway. Quyền writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi topology, dàn ý cũ/chưa duyệt, brief hoặc AI truyền lên. Không mở transaction.
      * =====================================================================
      */
     public function runStep(RunSandboxStepRequest $request, WritingProfile $writingProfile, string $step)
@@ -87,12 +155,30 @@ class WritingSandboxController extends Controller
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Tạo/cập nhật sample theo ID và giữ tối đa 30 bản trong profile
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Lưu (Ghim) 1 bản viết thử vào Database của hồ sơ văn phong.
      * =====================================================================
      * POST /writing-profiles/{profile}/sandbox-samples
      *
      * INPUT: { topic, target_tier, text, system_prompt? }
      * OUTPUT: { samples: array, sample: array }
+     * =====================================================================
+     *
+     * INPUT:
+     * - Request $request, WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse sample và samples
+     *
+     * SIDE EFFECT:
+     * - Ghi sandbox_samples_json với brief, steps, artifacts, trạng thái, text và thời gian. Quyền writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException hoặc lỗi DB. Không mở transaction hay giữ khóa cho chuỗi đọc-sửa-ghi.
      * =====================================================================
      */
     public function saveSample(Request $request, WritingProfile $writingProfile)
@@ -164,12 +250,30 @@ class WritingSandboxController extends Controller
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Loại sample có ID tương ứng khỏi JSON của profile
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Xóa 1 bản viết thử đã lưu khỏi Database của hồ sơ văn phong.
      * =====================================================================
      * DELETE /writing-profiles/{profile}/sandbox-samples/{sampleId}
      *
      * INPUT: route params {writing_profile}, {sampleId}
      * OUTPUT: { samples: array }
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $writingProfile, string $sampleId
+     *
+     * OUTPUT:
+     * - BaseResponse samples còn lại
+     *
+     * SIDE EFFECT:
+     * - Ghi sandbox_samples_json, không báo lỗi nếu ID không có. Quyền writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không mở transaction hoặc lock.
      * =====================================================================
      */
     public function deleteSample(WritingProfile $writingProfile, string $sampleId)

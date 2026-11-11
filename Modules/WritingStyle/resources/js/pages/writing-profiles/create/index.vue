@@ -1,6 +1,6 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Trang AI Phân tích bài viết & Tạo DNA Văn phong.
+  CHỨC NĂNG FILE: Phân tích bài mẫu, duyệt kết quả và lưu Writing Profile.
   =====================================================================
 
   Màn phân tích bài viết mẫu và đóng gói thành hồ sơ văn phong (WritingProfile):
@@ -15,6 +15,37 @@
   3. Bằng chứng trích dẫn (các câu trích nguyên văn từ bài mẫu đã kiểm chứng).
   - Cột phải: System Prompt DNA (style_instructions) và Card Đóng gói & Lưu
   thành Writing Profile.
+
+  Nhận pendingImport từ trang danh sách; nạp options trước khi phân tích.
+  Ô 1/2, bằng chứng, trạng thái chưa chắc chắn và slider null lấy từ kết quả
+  analysis. Hồ sơ chỉ được lưu khi người dùng bấm lưu.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - ruleLabel(): Đổi khóa DNA sang nhãn hiển thị tiếng Việt, fallback về khóa gốc.
+  - runSlugSuggest(): Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại.
+  - onNameBlur(): Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên.
+  - onSlugBlur(): Kiểm tra và gợi ý slug từ ô slug khi mất focus.
+  - clearContent(): Xóa bài mẫu đang dán trong editor.
+  - hasRuleValue(): Kiểm tra mô tả DNA có nội dung sau khi trim hay không.
+  - formatRuleDesc(): Chuẩn hóa mô tả DNA để hiển thị trên card.
+  - applyAnalysisResult(): Nạp kết quả AI V2/V3 vào DNA, bằng chứng, Ô 1/2 và điểm slider.
+  - buildRulesJsonPayload(): Lấy DNA phân tích gốc hoặc ghép các card quy tắc khi chưa có dữ liệu gốc.
+  - buildEvidenceJsonPayload(): Chuẩn bị bằng chứng trích dẫn cho payload lưu hồ sơ.
+  - awaitAndApply(): Chờ job phân tích hoàn tất rồi áp dụng kết quả và thông báo.
+  - runAnalysis(): Chuyển bài HTML thành text giữ đoạn rồi gửi giải mã và chờ kết quả.
+  - fetchFromUrl(): Kiểm tra URL HTTP/HTTPS, gửi phân tích nền và chờ kết quả.
+  - triggerFileInput(): Mở trình chọn tệp nguồn qua input ẩn.
+  - handleFileChange(): Đọc tệp nguồn dưới dạng text và nạp vào editor.
+  - removeSelectedFile(): Gỡ metadata tệp đã chọn và reset input file.
+  - saveWritingProfile(): Lưu kết quả phân tích thành profile và chuyển trang theo lựa chọn.
+  - copyText(): Sao chép văn bản vào clipboard và thông báo kết quả.
+  - copyPrompt(): Sao chép System Prompt DNA đang hiển thị.
+  - Computed: tierOptions, wordCount, sentenceCount, detectedTier, detectedTierMeta, isAnalyzing, hasAnalysisResult, droppedRuleKeys, ruleQuestionByKey, filteredDnaRules, extractedStructureRules, styleDnaMetrics, displayedDnaPrompt.
+  - Watcher/lifecycle: onMounted, onBeforeUnmount.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : Route, form và state useWritingStyleStore; không có props/emits riêng.
+  - OUTPUT: Render UI, gọi store/API, cập nhật snackbar và điều hướng theo thao tác.
   =====================================================================
 -->
 <script setup>
@@ -70,6 +101,24 @@ const RULE_LABELS = {
   uncertainties: 'Điểm chưa xác định',
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đổi khóa DNA sang nhãn hiển thị tiếng Việt, fallback về khóa gốc
+ * =====================================================================
+ *
+ * INPUT:
+ * - key
+ *
+ * OUTPUT:
+ * - string nhãn của quy tắc
+ *
+ * SIDE EFFECT:
+ * - Tra bảng nhãn, không đổi dữ liệu.
+ *
+ * EXCEPTION:
+ * - Không bắt hoặc ném lỗi chủ động.
+ * =====================================================================
+ */
 function ruleLabel(key) {
   return RULE_LABELS[key] || key || 'Quy tắc'
 }
@@ -329,6 +378,24 @@ const profileForm = reactive({
 const slugAvailable = ref(null)
 const slugTakenBy = ref(null)
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại
+ * =====================================================================
+ *
+ * INPUT:
+ * - source
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi suggestSlug, cập nhật slug/available/takenBy nếu có response.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi và đặt trạng thái kiểm tra về null.
+ * =====================================================================
+ */
 async function runSlugSuggest(source) {
   const src = source.trim()
   if (!src) return
@@ -351,14 +418,68 @@ async function runSlugSuggest(source) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi bất đồng bộ runSlugSuggest để cập nhật trạng thái slug.
+ *
+ * EXCEPTION:
+ * - Lỗi API do runSlugSuggest xử lý.
+ * =====================================================================
+ */
 function onNameBlur() {
   runSlugSuggest(profileForm.name)
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra và gợi ý slug từ ô slug khi mất focus
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi bất đồng bộ runSlugSuggest.
+ *
+ * EXCEPTION:
+ * - Lỗi API do runSlugSuggest xử lý.
+ * =====================================================================
+ */
 function onSlugBlur() {
   runSlugSuggest(profileForm.slug)
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Xóa bài mẫu đang dán trong editor
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Đặt articleContent rỗng và hiển thị snackbar.
+ *
+ * EXCEPTION:
+ * - Không xóa hồ sơ hoặc dữ liệu backend.
+ * =====================================================================
+ */
 function clearContent() {
   articleContent.value = ''
   snack.text = 'Đã xóa nội dung bài viết đã dán'
@@ -366,6 +487,24 @@ function clearContent() {
   snack.show = true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra mô tả DNA có nội dung sau khi trim hay không
+ * =====================================================================
+ *
+ * INPUT:
+ * - rawValue
+ *
+ * OUTPUT:
+ * - bool; mảng chỉ cần ít nhất một phần tử không rỗng
+ *
+ * SIDE EFFECT:
+ * - Chỉ đọc dữ liệu trong bộ nhớ.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function hasRuleValue(rawValue) {
   if (Array.isArray(rawValue)) {
     return rawValue.map(v => String(v ?? '').trim()).filter(Boolean).length > 0
@@ -374,6 +513,24 @@ function hasRuleValue(rawValue) {
   return String(rawValue ?? '').trim().length > 0
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuẩn hóa mô tả DNA để hiển thị trên card
+ * =====================================================================
+ *
+ * INPUT:
+ * - rawValue
+ *
+ * OUTPUT:
+ * - string; mảng được trim, bỏ rỗng và nối bằng dấu bullet
+ *
+ * SIDE EFFECT:
+ * - Chỉ xử lý dữ liệu trong bộ nhớ.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
 function formatRuleDesc(rawValue) {
   if (Array.isArray(rawValue))
     return rawValue.map(v => String(v ?? '').trim()).filter(Boolean).join(' • ')
@@ -382,8 +539,26 @@ function formatRuleDesc(rawValue) {
 }
 
 /**
+ * =====================================================================
+ * CHỨC NĂNG: Nạp kết quả AI V2/V3 vào DNA, bằng chứng, Ô 1/2 và điểm slider
+ * =====================================================================
+ *
+ * Chi tiết triển khai:
  * Đổ kết quả giải mã (WritingAnalysisResource) vào state UI.
  * Chỉ lấy các quy tắc thực sự có dữ liệu trong rules_json (loại bỏ khóa trống & uncertainties).
+ *
+ * INPUT:
+ * - analysis
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Thay state trang, giữ null của slider và ghi analysis_id để lưu sau.
+ *
+ * EXCEPTION:
+ * - Không tự lưu WritingProfile; caller kiểm tra analysis succeeded.
+ * =====================================================================
  */
 function applyAnalysisResult(analysis) {
   const result = analysis?.result_json ?? {}
@@ -455,6 +630,24 @@ function applyAnalysisResult(analysis) {
   lastSucceededAnalysisId.value = analysis?.id ?? null
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lấy DNA phân tích gốc hoặc ghép các card quy tắc khi chưa có dữ liệu gốc
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Object rules_json: bản sao rawRulesJson hoặc các key/desc từ dnaRuleExtractions
+ *
+ * SIDE EFFECT:
+ * - Đọc profile/form; không gọi API.
+ *
+ * EXCEPTION:
+ * - Các lỗi validation độ dài/kiểu dữ liệu được backend trả khi lưu.
+ * =====================================================================
+ */
 function buildRulesJsonPayload() {
   if (rawRulesJson.value && typeof rawRulesJson.value === 'object')
     return { ...rawRulesJson.value }
@@ -467,6 +660,24 @@ function buildRulesJsonPayload() {
   return out
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuẩn bị bằng chứng trích dẫn cho payload lưu hồ sơ
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - array bằng chứng theo cấu trúc rule_key/excerpt/note
+ *
+ * SIDE EFFECT:
+ * - Trang create đổi tên khóa từ form; trang edit giữ evidence_json đã tải vì chưa có editor bằng chứng.
+ *
+ * EXCEPTION:
+ * - Không xác minh lại trích dẫn tại frontend; validation thuộc backend.
+ * =====================================================================
+ */
 function buildEvidenceJsonPayload() {
   return dnaEvidences.value.map(ev => ({
     rule_key: ev.ruleKey,
@@ -475,6 +686,24 @@ function buildEvidenceJsonPayload() {
   }))
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chờ job phân tích hoàn tất rồi áp dụng kết quả và thông báo
+ * =====================================================================
+ *
+ * INPUT:
+ * - dispatched, okMessage
+ *
+ * OUTPUT:
+ * - Promise<boolean>; false khi thiếu ID, bị hủy hoặc analysis failed
+ *
+ * SIDE EFFECT:
+ * - Gọi polling của store, cập nhật DNA/analysis_id và chọn tab style khi thành công.
+ *
+ * EXCEPTION:
+ * - Lỗi polling truyền lên hàm gọi; lỗi trạng thái failed được báo qua snackbar.
+ * =====================================================================
+ */
 async function awaitAndApply(dispatched, okMessage) {
   const analysisId = dispatched?.analysis_id
   if (!analysisId) {
@@ -519,6 +748,24 @@ async function awaitAndApply(dispatched, okMessage) {
   return true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Chuyển bài HTML thành text giữ đoạn rồi gửi giải mã và chờ kết quả
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi analyze, poll bằng awaitAndApply và cập nhật state kết quả.
+ *
+ * EXCEPTION:
+ * - Chặn bài dưới 50 ký tự, bắt lỗi API/polling hiển thị snackbar.
+ * =====================================================================
+ */
 async function runAnalysis() {
   if (isAnalyzing.value) return
 
@@ -550,6 +797,24 @@ async function runAnalysis() {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra URL HTTP/HTTPS, gửi phân tích nền và chờ kết quả
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi analyze URL, cập nhật preview nguồn rồi gọi awaitAndApply.
+ *
+ * EXCEPTION:
+ * - Bắt URL sai và lỗi API/polling, hiển thị snackbar.
+ * =====================================================================
+ */
 async function fetchFromUrl() {
   if (isAnalyzing.value) return
 
@@ -614,10 +879,46 @@ async function fetchFromUrl() {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Mở trình chọn tệp nguồn qua input ẩn
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Gọi click trên fileInputRef khi ref tồn tại.
+ *
+ * EXCEPTION:
+ * - Không upload hoặc gọi API.
+ * =====================================================================
+ */
 function triggerFileInput() {
   fileInputRef.value?.click()
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đọc tệp nguồn dưới dạng text và nạp vào editor
+ * =====================================================================
+ *
+ * INPUT:
+ * - event
+ *
+ * OUTPUT:
+ * - void; FileReader hoàn tất qua callback onload
+ *
+ * SIDE EFFECT:
+ * - Đọc file cục bộ, cập nhật nhãn file, nội dung HTML đã escape và snackbar; không upload.
+ *
+ * EXCEPTION:
+ * - Bỏ qua khi chưa chọn file; chưa có handler onerror cho FileReader.
+ * =====================================================================
+ */
 function handleFileChange(event) {
   const file = event.target?.files?.[0]
   if (!file) return
@@ -644,6 +945,24 @@ function handleFileChange(event) {
   reader.readAsText(file)
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Gỡ metadata tệp đã chọn và reset input file
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Xóa thông tin selectedFile, reset input và báo snackbar; giữ nội dung editor.
+ *
+ * EXCEPTION:
+ * - Không gọi API hoặc xóa tệp trên máy.
+ * =====================================================================
+ */
 function removeSelectedFile() {
   selectedFile.name = ''
   selectedFile.sizeLabel = ''
@@ -656,6 +975,24 @@ function removeSelectedFile() {
   snack.show = true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Lưu kết quả phân tích thành profile và chuyển trang theo lựa chọn
+ * =====================================================================
+ *
+ * INPUT:
+ * - openEditor = false
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi POST/PUT, gửi analysis_id, Ô 1/2 và slider; cập nhật ID rồi điều hướng.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi API hiển thị snackbar, yêu cầu có tên và kết quả phân tích.
+ * =====================================================================
+ */
 async function saveWritingProfile(openEditor = false) {
   const name = profileForm.name.trim()
   if (!name) {
@@ -720,6 +1057,24 @@ async function saveWritingProfile(openEditor = false) {
   }
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Sao chép văn bản vào clipboard và thông báo kết quả
+ * =====================================================================
+ *
+ * INPUT:
+ * - text, successMessage = 'Đã sao chép vào bộ nhớ tạm'
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Gọi navigator.clipboard.writeText; thay snackbar.
+ *
+ * EXCEPTION:
+ * - Bắt lỗi clipboard và báo sao chép thủ công.
+ * =====================================================================
+ */
 async function copyText(text, successMessage = 'Đã sao chép vào bộ nhớ tạm') {
   try {
     await navigator.clipboard.writeText(text)
@@ -732,6 +1087,24 @@ async function copyText(text, successMessage = 'Đã sao chép vào bộ nhớ t
   snack.show = true
 }
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Sao chép System Prompt DNA đang hiển thị
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - Promise<void>
+ *
+ * SIDE EFFECT:
+ * - Dùng copyText, báo cảnh báo nếu chưa có prompt.
+ *
+ * EXCEPTION:
+ * - Lỗi clipboard được copyText bắt.
+ * =====================================================================
+ */
 async function copyPrompt() {
   const targetText = displayedDnaPrompt.value
 

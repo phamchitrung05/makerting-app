@@ -6,20 +6,58 @@ use Illuminate\Support\Facades\Validator;
 use Modules\WritingStyle\DTOs\WritingBrief;
 use Modules\WritingStyle\DTOs\WritingProfileSnapshotDto;
 use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
-use Modules\WritingStyle\Services\PromptV3;
+use Modules\WritingStyle\Services\PromptPack;
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Quản lý schema, fingerprint và kiểm tra dàn ý V3 trước khi cấp cho bước viết.
+ * =====================================================================
+ *
+ * TopicOutlineStep tạo kế hoạch; SandboxPipelineRunner kiểm tra lại artifact do client gửi.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - schema(): Tạo JSON Schema cho thông điệp, cây mục, ngân sách độ dài và các cảnh báo.
+ * - fingerprint(): Tạo dấu nhận diện đầu vào của kế hoạch từ profile/version, tier, style summary và brief.
+ * - validate(): Kiểm tra kiểu dữ liệu, quan hệ cha, tham chiếu facts, headings và tổng độ dài.
+ * - promptBlock(): Chỉ đưa thông điệp, góc nhìn, cấu trúc và sections sang writer.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Artifact dàn ý, snapshot văn phong và WritingBrief đã chuẩn hóa.
+ * - OUTPUT: Schema, fingerprint SHA-256, kế hoạch hợp lệ hoặc prompt block đã chọn trường.
+ *
+ * BỐI CẢNH SỬ DỤNG: TopicOutlineStep tạo kế hoạch; SandboxPipelineRunner kiểm tra lại artifact do client gửi.
+ * =====================================================================
+ */
 final class WritingContentPlan
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tạo JSON Schema cho thông điệp, cây mục, ngân sách độ dài và các cảnh báo
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array schema V3; heading_level và parent_id có thể null
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public static function schema(): array
     {
         $string = ['type' => 'string'];
         $strings = ['type' => 'array', 'items' => $string];
 
-        return PromptV3::objectSchema([
+        return PromptPack::objectSchema([
             'central_message' => $string,
             'target_angle' => $string,
             'structure_type' => $string,
-            'sections' => ['type' => 'array', 'items' => PromptV3::objectSchema([
+            'sections' => ['type' => 'array', 'items' => PromptPack::objectSchema([
                 'id' => $string,
                 'parent_id' => ['type' => ['string', 'null']],
                 'role' => $string,
@@ -35,9 +73,27 @@ final class WritingContentPlan
         ]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tạo dấu nhận diện đầu vào của kế hoạch từ profile/version, tier, style summary và brief
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfileSnapshotDto $snapshot, WritingBrief $brief
+     *
+     * OUTPUT:
+     * - string SHA-256 để phát hiện dàn ý cũ; không dùng làm chữ ký xác thực
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public static function fingerprint(WritingProfileSnapshotDto $snapshot, WritingBrief $brief): string
     {
-        return hash('sha256', PromptV3::json([
+        return hash('sha256', PromptPack::json([
             'provenance' => $snapshot->provenance,
             'tier' => $snapshot->targetTier,
             'style' => $snapshot->styleSummary,
@@ -45,6 +101,24 @@ final class WritingContentPlan
         ]));
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm tra kiểu dữ liệu, quan hệ cha, tham chiếu facts, headings và tổng độ dài
+     * =====================================================================
+     *
+     * INPUT:
+     * - array $artifact, WritingBrief $brief
+     *
+     * OUTPUT:
+     * - array kế hoạch chỉ chứa trường đã validate
+     *
+     * SIDE EFFECT:
+     * - Chỉ duyệt dữ liệu trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException khi sai cấu trúc; InvalidPipelineException khi cây lỗi, fact ngoài brief, headings bị cấm hoặc tổng độ dài không hợp lệ. Không mở transaction.
+     * =====================================================================
+     */
     public static function validate(array $artifact, WritingBrief $brief): array
     {
         $data = Validator::make($artifact, [
@@ -100,9 +174,27 @@ final class WritingContentPlan
         return $data;
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Chỉ đưa thông điệp, góc nhìn, cấu trúc và sections sang writer
+     * =====================================================================
+     *
+     * INPUT:
+     * - array $plan
+     *
+     * OUTPUT:
+     * - string JSON; không đưa đề xuất dẫn chứng chưa xác minh vào block
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public static function promptBlock(array $plan): string
     {
-        return PromptV3::json([
+        return PromptPack::json([
             'central_message' => $plan['central_message'],
             'target_angle' => $plan['target_angle'],
             'structure_type' => $plan['structure_type'],

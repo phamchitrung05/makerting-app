@@ -9,22 +9,51 @@ use Modules\WritingStyle\Models\WritingProfile;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Biên dịch WritingProfile -> WritingProfileSnapshotDto.
+ * CHỨC NĂNG FILE: Biên dịch hồ sơ văn phong thành system prompt (Prompt Pack).
  * =====================================================================
- * Đây là 'compiler' duy nhất cấp DNA văn phong cho AI (PLAN.md §310).
- * Mọi module sinh chữ đi qua service này thay vì đọc profile trực tiếp:
+ * Đây là 'compiler' duy nhất cấp DNA văn phong cho AI. Mọi module sinh chữ
+ * đi qua service này thay vì đọc profile trực tiếp:
  *
- *  1. Lọc rules theo cấp độ độ dài đích (applicableKeys / applicableRules).
- *  2. LOẠI BỎ hoàn toàn evidence_json — AI không bao giờ thấy câu chữ mẫu
- *     thật nên không thể đạo văn.
- *  3. Biên dịch system_prompt theo tierLabel(targetTier) để AI bắt chước
- *     đúng khẩu khí/nhịp câu ở đúng độ dài yêu cầu.
+ *  1. Đọc rules/features/guidance/sliders của profile + áp dụng format trong brief.
+ *  2. Không đính evidence_json vào snapshot để giảm nguy cơ chép mẫu.
+ *     Ô 1/2 và rules vẫn cần được kiểm tra khi phân tích.
+ *  3. Biên dịch system_prompt theo độ dài đích (brief.lengthHint) để AI
+ *     bắt chước đúng khẩu khí/nhịp câu ở đúng độ dài yêu cầu.
  *  4. Kết hợp Ô 1 (style_instructions) + Ô 2 (voice_texture_instructions)
- *     + 5 thanh trượt Chất văn (voice_texture_sliders_json) + tone_overrides.
+ *     + Ô 3 (tone_instructions), 5 thanh trượt Chất văn và 8 thanh trượt Cảm xúc.
+ * =====================================================================
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - buildSnapshot(): Chuẩn hóa tier và ủy cho buildV3Snapshot.
+ * - buildV3Snapshot(): Ghép đặc điểm, Ô 1–3 và slider có nguồn gốc vào prompt.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : WritingProfile, tier đích, số câu và overrides.
+ * - OUTPUT: WritingProfileSnapshotDto chứa prompt, rules, length hint và metadata phiên bản.
+ *
+ * BỐI CẢNH SỬ DỤNG: Compiler được các bước sandbox dùng để áp dụng DNA và runtime overrides.
  * =====================================================================
  */
 class WritingProfileSnapshotService implements WritingStyleCompilerContract
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Biên dịch DNA profile thành system prompt (Prompt Pack V3)
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $profile, string $targetTier, int $targetSentences = 0, array $overrides = [],
+     *
+     * OUTPUT:
+     * - WritingProfileSnapshotDto
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     public function buildSnapshot(
         WritingProfile $profile,
         string $targetTier,
@@ -36,78 +65,32 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
             ? $targetTier
             : ($profile->dominant_tier ?? WritingProfile::TIER_MEDIUM);
 
-        if (PromptV3::enabled()) {
-            return $this->buildV3Snapshot($profile, $tier, $targetSentences, $overrides);
-        }
-
-        // Lọc rules theo tier + loại bỏ evidence.
-        $rules = $profile->snapshotRules($tier);
-
-        $sentenceHint = WritingProfileDefinition::tierLabel($tier);
-        if ($targetSentences > 0) {
-            $sentenceHint = $targetSentences . ' câu';
-        }
-
-        // Ô 1: style_instructions
-        $styleText = array_key_exists('style_instructions', $overrides)
-            ? trim((string) ($overrides['style_instructions'] ?? ''))
-            : (string) ($profile->style_instructions ?? '');
-
-        // Ô 2: voice_texture_instructions
-        $voiceTextureText = array_key_exists('voice_texture_instructions', $overrides)
-            ? trim((string) ($overrides['voice_texture_instructions'] ?? ''))
-            : trim((string) ($profile->voice_texture_instructions ?? ''));
-
-        // Ô 3: tone_instructions (Prompt bổ sung 3 - Chỉ dẫn Sắc thái cảm xúc)
-        $toneInstructionsText = array_key_exists('tone_instructions', $overrides)
-            ? trim((string) ($overrides['tone_instructions'] ?? ''))
-            : trim((string) ($profile->tone_instructions ?? ''));
-
-        // 5 Thanh trượt Chất văn: voice_texture_sliders_json
-        $voiceTextureSliders = array_key_exists('voice_texture_sliders_json', $overrides) && is_array($overrides['voice_texture_sliders_json'])
-            ? $overrides['voice_texture_sliders_json']
-            : (is_array($profile->voice_texture_sliders_json) ? $profile->voice_texture_sliders_json : []);
-
-        $prompt = $this->compilePrompt(
-            $profile,
-            $rules,
-            $tier,
-            $sentenceHint,
-            $styleText,
-            $voiceTextureText,
-            $voiceTextureSliders,
-            $toneInstructionsText,
-        );
-
-        // 8 Thanh trượt Sắc thái cảm xúc (Sandbox cảm xúc): ưu tiên runtime override,
-        // nếu không có thì đọc trực tiếp từ cột tone_sliders_json đã lưu trong DB.
-        $toneSliders = ! empty($overrides['tone_overrides']) && is_array($overrides['tone_overrides'])
-            ? $overrides['tone_overrides']
-            : (is_array($profile->tone_sliders_json) ? $profile->tone_sliders_json : []);
-
-        if (! empty($toneSliders)) {
-            $toneSection = $this->renderToneSection($toneSliders);
-            if ($toneSection !== '') {
-                $prompt .= "\n\n" . $toneSection;
-            }
-        }
-
-        return new WritingProfileSnapshotDto(
-            profileId: (int) $profile->id,
-            name: (string) $profile->name,
-            targetTier: $tier,
-            systemPrompt: $prompt,
-            rulesJson: $rules,
-            sentenceHint: $sentenceHint,
-            evidenceStripped: true,
-        );
+        return $this->buildV3Snapshot($profile, $tier, $targetSentences, $overrides);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghép đặc điểm, Ô 1–3 và slider có nguồn gốc vào prompt V3
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $profile, string $tier, int $targetSentences, array $overrides
+     *
+     * OUTPUT:
+     * - Snapshot gồm styleSummary và provenance để kiểm tra dàn ý cũ
+     *
+     * SIDE EFFECT:
+     * - Đọc profile/config; bỏ rule heading/bullet bị brief cấm, gộp override slider theo từng khóa và bỏ null, khử dòng chỉ dẫn trùng.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException từ chuẩn hóa brief và JsonException từ mã hóa prompt. Không mở transaction.
+     * =====================================================================
+     */
     private function buildV3Snapshot(WritingProfile $profile, string $tier, int $targetSentences, array $overrides): WritingProfileSnapshotDto
     {
         $brief = WritingBrief::fromInput('', $tier, array_replace($overrides, ['target_sentences' => $targetSentences]));
         $analysis = $profile->style_analysis_json ?? [];
-        $rules = array_intersect_key($profile->rules_json ?? [], config('writingstyle.v3.questions'));
+        $rules = array_intersect_key($profile->rules_json ?? [], (array) PromptPack::dict('questions'));
         $format = $brief->data['format'];
         foreach (['headings', 'bullets'] as $key) {
             if (($format[$key] ?? null) === false) {
@@ -144,7 +127,7 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         }
 
         $axes = [];
-        $definitions = config('writingstyle.v3.axes');
+        $definitions = (array) PromptPack::dict('axes');
         foreach (['voice_texture_sliders_json' => 'voice_texture_sliders_json', 'tone_overrides' => 'tone_sliders_json'] as $key => $field) {
             $stored = (array) $profile->{$field};
             $current = array_key_exists($key, $overrides)
@@ -163,8 +146,8 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         }
 
         $style = ['features' => $features, 'guidance' => $guidance, 'axes' => $axes];
-        $system = (string) config('writingstyle.v3.compiler');
-        $prompt = $system."\n\nPhong cách hiệu lực:\n".PromptV3::json($style);
+        $system = PromptPack::role('compiler', $brief->data['content_type'] ?? null);
+        $prompt = $system."\n\nPhong cách hiệu lực:\n".PromptPack::json($style);
 
         return new WritingProfileSnapshotDto(
             profileId: (int) $profile->id,
@@ -182,146 +165,4 @@ class WritingProfileSnapshotService implements WritingStyleCompilerContract
         );
     }
 
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Ghép system_prompt từ rules đã lọc + Ô 1 + Ô 2 + 5 sliders.
-     * =====================================================================
-     */
-    protected function compilePrompt(
-        WritingProfile $profile,
-        array $rules,
-        string $tier,
-        string $sentenceHint,
-        string $styleText,
-        string $voiceTextureText = '',
-        array $voiceTextureSliders = [],
-        string $toneInstructionsText = '',
-    ): string {
-        $cfg = config('writingstyle.prompts.compiler', []);
-
-        $fill = fn (string $tpl) => strtr($tpl, [
-            '{name}' => (string) $profile->name,
-            '{sentence_hint}' => $sentenceHint,
-        ]);
-
-        $lines = [];
-        $lines[] = $fill((string) ($cfg['role_template'] ?? 'Bạn là người viết nội dung có văn phong "{name}".'));
-        $lines[] = $fill((string) ($cfg['task_template'] ?? 'Hãy viết {sentence_hint} đúng 100% khẩu khí, nhịp câu và cách hành văn của văn phong này.'));
-        $lines[] = (string) ($cfg['anti_plagiarism'] ?? 'TUYỆT ĐỐI không sao chép nguyên văn bất kỳ câu nào từ bài mẫu — chỉ bắt chước đặc trưng văn phong.');
-        $lines[] = '';
-
-        foreach ((array) ($cfg['transformation_directives'] ?? []) as $directive) {
-            $lines[] = $directive;
-        }
-        $lines[] = '';
-
-        $lines[] = (string) ($cfg['rules_header'] ?? 'Đặc trưng văn phong cần tuân thủ:');
-        foreach ($rules as $key => $value) {
-            $text = is_array($value)
-                ? implode('; ', array_filter(array_map('strval', $value)))
-                : trim((string) $value);
-            if ($text === '') {
-                continue;
-            }
-            $lines[] = '- ' . $key . ': ' . $text;
-        }
-
-        // Ô 1: Hướng dẫn hành văn & Chân dung người viết (style_instructions)
-        $extra = trim($styleText);
-        if ($extra !== '') {
-            $lines[] = '';
-            $lines[] = (string) ($cfg['style_instructions_label'] ?? 'Hướng dẫn bổ sung:') . ' ' . $extra;
-        }
-
-        // Ô 2: Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt (voice_texture_instructions)
-        $voiceExtra = trim($voiceTextureText);
-        if ($voiceExtra !== '') {
-            $lines[] = '';
-            $lines[] = (string) ($cfg['voice_texture_label'] ?? 'Chỉ dẫn Chất văn & Nghệ thuật Nhấn – Lướt (Ô 2):') . ' ' . $voiceExtra;
-        }
-
-        // Ô 3: Chỉ dẫn Sắc thái & Phối âm cảm xúc (tone_instructions)
-        $toneExtra = trim($toneInstructionsText);
-        if ($toneExtra !== '') {
-            $lines[] = '';
-            $lines[] = (string) ($cfg['tone_instructions_label'] ?? 'Chỉ dẫn Sắc thái & Phối âm cảm xúc (Ô 3):') . ' ' . $toneExtra;
-        }
-
-        // 5 Thanh trượt Chất văn (voice_texture_sliders_json)
-        $voiceSlidersSection = $this->renderVoiceTextureSlidersSection($voiceTextureSliders);
-        if ($voiceSlidersSection !== '') {
-            $lines[] = '';
-            $lines[] = $voiceSlidersSection;
-        }
-
-        return implode("\n", $lines);
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Render 5 thanh trượt Chất văn thành khối chỉ đạo định lượng.
-     * =====================================================================
-     */
-    protected function renderVoiceTextureSlidersSection(array $sliders): string
-    {
-        if (empty($sliders)) {
-            return '';
-        }
-
-        $axes = config('writingstyle.voice_texture_axes', []);
-        $lines = ['THÔNG SỐ CHẤT VĂN & ĐỘ TỰ NHIÊN (VOICE TEXTURE CALIBRATION):'];
-
-        foreach ($axes as $key => $meta) {
-            if (! isset($sliders[$key])) {
-                continue;
-            }
-
-            $percent = max(0, min(100, (int) $sliders[$key]));
-            $label = (string) ($meta['label'] ?? $key);
-            $lowPole = (string) ($meta['low_pole'] ?? '');
-            $highPole = (string) ($meta['high_pole'] ?? '');
-
-            if ($percent >= 70) {
-                $direction = "nghiêng mạnh về cực [{$highPole}]";
-            } elseif ($percent <= 35) {
-                $direction = "nghiêng về cực [{$lowPole}]";
-            } else {
-                $direction = "cân bằng giữa [{$lowPole}] và [{$highPole}]";
-            }
-
-            $lines[] = "  * {$label}: {$percent}% — {$direction}";
-        }
-
-        return count($lines) <= 1 ? '' : implode("\n", $lines);
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Render tone_overrides thành section TONE CALIBRATION.
-     * =====================================================================
-     */
-    protected function renderToneSection(array $toneOverrides): string
-    {
-        $axes = config('writingstyle.tone_axes', []);
-
-        $lines = ['HIỆU CHỈNH SẮC THÁI CẢM XÚC THỜI GIAN THỰC (TONE CALIBRATION):'];
-
-        foreach ($axes as $key => $label) {
-            if (! isset($toneOverrides[$key])) {
-                continue;
-            }
-
-            $percent = (int) $toneOverrides[$key];
-            $percent = max(0, min(100, $percent));
-
-            $diff = $percent - 50;
-            $diffLabel = $diff === 0
-                ? 'điểm cân bằng'
-                : ($diff > 0 ? '+' . $diff . '% so với điểm cân bằng' : $diff . '% so với điểm cân bằng');
-
-            $lines[] = '  * ' . $label . ': ' . $percent . '% (' . $diffLabel . ')';
-        }
-
-        return count($lines) <= 1 ? '' : implode("\n", $lines);
-    }
 }

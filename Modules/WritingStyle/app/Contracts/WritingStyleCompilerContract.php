@@ -28,10 +28,9 @@ interface WritingStyleCompilerContract
      * =====================================================================
      * CHỨC NĂNG: Biên dịch snapshot văn phong cho 1 độ dài đích.
      * =====================================================================
-     * - Lọc rules_json theo applicableKeys(targetTier) (micro bỏ
-     *   headings/bullets/paragraph_rhythm/structure_patterns).
-     * - LOẠI BỎ hoàn toàn evidence_json khỏi snapshot.
-     * - Biên dịch system_prompt theo tierLabel(targetTier).
+     * - Lọc rules/features theo bộ quy tắc hiệu lực của prompt pack hiện hành,
+     *   không đính kèm evidence_json.
+     * - Biên dịch system_prompt theo độ dài đích (brief.lengthHint).
      *
      * INPUT: profile + targetTier + targetSentences (0 = theo tier).
      * OUTPUT: WritingProfileSnapshotDto (evidenceStripped=true).

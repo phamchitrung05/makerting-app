@@ -8,7 +8,7 @@ use Illuminate\Support\Str;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Model `writing_profile_analyses` — lịch sử giải mã DNA.
+ * CHỨC NĂNG FILE: Model lịch sử giải mã với phiên bản prompt được ghim theo run.
  * =====================================================================
  *
  * Một bản ghi = 1 lần chạy "Giải mã văn phong" (AnalyzeWritingProfileJob):
@@ -19,14 +19,25 @@ use Illuminate\Support\Str;
  *
  * `expires_at` cho phép tự hủy bản ghi (bảo mật reference_text mẫu).
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - draftProfile()                : profile được tạo ra từ phân tích này.
- * - markRunning()/markSucceeded()/markFailed() : chuyển trạng thái.
- * - isCompleted()/isFailed()       : status helpers.
- * - sourceHashOf()                : sha256 của reference_text (dedupe).
+ * - casts(): Khai báo kiểu cast để đọc/ghi JSON, số và trạng thái model.
+ * - booted(): Đăng ký hook gán UUID và source_hash trước khi tạo analysis.
+ * - draftProfile(): Khai báo profile được gắn khi người dùng lưu kết quả phân tích.
+ * - markRunning(): Chuyển analysis sang running và lưu DB.
+ * - markSucceeded(): Lưu kết quả, detected tier, AI run ID và trạng thái succeeded.
+ * - markFailed(): Lưu mã/thông báo lỗi và chốt trạng thái failed.
+ * - markTransientError(): Ghi lỗi tạm thời và giữ running để job được retry.
+ * - isSucceeded(): Kiểm tra analysis đã succeeded.
+ * - isFailed(): Kiểm tra analysis đã failed.
+ * - sourceHashOf(): Chuẩn hóa khoảng trắng và tạo hash nhận diện nguồn.
+ *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : attributes (source_type, reference_text, ...).
- * - OUTPUT: WritingProfileAnalysis model + transition helpers.
+ * - INPUT : Thuộc tính analysis, reference_text, prompt_version và kết quả JSON.
+ * - OUTPUT: Model trạng thái pending/running/succeeded/failed và quan hệ profile.
+ *
+ * BỐI CẢNH SỬ DỤNG: Worker cập nhật trạng thái; controller gắn draftProfile khi lưu hồ sơ.
  * =====================================================================
  */
 class WritingProfileAnalysis extends Model
@@ -69,6 +80,24 @@ class WritingProfileAnalysis extends Model
         'expires_at',
     ];
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khai báo kiểu cast để đọc/ghi JSON, số và trạng thái model
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array tên thuộc tính => kiểu cast
+     *
+     * SIDE EFFECT:
+     * - Được Eloquent dùng khi truy cập thuộc tính; không tự truy vấn DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không mở transaction.
+     * =====================================================================
+     */
     protected function casts(): array
     {
         return [
@@ -83,8 +112,26 @@ class WritingProfileAnalysis extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Đăng ký hook gán UUID và source_hash trước khi tạo analysis
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Gán uuid tự động khi creating (id có thể truyền sẵn).
      * INPUT: không. OUTPUT: void.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void
+     *
+     * SIDE EFFECT:
+     * - Đăng ký listener creating; callback bổ sung thuộc tính khi model được tạo.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi tạo model/DB có thể truyền lên. Không mở transaction.
+     * =====================================================================
      */
     protected static function booted(): void
     {
@@ -104,10 +151,28 @@ class WritingProfileAnalysis extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Khai báo profile được gắn khi người dùng lưu kết quả phân tích
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Profile được gắn khi người dùng Lưu trên trang create.
      * Phân tích KHÔNG tự tạo profile — `draft_profile_id` được điền bởi
      * `WritingProfileController@store` khi payload Lưu kèm analysis_id.
      * INPUT: không. OUTPUT: BelongsTo.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - BelongsTo theo draft_profile_id
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function draftProfile(): BelongsTo
     {
@@ -119,8 +184,26 @@ class WritingProfileAnalysis extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Chuyển analysis sang running và lưu DB
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Chuyển trạng thái sang running.
      * INPUT: không. OUTPUT: self.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - self
+     *
+     * SIDE EFFECT:
+     * - UPDATE analysis.status.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không mở transaction hoặc lock.
+     * =====================================================================
      */
     public function markRunning(): self
     {
@@ -132,9 +215,27 @@ class WritingProfileAnalysis extends Model
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Lưu kết quả, detected tier, AI run ID và trạng thái succeeded
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Chuyển trạng thái sang succeeded + kết quả.
      * INPUT: resultJson, ?detectedTier, ?aiRunId, ?draftProfileId.
      * OUTPUT: self.
+     * =====================================================================
+     *
+     * INPUT:
+     * - array $resultJson, ?string $detectedTier = null, ?string $aiRunId = null, ?int $draftProfileId = null,
+     *
+     * OUTPUT:
+     * - self
+     *
+     * SIDE EFFECT:
+     * - UPDATE analysis, có thể gắn draftProfile nếu caller cung cấp.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không mở transaction hoặc lock.
      * =====================================================================
      */
     public function markSucceeded(
@@ -160,8 +261,26 @@ class WritingProfileAnalysis extends Model
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Lưu mã/thông báo lỗi và chốt trạng thái failed
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Chuyển trạng thái sang failed + lỗi.
      * INPUT: errorCode, errorMessage. OUTPUT: self.
+     *
+     * INPUT:
+     * - string $errorCode, string $errorMessage
+     *
+     * OUTPUT:
+     * - self
+     *
+     * SIDE EFFECT:
+     * - UPDATE status và error fields.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không mở transaction.
+     * =====================================================================
      */
     public function markFailed(string $errorCode, string $errorMessage): self
     {
@@ -174,6 +293,11 @@ class WritingProfileAnalysis extends Model
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Ghi lỗi tạm thời và giữ running để job được retry
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * =====================================================================
      * CHỨC NĂNG: Ghi lỗi TẠM THỜI nhưng GIỮ status `running` để queue retry.
      * =====================================================================
@@ -193,6 +317,19 @@ class WritingProfileAnalysis extends Model
      * OUTPUT: self.
      * SIDE EFFECT: UPDATE error_code/error_message; status giữ nguyên `running`.
      * =====================================================================
+     *
+     * INPUT:
+     * - string $errorCode, string $errorMessage
+     *
+     * OUTPUT:
+     * - self
+     *
+     * SIDE EFFECT:
+     * - UPDATE error_code/error_message, giữ analysis chưa kết thúc.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không mở transaction.
+     * =====================================================================
      */
     public function markTransientError(string $errorCode, string $errorMessage): self
     {
@@ -209,8 +346,26 @@ class WritingProfileAnalysis extends Model
      * ===================================================================== */
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm tra analysis đã succeeded
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Phân tích đã kết thúc thành công.
      * INPUT: không. OUTPUT: bool.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - bool
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function isSucceeded(): bool
     {
@@ -218,8 +373,26 @@ class WritingProfileAnalysis extends Model
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm tra analysis đã failed
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * CHỨC NĂNG: Phân tích đã kết thúc thất bại.
      * INPUT: không. OUTPUT: bool.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - bool
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
      */
     public function isFailed(): bool
     {
@@ -228,9 +401,27 @@ class WritingProfileAnalysis extends Model
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Chuẩn hóa khoảng trắng và tạo hash nhận diện nguồn
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Hash sha256 của reference_text để dedupe.
      * =====================================================================
      * INPUT: reference_text. OUTPUT: string(64).
+     * =====================================================================
+     *
+     * INPUT:
+     * - string $referenceText
+     *
+     * OUTPUT:
+     * - string SHA-256
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
      * =====================================================================
      */
     public static function sourceHashOf(string $referenceText): string

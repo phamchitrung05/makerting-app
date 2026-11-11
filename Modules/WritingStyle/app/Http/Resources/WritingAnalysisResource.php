@@ -7,7 +7,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Serialize WritingProfileAnalysis cho FE poll trạng thái.
+ * CHỨC NĂNG FILE: Serialize trạng thái và kết quả phân tích DNA cho polling frontend.
  * =====================================================================
  *
  * Dùng bởi `GET /writing-profiles/analyses/{analysis}` — trang create poll
@@ -18,18 +18,27 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * KHÔNG trả `reference_text`: văn bản mẫu đã có sẵn ở FE (người dùng vừa
  * dán), trả lại chỉ làm phình payload và lộ nội dung không cần thiết.
  *
+ * =====================================================================
+ *
  * CÁC HÀM/METHOD TRONG FILE:
- * - toArray(Request $request): envelope các field trạng thái + kết quả + draft profile.
- * - resultPayload(): chuẩn hóa result_json về 5 khóa cố định (FE khỏi optional-chain).
+ * - toArray(): Serialize analysis, thời gian và draft profile đã eager load.
+ * - resultPayload(): Chuẩn hóa kết quả lưu trữ, giữ Ô 2, 13 slider nullable và style_analysis_json.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : WritingProfileAnalysis (nên eager load `draftProfile`).
- * - OUTPUT: array JSON-serializable.
+ * - INPUT : WritingProfileAnalysis, draftProfile nếu đã load và Request.
+ * - OUTPUT: Mảng trạng thái và result_json V2/V3, không trả reference_text.
+ *
+ * BỐI CẢNH SỬ DỤNG: Controller phân tích dùng resource khi frontend chờ analysis hoàn tất.
  * =====================================================================
  */
 class WritingAnalysisResource extends JsonResource
 {
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Serialize analysis, thời gian và draft profile đã eager load
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
      * =====================================================================
      * CHỨC NĂNG: Chuyển đổi model WritingProfileAnalysis thành mảng response
      * =====================================================================
@@ -46,6 +55,19 @@ class WritingAnalysisResource extends JsonResource
      *
      * EXCEPTION/TRANSACTION:
      * - Không ném exception, không mở transaction
+     * =====================================================================
+     *
+     * INPUT:
+     * - Request $request
+     *
+     * OUTPUT:
+     * - array dữ liệu polling
+     *
+     * SIDE EFFECT:
+     * - Đọc model và quan hệ được cung cấp; không ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi serialize có thể truyền lên. Không mở transaction.
      * =====================================================================
      */
     public function toArray(Request $request): array
@@ -75,6 +97,11 @@ class WritingAnalysisResource extends JsonResource
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Chuẩn hóa kết quả lưu trữ, giữ Ô 2, 13 slider nullable và style_analysis_json
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Chuẩn hóa trường result_json về cấu trúc 5 khóa cố định
      * =====================================================================
      *
@@ -91,6 +118,19 @@ class WritingAnalysisResource extends JsonResource
      *
      * EXCEPTION/TRANSACTION:
      * - Không ném exception, không mở transaction
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array kết quả hoặc null khi chưa có result_json
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
      * =====================================================================
      */
     protected function resultPayload(): ?array

@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Responses\BaseResponse;
 use Modules\WritingStyle\DTOs\WritingBrief;
-use Modules\WritingStyle\Services\PromptV3;
+use Modules\WritingStyle\Services\PromptPack;
 use Modules\WritingStyle\Http\Requests\StoreWritingProfileRequest;
 use Modules\WritingStyle\Http\Resources\WritingProfileResource;
 use Modules\WritingStyle\Models\WritingProfile;
@@ -16,7 +16,7 @@ use Modules\WritingStyle\Services\WritingProfileDefinition;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Controller quản lý CRUD hồ sơ văn phong (WritingProfile).
+ * CHỨC NĂNG FILE: CRUD hồ sơ DNA văn phong, gắn phân tích và cấp options cho frontend.
  * =====================================================================
  *
  * Cung cấp các endpoint RESTful trong nhóm /v1/admin/writing-style/writing-profiles:
@@ -25,23 +25,45 @@ use Modules\WritingStyle\Services\WritingProfileDefinition;
  * - POST   /writing-profiles          : Tạo hồ sơ khi Lưu (kèm analysis_id -> origin=reference)
  * - GET    /writing-profiles/{id}     : Chi tiết một hồ sơ kèm taxonomy
  * - PUT    /writing-profiles/{id}     : Cập nhật hồ sơ và đồng bộ taxonomy
- * - DELETE /writing-profiles/{id}     : Xóa mềm hồ sơ
+ * - DELETE /writing-profiles/{id}     : Xóa cứng hồ sơ và giải phóng slug
+ *
+ * =====================================================================
  *
  * CÁC HÀM/METHOD TRONG FILE:
- * - index(Request $request): Trả danh sách hồ sơ dạng dataTable
- * - options(): Trả danh sách 4 phân tầng độ dài và 16 câu hỏi giải mã
- * - store(StoreWritingProfileRequest $request): Tạo hồ sơ khi Lưu + gắn analysis
- * - show(WritingProfile $writingProfile): Xem chi tiết hồ sơ
- * - update(StoreWritingProfileRequest $request, WritingProfile $writingProfile): Cập nhật hồ sơ
- * - destroy(WritingProfile $writingProfile): Xóa hồ sơ
+ * - index(): Lọc theo search/tier/origin/status, sắp id mới nhất và phân trang tối đa 100.
+ * - options(): Cấp tiers, câu hỏi, pipelines, phiên bản prompt, định nghĩa trục và presets.
+ * - store(): Tạo profile và gắn analysis đã succeeded nếu có analysis_id.
+ * - show(): Tải chi tiết profile và các phân tích liên quan.
+ * - update(): Áp dụng các trường được gửi, tăng version và đồng bộ slug/taxonomy.
+ * - destroy(): Xóa cứng profile và giải phóng slug theo hook model.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
- * - INPUT : StoreWritingProfileRequest, Request, WritingProfile route binding
- * - OUTPUT: BaseResponse (JSON)
+ * - INPUT : Request đã validate hoặc WritingProfile được route model binding.
+ * - OUTPUT: BaseResponse chứa profile, dataTable, options hoặc response 204.
+ *
+ * BỐI CẢNH SỬ DỤNG: Các route admin dùng auth:sanctum và permission middleware của WritingStyle.
  * =====================================================================
  */
 class WritingProfileController extends Controller
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Lọc theo search/tier/origin/status, sắp id mới nhất và phân trang tối đa 100
+     * =====================================================================
+     *
+     * INPUT:
+     * - Request $request
+     *
+     * OUTPUT:
+     * - BaseResponse dataTable; eager load categories và tags
+     *
+     * SIDE EFFECT:
+     * - Đọc DB. Yêu cầu writing.profile.view.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi truy vấn có thể truyền lên. Không mở transaction.
+     * =====================================================================
+     */
     public function index(Request $request)
     {
         $perPage = min((int) $request->query('per_page', 15), 100);
@@ -59,6 +81,24 @@ class WritingProfileController extends Controller
         return BaseResponse::dataTable($items);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Cấp tiers, câu hỏi, pipelines, phiên bản prompt, định nghĩa trục và presets
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - BaseResponse options V2/V3
+     *
+     * SIDE EFFECT:
+     * - Đọc config và validate mô tả pipeline. Yêu cầu writing.profile.view.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - InvalidPipelineException nếu cấu hình pipeline sai. Không mở transaction.
+     * =====================================================================
+     */
     public function options()
     {
         $tiers = [];
@@ -66,15 +106,20 @@ class WritingProfileController extends Controller
             $tiers[] = [
                 'value'         => $t,
                 'label'         => config("writingstyle.tiers.{$t}.label", $t),
-                'sentence_hint' => PromptV3::enabled() ? WritingBrief::fromInput('', $t, [])->lengthHint() : WritingProfileDefinition::tierLabel($t),
+                'sentence_hint' => WritingBrief::fromInput('', $t, [])->lengthHint(),
             ];
         }
 
+        // Câu hỏi DNA lấy từ prompt pack (15 khóa quan sát); `uncertainties`
+        // được thêm riêng vì nó là báo cáo điểm chưa xác định, không phải feature.
+        $questions = (array) PromptPack::dict('questions');
         $rules = [];
         foreach (WritingProfileDefinition::ruleKeys() as $k) {
             $rules[] = [
                 'key' => $k,
-                'question' => PromptV3::enabled() ? config('writingstyle.v3.questions.'.$k, WritingProfileDefinition::ruleQuestion($k)) : WritingProfileDefinition::ruleQuestion($k),
+                'question' => $k === 'uncertainties'
+                    ? 'Những khía cạnh nào bài mẫu quá ngắn hoặc không đủ dữ liệu để kết luận chắc chắn? (liệt kê các điểm còn thiếu — để ngỏ, không bịa)'
+                    : (string) ($questions[$k] ?? ''),
             ];
         }
 
@@ -84,12 +129,30 @@ class WritingProfileController extends Controller
             // Sơ đồ Pipeline của 4 tier — FE render Pipeline Stepper biết trước
             // các bước + trạng thái phụ thuộc (PLAN-WRITING-STYLE-SANDBOX-PIPELINE).
             'pipelines' => app(SandboxPipelineRunner::class)->describePipelines(),
-            'prompt_version' => (int) config('writingstyle.prompt_version', 2),
-            'axis_definitions' => config('writingstyle.v3.axes'),
-            'presets' => config('writingstyle.v3.presets', []),
+            'prompt_version' => PromptPack::version(),
+            'axis_definitions' => PromptPack::dict('axes'),
+            'presets' => PromptPack::dict('presets') ?? [],
         ]);
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tạo profile và gắn analysis đã succeeded nếu có analysis_id
+     * =====================================================================
+     *
+     * INPUT:
+     * - StoreWritingProfileRequest $request
+     *
+     * OUTPUT:
+     * - BaseResponse created kèm categories/tags
+     *
+     * SIDE EFFECT:
+     * - Ghi profile, slug, taxonomy và draft_profile_id của analysis. Yêu cầu writing.profile.create.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB/slug/taxonomy có thể truyền lên. Không bao transaction cho toàn bộ các lần ghi, không giữ khóa.
+     * =====================================================================
+     */
     public function store(StoreWritingProfileRequest $request)
     {
         $data = $request->validated();
@@ -153,6 +216,24 @@ class WritingProfileController extends Controller
         return BaseResponse::created(new WritingProfileResource($profile->load(['categories', 'tags'])), 'Tạo văn phong thành công');
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Tải chi tiết profile và các phân tích liên quan
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse profile với categories, tags, analyses
+     *
+     * SIDE EFFECT:
+     * - Đọc DB. Yêu cầu writing.profile.view.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ModelNotFoundException có thể xảy ra ở route binding. Không mở transaction.
+     * =====================================================================
+     */
     public function show(WritingProfile $writingProfile)
     {
         return BaseResponse::success(new WritingProfileResource(
@@ -160,6 +241,24 @@ class WritingProfileController extends Controller
         ));
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Áp dụng các trường được gửi, tăng version và đồng bộ slug/taxonomy
+     * =====================================================================
+     *
+     * INPUT:
+     * - StoreWritingProfileRequest $request, WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse profile đã cập nhật
+     *
+     * SIDE EFFECT:
+     * - Ghi profile và các quan hệ khi request có dữ liệu. Yêu cầu writing.profile.create.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi validation, DB hoặc slug có thể truyền lên. Không mở transaction hoặc optimistic lock.
+     * =====================================================================
+     */
     public function update(StoreWritingProfileRequest $request, WritingProfile $writingProfile)
     {
         $data = $request->validated();
@@ -199,6 +298,24 @@ class WritingProfileController extends Controller
         return BaseResponse::success(new WritingProfileResource($writingProfile->load(['categories', 'tags'])), 'Cập nhật văn phong thành công');
     }
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Xóa cứng profile và giải phóng slug theo hook model
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse noContent
+     *
+     * SIDE EFFECT:
+     * - DELETE profile và slug liên quan. Yêu cầu writing.profile.manage.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi DB truyền lên. Không tự mở transaction.
+     * =====================================================================
+     */
     public function destroy(WritingProfile $writingProfile)
     {
         $writingProfile->delete();

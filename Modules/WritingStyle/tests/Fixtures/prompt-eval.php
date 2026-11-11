@@ -1,4 +1,17 @@
 <?php
+/**
+ * =====================================================================
+ * CHỨC NĂNG FILE: Bộ dữ liệu mẫu cho 20 ca đánh giá prompt V2/V3
+ * =====================================================================
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - Không có; file trả về mảng cấu hình hoặc fixture.
+ * INPUT/OUTPUT CỦA FILE (tổng thể):
+ * - INPUT : Cấu hình môi trường và các file tham chiếu khi có require.
+ * - OUTPUT: array để provider hoặc bộ đánh giá sử dụng.
+ * SIDE EFFECT: Nạp cấu hình trong bộ nhớ; không gọi AI hoặc ghi DB.
+ * EXCEPTION/TRANSACTION: Lỗi nạp file hoặc JSON có thể truyền lên; không mở transaction.
+ * =====================================================================
+ */
 
 return [
     'sales' => [

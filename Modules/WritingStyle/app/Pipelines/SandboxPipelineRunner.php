@@ -5,13 +5,12 @@ namespace Modules\WritingStyle\Pipelines;
 use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Contracts\WritingStyleCompilerContract;
 use Modules\WritingStyle\DTOs\WritingBrief;
-use Modules\WritingStyle\Services\PromptV3;
 use Modules\WritingStyle\Pipelines\Contracts\SandboxStepContract;
 use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
 
 /**
  * =====================================================================
- * CHỨC NĂNG FILE: Bộ điều phối thực thi Sandbox Pipeline (runtime).
+ * CHỨC NĂNG FILE: Điều phối thứ tự và phụ thuộc các bước sandbox.
  * =====================================================================
  *
  * Hai nhiệm vụ:
@@ -26,9 +25,41 @@ use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
  *
  * KHÔNG lưu session server — artifacts giữa các bước do FE giữ và gửi lại.
  * =====================================================================
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - __construct(): Khởi tạo thuộc tính hoặc nhận các dependency của SandboxPipelineRunner.
+ * - rawPipeline(): Trả mảng pipeline thô của 1 tier từ config.
+ * - step(): Resolve step đã đăng ký từ container và kiểm tra contract.
+ * - describePipelines(): Validate và mô tả pipeline của cả bốn tier cho frontend.
+ * - runStep(): Validate topology, phụ thuộc và dàn ý V3 rồi thực thi bước được yêu cầu.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Profile, tier, step, topic, artifacts do client giữ và overrides.
+ * - OUTPUT: Mô tả pipeline hoặc cặp step/artifact.
+ *
+ * BỐI CẢNH SỬ DỤNG: Controller gọi runStep; endpoint options lấy sơ đồ qua describePipelines().
+ * =====================================================================
  */
 class SandboxPipelineRunner
 {
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Khởi tạo thuộc tính hoặc nhận các dependency của SandboxPipelineRunner
+     * =====================================================================
+     *
+     * INPUT:
+     * - private readonly PipelineTopologyValidator $validator,
+     *
+     * OUTPUT:
+     * - Instance giữ các thuộc tính/dependency theo chữ ký
+     *
+     * SIDE EFFECT:
+     * - Gán thuộc tính trong bộ nhớ; không gọi AI hoặc ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi kiểu dữ liệu truyền về caller; không mở transaction.
+     * =====================================================================
+     */
     public function __construct(
         private readonly PipelineTopologyValidator $validator,
     ) {}
@@ -37,13 +68,51 @@ class SandboxPipelineRunner
      * Truy xuất config + instance step (qua validator để nhất quán lỗi).
      * ===================================================================== */
 
-    /** CHỨC NĂNG: Trả mảng pipeline thô của 1 tier từ config. */
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Trả mảng pipeline thô của 1 tier từ config.
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     *
+     * INPUT:
+     * - string $tier
+     *
+     * OUTPUT:
+     * - array theo hợp đồng của method.
+     *
+     * SIDE EFFECT:
+     * - Đọc dữ liệu thuộc tính/config và xử lý trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - Không tự mở transaction. Lỗi từ dependency được truyền về caller.
+     * =====================================================================
+     */
     private function rawPipeline(string $tier): array
     {
         return (array) config('writingstyle.tier_pipelines.' . $tier, []);
     }
 
-    /** CHỨC NĂNG: Resolve instance step theo key (qua validator -> lỗi chuẩn). */
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Resolve step đã đăng ký từ container và kiểm tra contract
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     *
+     * INPUT:
+     * - string $stepKey
+     *
+     * OUTPUT:
+     * - SandboxStepContract đã resolve
+     *
+     * SIDE EFFECT:
+     * - Đọc config và resolve dependency từ container.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - InvalidPipelineException khi thiếu/sai class hoặc contract; lỗi container truyền lên. Không mở transaction.
+     * =====================================================================
+     */
     private function step(string $stepKey): SandboxStepContract
     {
         $map = (array) config('writingstyle.sandbox_steps', []);
@@ -67,12 +136,30 @@ class SandboxPipelineRunner
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Validate và mô tả pipeline của cả bốn tier cho frontend
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Trả sơ đồ pipeline đã chuẩn hóa của 4 tier.
      * =====================================================================
      * INPUT: không. OUTPUT:
      *   array{tier => array{steps => array<{step,label,description,icon,stage,is_terminal,depends_on}>}}
      * SIDE EFFECT: validateTierPipeline mọi tier (fail-fast khi config sai).
      * EXCEPTION: InvalidPipelineException nếu config bất kỳ tier nào vi phạm.
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - array tier => steps cùng nhãn, stage, is_terminal và depends_on
+     *
+     * SIDE EFFECT:
+     * - Validate cấu hình mỗi tier và resolve metadata step; không chạy AI.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - InvalidPipelineException khi topology/step sai; lỗi container truyền lên. Không mở transaction.
      * =====================================================================
      */
     public function describePipelines(): array
@@ -106,6 +193,11 @@ class SandboxPipelineRunner
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Validate topology, phụ thuộc và dàn ý V3 rồi thực thi bước được yêu cầu
+     * =====================================================================
+     *
+     * Chi tiết triển khai:
+     * =====================================================================
      * CHỨC NĂNG: Thực thi 1 step trong pipeline của 1 tier.
      * =====================================================================
      * INPUT :
@@ -122,6 +214,19 @@ class SandboxPipelineRunner
      * SIDE EFFECT: gọi AI qua step->execute (ghi AiRun + ai_usage_logs).
      * EXCEPTION: InvalidPipelineException (422) khi vi phạm phụ thuộc hoặc
      *            step không nằm trong pipeline của tier.
+     * =====================================================================
+     *
+     * INPUT:
+     * - WritingProfile $profile, string $targetTier, string $stepKey, string $topic, array $artifacts = [], array $overrides = [],
+     *
+     * OUTPUT:
+     * - array step và artifact
+     *
+     * SIDE EFFECT:
+     * - V3 yêu cầu outline_approved, kiểm tra schema/fingerprint và validate lại kế hoạch. Ghép prompt block từ các bước trước; step có thể gọi AI.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - InvalidPipelineException khi sai bước/phụ thuộc, chưa duyệt hoặc dàn ý cũ; ValidationException và lỗi AI có thể truyền lên. Không mở transaction, không tự lưu session.
      * =====================================================================
      */
     public function runStep(
@@ -152,7 +257,7 @@ class SandboxPipelineRunner
         // 3. Runtime guard: mọi dependency của step phải đã có artifact hợp lệ.
         $this->validator->assertDependenciesMet($targetTier, $stepKey, $artifacts);
 
-        if (PromptV3::enabled() && $stepKey !== 'topic_outline' && isset($artifacts['topic_outline'])) {
+        if ($stepKey !== 'topic_outline' && isset($artifacts['topic_outline'])) {
             if (! ($overrides['outline_approved'] ?? false)) {
                 throw new InvalidPipelineException('Hãy xác nhận dàn ý trước khi viết bài.');
             }

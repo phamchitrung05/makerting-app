@@ -1,10 +1,20 @@
 <!--
   =====================================================================
-  CHỨC NĂNG FILE: Dialog "Giải mã văn phong từ bài mẫu" — DEMO TĨNH.
+  CHỨC NĂNG FILE: Nhập nguồn bài mẫu và chuyển sang trang tạo để phân tích.
   =====================================================================
+
   Form paste/url/file -> emit 'analyze' {name,source_type,source_url,
-  reference_text} cho parent xử lý (demo: parent tạo profile giả sau ~1s).
+  reference_text} để trang cha chuyển sang màn tạo, phân tích và duyệt trước khi lưu.
   Không gọi API.
+
+  CÁC HÀM/COMPUTED/WATCHER TRONG FILE:
+  - submit(): Phát payload giải mã cho trang cha và đánh dấu chuyển trang.
+  - Computed: show.
+  - Watcher/lifecycle: watch show.
+
+  INPUT/OUTPUT CỦA COMPONENT (tổng thể):
+  - INPUT : modelValue bool mở dialog; form tên/nguồn paste, URL hoặc file.
+  - OUTPUT: Emit analyze với nguồn mẫu và update:modelValue để đóng/mở; không tự gọi API.
   =====================================================================
 -->
 <script setup>
@@ -31,6 +41,24 @@ watch(show, v => {
   if (v) { done.value = false }
 })
 
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Phát payload giải mã cho trang cha và đánh dấu chuyển trang
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc props, form hoặc store hiện tại.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Emit analyze và cập nhật done.
+ *
+ * EXCEPTION:
+ * - Component không bắt lỗi của tác vụ ở trang cha.
+ * =====================================================================
+ */
 function submit() {
   emit('analyze', {
     name: name.value || undefined,
