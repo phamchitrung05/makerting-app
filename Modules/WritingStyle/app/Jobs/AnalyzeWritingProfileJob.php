@@ -62,6 +62,13 @@ class AnalyzeWritingProfileJob implements ShouldQueue
         TaskTrackerContract $tracker,
         WritingStyleAnalyzerService $analyzer,
     ): void {
+        // PHP timeout của CLI có thể nhỏ hơn $timeout job (vd php.ini=180s nhưng
+        // job timeout=300s). Giới hạn trong process phải >= timeout job để PHP
+        // không kill worker trước khi `$tries`/`$timeout` của Laravel kịp tính.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit((int) $this->timeout);
+        }
+
         $analysis = WritingProfileAnalysis::find($this->analysisId);
         if ($analysis === null) {
             $tracker->fail($this->taskRunId, 'analysis_not_found', 'Không tìm thấy bản ghi phân tích');

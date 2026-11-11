@@ -772,16 +772,12 @@ const versionHistory = ref([])
  * TAB 9 (MỚI): PHÒNG THỬ DNA — sandbox pipeline nhiều bước + tone calibration
  * ------------------------------------------------------------------- */
 const briefForm = ref({})
-const usesPromptV3 = computed(() => store.options.prompt_version === 3)
+const suggestingBrief = ref(false) // đang gọi AI sinh brief (nút ✨ ô chủ đề)
 
 const sandboxForm = reactive({
   topic: '',
   targetTier: 'medium',
 })
-
-const sandboxGeneratedText = ref('')
-const sandboxSnapshotPrompt = ref('')
-const sandboxHasRan = ref(false)
 
 /** Danh sách các bản viết thử (gồm cả bản đang chạy theo từng bước & bản đã hoàn thành lưu DB) */
 const savedSandboxSamples = ref([])
@@ -993,21 +989,6 @@ function normalizeSandboxSample(raw) {
  */
 const sandboxPanels = ref(null)
 
-/* Chỉ render văn bản THẬT sandbox sinh — KHÔNG có fallback mẫu. */
-const activeSandboxSample = computed(() => sandboxGeneratedText.value)
-
-/* Preset hiệu chỉnh tone — giống trang create; khi chọn preset đẩy các
- * slider tương ứng lên cao rồi gửi tone_overrides xuống Sandbox. */
-const TONE_PRESETS = [
-  { title: 'DNA Gốc', value: 'default' },
-  { title: 'Hóm hỉnh & Gần gũi', value: 'humorous' },
-  { title: 'Đồng cảm & Trân trọng', value: 'empathy' },
-  { title: 'Sắc sảo & Quyết đoán', value: 'assertive' },
-  { title: 'Truyền lửa & Thôi thúc', value: 'inspiring' },
-]
-
-const activeTonePreset = ref('default')
-
 /* 8 trục sắc thái cảm xúc — baseline 50 (điểm cân bằng) để render diff.
  * (Trên create baseline khác nhau theo profile; ở edit dùng chuẩn 50 đơn giản.) */
 const toneSliders = reactive([
@@ -1023,88 +1004,6 @@ const toneSliders = reactive([
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Áp dụng preset cảm xúc, đồng bộ lựa chọn, slider và chỉ dẫn Ô 3
- * =====================================================================
- *
- * INPUT:
- * - presetKey
- *
- * OUTPUT:
- * - void
- *
- * SIDE EFFECT:
- * - Tính lại từ presets options; một số preset phổ biến ghi đè mức slider cố định, default trả baseline.
- *
- * EXCEPTION:
- * - Không gọi API; chưa lưu profile.
- * =====================================================================
- */
-function applyTonePreset(presetKey) {
-  activeTonePreset.value = presetKey
-  selectedToneOptionIds.value = presetKey === 'default' ? [] : [presetKey]
-  recalculateToneFromSelect()
-  if (presetKey === 'default') {
-    toneSliders.forEach(t => { t.value = t.baseline })
-    snack.text = 'Đã khôi phục phổ cảm xúc về mặc định'
-  } else if (presetKey === 'humorous') {
-    toneSliders.forEach(t => {
-      if (t.key === 'humor') t.value = 80
-      else if (t.key === 'formality') t.value = 35
-      else if (t.key === 'empathy') t.value = 70
-      else t.value = t.baseline
-    })
-    snack.text = 'Đã áp dụng preset: Hóm hỉnh & Gần gũi'
-  } else if (presetKey === 'empathy') {
-    toneSliders.forEach(t => {
-      if (t.key === 'empathy') t.value = 90
-      else if (t.key === 'candor') t.value = 80
-      else if (t.key === 'formality') t.value = 45
-      else t.value = t.baseline
-    })
-    snack.text = 'Đã áp dụng preset: Đồng cảm & Trân trọng'
-  } else if (presetKey === 'assertive') {
-    toneSliders.forEach(t => {
-      if (t.key === 'assertiveness') t.value = 90
-      else if (t.key === 'depth') t.value = 90
-      else if (t.key === 'urgency') t.value = 70
-      else t.value = t.baseline
-    })
-    snack.text = 'Đã áp dụng preset: Sắc sảo & Quyết đoán'
-  } else if (presetKey === 'inspiring') {
-    toneSliders.forEach(t => {
-      if (t.key === 'inspiration') t.value = 90
-      else if (t.key === 'urgency') t.value = 75
-      else if (t.key === 'humor') t.value = 60
-      else t.value = t.baseline
-    })
-    snack.text = 'Đã áp dụng preset: Truyền lửa & Thôi thúc'
-  }
-  snack.color = 'primary'
-  snack.show = true
-}
-
-/**
- * =====================================================================
- * CHỨC NĂNG: Chọn preset default để trả cảm xúc về baseline
- * =====================================================================
- *
- * INPUT:
- * - ) { applyTonePreset('default'
- *
- * OUTPUT:
- * - void
- *
- * SIDE EFFECT:
- * - Gọi applyTonePreset và cập nhật snackbar.
- *
- * EXCEPTION:
- * - Không gọi API.
- * =====================================================================
- */
-function resetToneToBaseline() { applyTonePreset('default') }
-
-/**
- * =====================================================================
  * CHỨC NĂNG: Đóng gói form sandbox thành brief V3 theo chủ đề
  * =====================================================================
  *
@@ -1112,18 +1011,16 @@ function resetToneToBaseline() { applyTonePreset('default') }
  * - topic
  *
  * OUTPUT:
- * - Object brief hoặc null khi đang dùng V2
+ * - Object brief chuẩn V3
  *
  * SIDE EFFECT:
- * - Đọc form và phiên bản từ store.
+ * - Đọc dữ liệu từ briefForm.
  *
  * EXCEPTION:
  * - Validation nghiệp vụ do backend xử lý.
  * =====================================================================
  */
 function buildSandboxBrief(topic) {
-  if (!usesPromptV3.value) return null
-
   const form = briefForm.value
   const lines = text => String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
 
@@ -1143,6 +1040,83 @@ function buildSandboxBrief(topic) {
       ...(form.bullets == null ? {} : { bullets: form.bullets }),
     },
     constraints: lines(form.constraints),
+  }
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Gọi AI sinh gợi ý Brief từ chủ đề rồi đổ vào form (ghi đè)
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số; đọc sandboxForm.topic + profile + store.
+ *
+ * OUTPUT:
+ * - Promise<void>; cập nhật briefForm và snackbar.
+ *
+ * SIDE EFFECT:
+ * - Gọi POST /sandbox/brief qua store; briefForm được thay thế toàn bộ.
+ *   requiredDetails/length giữ nguyên của user — backend không sinh chúng
+ *   (đây là ý định người dùng, AI đoán dễ khiến writer lỗi missing_fields).
+ *
+ * EXCEPTION:
+ * - Snack warning khi chủ đề trống; snack error từ firstErrorMessage(e).
+ *   Regenerate khi bấm lại — brief cũ bị ghi đè hoàn toàn.
+ * =====================================================================
+ */
+async function generateBriefWithAI() {
+  const topic = sandboxForm.topic.trim()
+  if (!topic) {
+    snack.text = 'Vui lòng nhập chủ đề trước khi AI sinh gợi ý'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+  if (!profile.value?.id) {
+    snack.text = 'Chưa tải được hồ sơ — hãy đợi nạp xong'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  suggestingBrief.value = true
+  try {
+    const data = await store.suggestBrief(profile.value.id, {
+      topic,
+      target_tier: sandboxForm.targetTier || profile.value.dominant_tier || 'medium',
+    })
+
+    briefForm.value = {
+      contentType: data.content_type || null,
+      platform: data.platform || '',
+      audience: data.audience || '',
+      objective: data.objective || '',
+      facts: (data.provided_facts || []).map(f => f.text).join('\n'),
+      requiredDetails: briefForm.value.requiredDetails || '',
+      offer: data.offer || '',
+      cta: data.cta || '',
+      headings: data.format?.headings ?? null,
+      bullets: data.format?.bullets ?? null,
+      lengthUnit: briefForm.value.lengthUnit || null,
+      lengthMin: briefForm.value.lengthMin || null,
+      lengthMax: briefForm.value.lengthMax || null,
+      constraints: (data.constraints || []).join('\n'),
+    }
+
+    const factCount = (data.provided_facts || []).length
+    snack.text = factCount > 0
+      ? `Đã sinh gợi ý brief với ${factCount} dữ kiện — kiểm tra lại trước khi chạy`
+      : 'Đã sinh gợi ý brief — kiểm tra lại trước khi chạy'
+    snack.color = 'success'
+    snack.show = true
+  } catch (e) {
+    snack.text = firstErrorMessage(e)
+    snack.color = 'error'
+    snack.show = true
+  } finally {
+    suggestingBrief.value = false
   }
 }
 
@@ -1174,24 +1148,15 @@ function buildCurrentSandboxOverrides() {
     tone_instructions: advancedConfig.tonePrompt?.trim() || null,
   }
 
-  if (usesPromptV3.value) {
-    const changedAxes = (sliders, stored) => Object.fromEntries(
-      sliders.filter(s => (s.value ?? null) !== (stored?.[s.key] ?? null))
-        .map(s => [s.key, s.value ?? null]),
-    )
-
-    return {
-      ...Object.fromEntries(Object.entries(instructions).filter(([key, value]) => value !== (current[key]?.trim() || null))),
-      voice_texture_sliders_json: changedAxes(voiceTextureSliders, current.voice_texture_sliders_json),
-      tone_overrides: changedAxes(toneSliders, current.tone_sliders_json),
-      temperature: Number(advancedConfig.temperature),
-    }
-  }
+  const changedAxes = (sliders, stored) => Object.fromEntries(
+    sliders.filter(s => (s.value ?? null) !== (stored?.[s.key] ?? null))
+      .map(s => [s.key, s.value ?? null]),
+  )
 
   return {
-    ...instructions,
-    voice_texture_sliders_json: Object.fromEntries(voiceTextureSliders.map(s => [s.key, s.value ?? null])),
-    tone_overrides: Object.fromEntries(toneSliders.map(s => [s.key, s.value ?? null])),
+    ...Object.fromEntries(Object.entries(instructions).filter(([key, value]) => value !== (current[key]?.trim() || null))),
+    voice_texture_sliders_json: changedAxes(voiceTextureSliders, current.voice_texture_sliders_json),
+    tone_overrides: changedAxes(toneSliders, current.tone_sliders_json),
     temperature: Number(advancedConfig.temperature),
   }
 }
@@ -1274,7 +1239,9 @@ async function runSandboxDemo() {
         [firstStep.step]: artifact,
       },
       text: isTerminal ? (artifact.text || '') : '',
-      system_prompt: isTerminal ? (artifact.snapshot?.system_prompt || '') : '',
+      // artifact.snapshot?.system_prompt (writer) | artifact.system_prompt (planner) —
+      // cả 2 step đều trả snapshot.system_prompt để bản thử bước dàn ý cũng thấy Ô 3.
+      system_prompt: artifact.system_prompt || artifact.snapshot?.system_prompt || '',
       saved_to_db: false,
       created_at: new Date().toISOString(),
     })
@@ -1284,10 +1251,6 @@ async function runSandboxDemo() {
     expandedSampleSteps[newSample.id] = true
 
     if (isTerminal) {
-      sandboxGeneratedText.value = newSample.text
-      sandboxSnapshotPrompt.value = newSample.system_prompt
-      sandboxHasRan.value = true
-
       await persistSampleToDb(newSample, true)
 
       snack.text = `Đã hoàn thành bài viết thử nghiệm ở cấp độ "${targetTier.toUpperCase()}"`
@@ -1365,11 +1328,8 @@ async function runNextSandboxStep(sample) {
     if (isLastStep) {
       sample.status = 'completed'
       sample.text = artifact.text || ''
-      sample.system_prompt = artifact.snapshot?.system_prompt || ''
-
-      sandboxGeneratedText.value = sample.text
-      sandboxSnapshotPrompt.value = sample.system_prompt
-      sandboxHasRan.value = true
+      // artifact.snapshot?.system_prompt (writer) | artifact.system_prompt (planner/intermediate).
+      sample.system_prompt = artifact.system_prompt || artifact.snapshot?.system_prompt || ''
 
       // Lưu bản hoàn thành vào DB
       await persistSampleToDb(sample, true)
@@ -1433,66 +1393,6 @@ async function refreshSandboxOutline(sample) {
   } finally {
     runningSampleStepId.value = null
   }
-}
-
-/**
- * =====================================================================
- * CHỨC NĂNG: Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh
- * =====================================================================
- *
- * Chi tiết triển khai:
- *
- * INPUT:
- * - sample
- *
- * OUTPUT:
- * - void
- *
- * SIDE EFFECT:
- * - Mutate outline của sample hiện tại.
- *
- * EXCEPTION:
- * - Bỏ qua khi sample chưa có artifact.
- * =====================================================================
- */
-function addOutlineSection(sample) {
-  const outlineArtifact = sample?.artifacts?.topic_outline
-  if (!outlineArtifact) return
-  if (!Array.isArray(outlineArtifact.outline)) {
-    outlineArtifact.outline = []
-  }
-  outlineArtifact.outline.push({
-    tag: 'H2',
-    title: 'Tiêu đề luận điểm mới',
-    key_points: ['Ý chính triển khai'],
-    suggested_evidence: '',
-  })
-}
-
-/**
- * =====================================================================
- * CHỨC NĂNG: Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục
- * =====================================================================
- *
- * Chi tiết triển khai:
- *
- * INPUT:
- * - sample, idx
- *
- * OUTPUT:
- * - void
- *
- * SIDE EFFECT:
- * - Mutate outline của sample hiện tại.
- *
- * EXCEPTION:
- * - Bỏ qua dữ liệu chưa có hoặc chỉ còn một mục.
- * =====================================================================
- */
-function removeOutlineSection(sample, idx) {
-  const outline = sample?.artifacts?.topic_outline?.outline
-  if (!Array.isArray(outline) || outline.length <= 1) return
-  outline.splice(idx, 1)
 }
 
 /**
@@ -4070,7 +3970,13 @@ onBeforeUnmount(() => {
                     placeholder="vd: ly cà phê sớm thơm bên bàn làm việc"
                     persistent-placeholder
                     class="mb-4"
+                    append-inner-icon="tabler-sparkles"
+                    :loading="suggestingBrief || store.suggestingBrief"
+                    :disabled="suggestingBrief || store.suggestingBrief"
+                    hint="Bấm biểu tượng ✨ để AI suy luận Brief từ chủ đề"
+                    persistent-hint
                     @keyup.enter="runSandboxDemo"
+                    @click:append-inner="generateBriefWithAI"
                   />
 
                   <AppSelect
@@ -4080,7 +3986,7 @@ onBeforeUnmount(() => {
                     class="mb-4"
                   />
 
-                  <SandboxWritingBrief v-if="usesPromptV3" v-model="briefForm" />
+                  <SandboxWritingBrief v-model="briefForm" />
 
                   <!-- Hiển thị sơ đồ quy trình các bước của Tier đang chọn (đọc từ config) -->
                   <div class="tonal-panel pa-3 rounded mb-4">
@@ -4454,10 +4360,10 @@ onBeforeUnmount(() => {
                           variant="text"
                           color="secondary"
                           prepend-icon="tabler-refresh"
-                          :disabled="activeTonePreset === 'default' && !hasModifiedToneSliders"
-                          @click.stop="resetToneToBaseline"
+                          :disabled="!hasModifiedToneSliders && selectedToneOptionIds.length === 0"
+                          @click.stop="resetToneSliders"
                         >
-                          Khôi phục
+                          Khôi phục gốc
                         </VBtn>
                       </div>
                     </div>
@@ -4465,26 +4371,46 @@ onBeforeUnmount(() => {
 
                   <VExpansionPanelText>
                     <div class="text-caption text-medium-emphasis mb-3 px-2">
-                      Gạt slider hoặc chọn preset — phản ánh <strong>NGAY</strong> vào prompt khi viết thử:
+                      Gạt slider hoặc chọn gợi ý sắc thái — phản ánh <strong>NGAY</strong> vào prompt khi viết thử:
                     </div>
 
-                    <!-- Preset nhanh -->
+                    <!-- Mẫu sắc thái / phối âm cảm xúc gợi ý (đồng bộ với Tab 7 & presets.json) -->
                     <div class="mb-4 px-2">
-                      <div class="text-caption text-medium-emphasis mb-2 font-weight-medium">
-                        Mẫu phối âm nhanh (Preset)
-                      </div>
-                      <div class="d-flex flex-wrap gap-1">
-                        <VBtn
-                          v-for="preset in TONE_PRESETS"
-                          :key="preset.value"
-                          size="x-small"
-                          :variant="activeTonePreset === preset.value ? 'flat' : 'tonal'"
-                          :color="activeTonePreset === preset.value ? 'primary' : 'secondary'"
-                          @click="applyTonePreset(preset.value)"
-                        >
-                          {{ preset.title }}
-                        </VBtn>
-                      </div>
+                      <AppSelect
+                        v-model="selectedToneOptionIds"
+                        :items="toneStyleSelectItems"
+                        item-title="title"
+                        item-value="value"
+                        label="Chọn sắc thái / phối âm gợi ý"
+                        placeholder="Nhấn để chọn sắc thái cảm xúc..."
+                        multiple
+                        chips
+                        closable-chips
+                        clearable
+                        @update:model-value="recalculateToneFromSelect"
+                      >
+                        <template #item="{ props, item }">
+                          <VListItem
+                            v-bind="props"
+                            :title="undefined"
+                          >
+                            <template #prepend>
+                              <VIcon
+                                :icon="item.raw.icon"
+                                :color="item.raw.color"
+                                size="18"
+                                class="me-2"
+                              />
+                            </template>
+                            <VListItemTitle class="text-body-2 font-weight-medium">
+                              {{ item.raw.title }}
+                            </VListItemTitle>
+                            <VListItemSubtitle class="text-caption text-medium-emphasis">
+                              {{ item.raw.attributeLabel }} — {{ item.raw.desc }}
+                            </VListItemSubtitle>
+                          </VListItem>
+                        </template>
+                      </AppSelect>
                     </div>
 
                     <!-- 8 slider sắc thái -->

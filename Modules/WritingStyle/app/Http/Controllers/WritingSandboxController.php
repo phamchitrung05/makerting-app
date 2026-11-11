@@ -10,8 +10,10 @@ use Modules\Core\Http\Responses\BaseResponse;
 use Modules\WritingStyle\DTOs\WritingBrief;
 use Modules\WritingStyle\Http\Requests\RunSandboxStepRequest;
 use Modules\WritingStyle\Http\Requests\SandboxRequest;
+use Modules\WritingStyle\Http\Requests\SuggestBriefRequest;
 use Modules\WritingStyle\Models\WritingProfile;
 use Modules\WritingStyle\Pipelines\SandboxPipelineRunner;
+use Modules\WritingStyle\Services\WritingBriefSuggestService;
 use Modules\WritingStyle\Services\WritingStyleSandboxService;
 
 /**
@@ -61,6 +63,7 @@ class WritingSandboxController extends Controller
     public function __construct(
         protected readonly WritingStyleSandboxService $sandbox,
         protected readonly SandboxPipelineRunner $pipelineRunner,
+        protected readonly WritingBriefSuggestService $briefSuggest,
     ) {}
 
     /**
@@ -133,6 +136,44 @@ class WritingSandboxController extends Controller
      * - Lỗi topology, dàn ý cũ/chưa duyệt, brief hoặc AI truyền lên. Không mở transaction.
      * =====================================================================
      */
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Sinh gợi ý brief cho Phòng thử DNA từ chủ đề
+     * =====================================================================
+     *
+     * POST /writing-profiles/{profile}/sandbox/brief
+     *
+     * INPUT:
+     * - SuggestBriefRequest $request, WritingProfile $writingProfile
+     *
+     * OUTPUT:
+     * - BaseResponse chứa brief đã chuẩn hóa (camelCase khớp WritingBrief)
+     *
+     * SIDE EFFECT:
+     * - Tăng giới hạn thực thi PHP; gọi AI qua service. Quyền writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException (topic rỗng/dài, AI trả sai enum) truyền lên.
+     *   InvalidPipelineException (AI trả rỗng/bị cắt) truyền lên.
+     *   Không mở transaction hoặc ghi profile.
+     * =====================================================================
+     */
+    public function suggestBrief(SuggestBriefRequest $request, WritingProfile $writingProfile)
+    {
+        @set_time_limit(120);
+
+        $data = $request->validated();
+
+        $brief = $this->briefSuggest->suggest(
+            $writingProfile,
+            $data['topic'],
+            $data['target_tier'] ?? $writingProfile->dominant_tier ?? 'medium',
+            (int) ($data['target_sentences'] ?? 0),
+        );
+
+        return BaseResponse::success($brief, 'Đã sinh gợi ý brief bằng AI');
+    }
+
     public function runStep(RunSandboxStepRequest $request, WritingProfile $writingProfile, string $step)
     {
         @set_time_limit(180);

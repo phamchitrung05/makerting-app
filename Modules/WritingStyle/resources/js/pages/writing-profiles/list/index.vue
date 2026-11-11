@@ -498,17 +498,23 @@ function toCardProps(p) {
   const statusKey = p.is_enabled ? p.status : 'archived'
   const status = STATUS_META[statusKey] ?? STATUS_META.draft
 
-  // Tags từ analysis_metadata.taxonomy_suggestion, fallback tier+origin.
-  let tags = []
-  const sug = p.analysis_metadata_json?.taxonomy_suggestion
-  if (Array.isArray(sug) && sug.length) {
-    tags = sug.slice(0, 3).map(t => ({ text: t, color: 'primary' }))
-  } else {
-    tags = [
-      { text: p.dominant_tier ?? 'medium', color: 'info' },
-      { text: p.origin === 'reference' ? 'Giải mã' : 'Thủ công', color: p.origin === 'reference' ? 'info' : 'secondary' },
-    ]
-  }
+  // Tags từ categories + tags thực tế của hồ sơ; fallback tier + origin khi chưa gán.
+  const categoryTags = Array.isArray(p.categories)
+    ? p.categories.map(c => ({ text: c.name, color: 'primary' }))
+    : []
+
+  const labelTags = Array.isArray(p.tags)
+    ? p.tags.map(t => ({ text: t.name, color: 'secondary' }))
+    : []
+
+  const combinedTaxonomy = [...categoryTags, ...labelTags].slice(0, 4)
+
+  const tags = combinedTaxonomy.length
+    ? combinedTaxonomy
+    : [
+        { text: p.dominant_tier ?? 'medium', color: 'info' },
+        { text: p.origin === 'reference' ? 'Giải mã' : 'Thủ công', color: p.origin === 'reference' ? 'info' : 'secondary' },
+      ]
 
   return {
     id: p.id,

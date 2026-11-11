@@ -124,7 +124,6 @@ function plainTextToEditorHtml(rawText) {
 
 /* Tham chiếu dữ liệu Bước 1 (topic_outline) phục vụ hiển thị và chỉnh sửa trước khi qua bước sau */
 const topicOutlineArtifact = computed(() => props.sample?.artifacts?.topic_outline ?? null)
-const isV3Outline = computed(() => topicOutlineArtifact.value?.schema_version === 3)
 const qualityWarnings = computed(() => props.sample?.artifacts?.article_writer?.quality_report?.warnings ?? [])
 
 /* Danh sách các bước thực thi của bản ghi hiện tại (tối thiểu 1 bước) */
@@ -301,20 +300,20 @@ watch(
   { immediate: true },
 )
 
-/* Thêm 1 mục H2/H3 mới vào dàn ý của Bước 1 (`topic_outline`) */
+/* Thêm 1 mục mới vào dàn ý V3 của Bước 1 (`topic_outline.sections`) */
 /**
  * =====================================================================
- * CHỨC NĂNG: Thêm một mục khung H2/H3 vào artifact V2 đang chỉnh
+ * CHỨC NĂNG: Thêm một mục mới vào danh sách sections của dàn ý V3
  * =====================================================================
  *
  * INPUT:
- * - Không có tham số; đọc props, form hoặc store hiện tại.
+ * - Không có tham số; đọc props.sample hiện tại.
  *
  * OUTPUT:
  * - void
  *
  * SIDE EFFECT:
- * - Mutate outline của sample hiện tại.
+ * - Mutate sections của sample hiện tại.
  *
  * EXCEPTION:
  * - Bỏ qua khi sample chưa có artifact.
@@ -323,21 +322,26 @@ watch(
 function addOutlineSection() {
   const outlineArtifact = props.sample?.artifacts?.topic_outline
   if (!outlineArtifact) return
-  if (!Array.isArray(outlineArtifact.outline)) {
-    outlineArtifact.outline = []
+  if (!Array.isArray(outlineArtifact.sections)) {
+    outlineArtifact.sections = []
   }
-  outlineArtifact.outline.push({
-    tag: 'H2',
+  const nextIndex = outlineArtifact.sections.length + 1
+  outlineArtifact.sections.push({
+    id: `sec_${nextIndex}_${Date.now().toString(36)}`,
+    parent_id: null,
+    role: 'body',
+    heading_level: 2,
     title: 'Tiêu đề luận điểm mới',
     key_points: ['Ý chính triển khai'],
-    suggested_evidence: '',
+    fact_ids: [],
+    length_budget: 100,
   })
 }
 
-/* Xóa 1 mục khỏi dàn ý của Bước 1 (`topic_outline`) */
+/* Xóa 1 mục khỏi dàn ý V3 của Bước 1 (`topic_outline.sections`) */
 /**
  * =====================================================================
- * CHỨC NĂNG: Xóa mục khỏi dàn ý đang chỉnh khi còn hơn một mục
+ * CHỨC NĂNG: Xóa mục khỏi dàn ý V3 đang chỉnh khi còn hơn một mục
  * =====================================================================
  *
  * INPUT:
@@ -347,16 +351,16 @@ function addOutlineSection() {
  * - void
  *
  * SIDE EFFECT:
- * - Mutate outline của sample hiện tại.
+ * - Mutate sections của sample hiện tại.
  *
  * EXCEPTION:
  * - Bỏ qua dữ liệu chưa có hoặc chỉ còn một mục.
  * =====================================================================
  */
 function removeOutlineSection(idx) {
-  const outline = props.sample?.artifacts?.topic_outline?.outline
-  if (!Array.isArray(outline) || outline.length <= 1) return
-  outline.splice(idx, 1)
+  const sections = props.sample?.artifacts?.topic_outline?.sections
+  if (!Array.isArray(sections) || sections.length <= 1) return
+  sections.splice(idx, 1)
 }
 
 /* Đóng dialog nếu không đang chạy step AI */
@@ -624,8 +628,8 @@ function resetAfterLeave() {
                 <!-- ==================== TRƯỜNG HỢP 1: STEP PHÂN TÍCH TRUNG GIAN (!st.is_terminal) ==================== -->
                 <template v-if="!st.is_terminal">
                   <div v-if="sample.artifacts && sample.artifacts[st.step]">
-                    <!-- Giao diện cho Step: Phân tích Chủ đề & Lập Dàn ý (topic_outline) -->
-                    <template v-if="st.step === 'topic_outline' && isV3Outline">
+                    <!-- Giao diện cho Step: Phân tích Chủ đề & Lập Dàn ý V3 (topic_outline) -->
+                    <template v-if="st.step === 'topic_outline' && topicOutlineArtifact">
                       <AppTextarea
                         v-model="topicOutlineArtifact.central_message"
                         label="Thông điệp chính"
@@ -640,71 +644,11 @@ function resetAfterLeave() {
                         rows="2"
                         class="mb-3"
                       />
-                      <div
-                        v-for="section in topicOutlineArtifact.sections"
-                        :key="section.id"
-                        class="pa-3 mb-3 rounded border"
-                      >
-                        <div class="text-caption mb-2">
-                          {{ section.heading_level ? `H${section.heading_level}` : section.role }}
-                          · {{ section.length_budget }} {{ sample.brief?.length?.unit === 'sentences' ? 'câu' : 'từ' }}
-                        </div>
-                        <AppTextField
-                          v-model="section.title"
-                          label="Nội dung mục"
-                          :readonly="sample.status === 'completed'"
-                        />
-                        <ul class="ps-5 mt-2">
-                          <li v-for="(point, index) in section.key_points" :key="index">
-                            {{ point }}
-                          </li>
-                        </ul>
-                      </div>
-                      <VAlert
-                        v-if="topicOutlineArtifact.evidence_requests.length || topicOutlineArtifact.missing_fields.length || topicOutlineArtifact.warnings.length"
-                        type="info"
-                        variant="tonal"
-                        title="Thông tin cần bổ sung hoặc kiểm tra"
-                      >
-                        <div v-for="(item, index) in [...topicOutlineArtifact.evidence_requests, ...topicOutlineArtifact.missing_fields, ...topicOutlineArtifact.warnings]" :key="index">
-                          {{ item }}
-                        </div>
-                      </VAlert>
-                    </template>
-                    <template v-else-if="st.step === 'topic_outline' && topicOutlineArtifact">
-                      <VRow class="mb-4">
-                        <VCol
-                          cols="12"
-                          md="6"
-                        >
-                          <AppTextarea
-                            v-model="topicOutlineArtifact.thesis"
-                            label="Luận điểm cốt lõi (Thesis)"
-                            placeholder="Nhập luận điểm xuyên suốt bài viết..."
-                            :readonly="sample.status === 'completed'"
-                            rows="3"
-                          />
-                        </VCol>
 
-                        <VCol
-                          cols="12"
-                          md="6"
-                        >
-                          <AppTextarea
-                            v-model="topicOutlineArtifact.target_angle"
-                            label="Góc tiếp cận độc giả (Target Angle)"
-                            placeholder="Nhập góc nhìn triển khai chủ đề..."
-                            :readonly="sample.status === 'completed'"
-                            rows="3"
-                          />
-                        </VCol>
-                      </VRow>
-
-                      <!-- Danh sách Cây dàn ý H2 / H3 AI trả về -->
                       <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
                         <div class="d-flex align-center gap-2">
                           <span class="text-subtitle-1 font-weight-medium text-high-emphasis">
-                            Nội dung Dàn ý chi tiết (H2 / H3)
+                            Nội dung Dàn ý chi tiết
                           </span>
                           <VChip
                             size="small"
@@ -712,7 +656,7 @@ function resetAfterLeave() {
                             variant="tonal"
                             label
                           >
-                            {{ topicOutlineArtifact.outline?.length || 0 }} mục
+                            {{ topicOutlineArtifact.sections?.length || 0 }} mục
                           </VChip>
                         </div>
 
@@ -728,77 +672,46 @@ function resetAfterLeave() {
                         </VBtn>
                       </div>
 
-                      <div class="d-flex flex-column gap-3">
-                        <div
-                          v-for="(sec, oIdx) in (topicOutlineArtifact.outline || [])"
-                          :key="`outline-sec-${oIdx}`"
-                          class="pa-4 rounded border bg-var-theme-background"
-                        >
-                          <div class="d-flex align-center justify-space-between gap-2 mb-2">
-                            <div class="d-flex align-center gap-2 flex-grow-1">
-                              <VChip
-                                size="small"
-                                :color="sec.tag === 'H3' ? 'secondary' : 'primary'"
-                                variant="flat"
-                                label
-                                class="flex-shrink-0"
-                              >
-                                {{ sec.tag || 'H2' }}
-                              </VChip>
-
-                              <span
-                                v-if="sample.status === 'completed'"
-                                class="text-body-1 font-weight-medium text-high-emphasis"
-                              >
-                                {{ sec.title }}
-                              </span>
-                              <div
-                                v-else
-                                class="flex-grow-1"
-                              >
-                                <AppTextField
-                                  v-model="sec.title"
-                                  placeholder="Nhập tiêu đề mục dàn ý..."
-                                />
-                              </div>
-                            </div>
-
-                            <VBtn
-                              v-if="sample.status !== 'completed' && (topicOutlineArtifact.outline?.length || 0) > 1"
-                              icon="tabler-trash"
-                              size="small"
-                              variant="text"
-                              color="error"
-                              @click="removeOutlineSection(oIdx)"
-                            />
+                      <div
+                        v-for="(section, secIdx) in (topicOutlineArtifact.sections || [])"
+                        :key="section.id || secIdx"
+                        class="pa-3 mb-3 rounded border"
+                      >
+                        <div class="d-flex align-center justify-space-between gap-2 mb-2">
+                          <div class="text-caption">
+                            {{ section.heading_level ? `H${section.heading_level}` : section.role }}
+                            · {{ section.length_budget }} {{ sample.brief?.length?.unit === 'sentences' ? 'câu' : 'từ' }}
                           </div>
-
-                          <!-- Các ý triển khai chính (key_points) -->
-                          <div
-                            v-if="Array.isArray(sec.key_points) && sec.key_points.length"
-                            class="ps-2 mt-2"
-                          >
-                            <div class="text-caption text-medium-emphasis mb-1">
-                              Các ý triển khai chính:
-                            </div>
-                            <div
-                              v-for="(point, pIdx) in sec.key_points"
-                              :key="pIdx"
-                              class="text-body-2 text-high-emphasis mb-1"
-                            >
-                              • {{ point }}
-                            </div>
-                          </div>
-
-                          <!-- Dẫn chứng gợi ý (suggested_evidence) -->
-                          <div
-                            v-if="sec.suggested_evidence"
-                            class="text-caption text-info ps-2 mt-2 pt-2 border-t"
-                          >
-                            Dẫn chứng / Chi tiết gợi ý: {{ sec.suggested_evidence }}
-                          </div>
+                          <VBtn
+                            v-if="sample.status !== 'completed' && (topicOutlineArtifact.sections?.length || 0) > 1"
+                            icon="tabler-trash"
+                            size="x-small"
+                            variant="text"
+                            color="error"
+                            @click="removeOutlineSection(secIdx)"
+                          />
                         </div>
+                        <AppTextField
+                          v-model="section.title"
+                          label="Nội dung mục"
+                          :readonly="sample.status === 'completed'"
+                        />
+                        <ul class="ps-5 mt-2">
+                          <li v-for="(point, index) in section.key_points" :key="index">
+                            {{ point }}
+                          </li>
+                        </ul>
                       </div>
+                      <VAlert
+                        v-if="topicOutlineArtifact.evidence_requests?.length || topicOutlineArtifact.missing_fields?.length || topicOutlineArtifact.warnings?.length"
+                        type="info"
+                        variant="tonal"
+                        title="Thông tin cần bổ sung hoặc kiểm tra"
+                      >
+                        <div v-for="(item, index) in [...(topicOutlineArtifact.evidence_requests || []), ...(topicOutlineArtifact.missing_fields || []), ...(topicOutlineArtifact.warnings || [])]" :key="index">
+                          {{ item }}
+                        </div>
+                      </VAlert>
                     </template>
 
                     <!-- Fallback cho các Step phân tích khác được cấu hình thêm trong config -->

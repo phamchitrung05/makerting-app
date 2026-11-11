@@ -219,29 +219,6 @@ export const writingStyleApi = {
 
   /**
    * =====================================================================
-   * CHỨC NĂNG: Chạy thử nghiệm viết bài mới (Sandbox) theo DNA hồ sơ
-   * =====================================================================
-   *
-   * INPUT:
-   * - id (number|string): ID hồ sơ văn phong cần viết thử
-   * - payload (Object): { topic: string, target_tier: string, target_sentences?: number }
-   *
-   * OUTPUT:
-   * - Promise<Object>: { text: string, target_tier: string, snapshot: Object, ai_run_id: string }
-   *
-   * SIDE EFFECT:
-   * - Gửi request POST /v1/admin/writing-style/writing-profiles/{id}/sandbox
-   *
-   * EXCEPTION:
-   * - ApiError khi AI gateway gặp lỗi hoặc hồ sơ không tồn tại
-   * =====================================================================
-   */
-  sandbox(id, payload) {
-    return $api(`${BASE}/writing-profiles/${id}/sandbox`, { method: 'POST', body: payload })
-  },
-
-  /**
-   * =====================================================================
    * CHỨC NĂNG: Chạy 1 bước (step) trong quy trình Sandbox Pipeline theo tier
    * =====================================================================
    *
@@ -274,6 +251,29 @@ export const writingStyleApi = {
    */
   runSandboxStep(id, step, payload) {
     return $api(`${BASE}/writing-profiles/${id}/sandbox/steps/${step}`, { method: 'POST', body: payload })
+  },
+
+  /**
+   * =====================================================================
+   * CHỨC NĂNG: Gọi AI sinh gợi ý Brief cho Phòng thử DNA từ chủ đề
+   * =====================================================================
+   *
+   * INPUT:
+   * - id (number|string): ID hồ sơ văn phong
+   * - payload (Object): { topic, target_tier?, target_sentences? }
+   *
+   * OUTPUT:
+   * - Promise<Object>: brief đã chuẩn hóa (camelCase khớp WritingBrief)
+   *
+   * SIDE EFFECT:
+   * - Gửi request POST /sandbox/brief — một cuộc gọi AI structured nhỏ.
+   *
+   * EXCEPTION:
+   * - ApiError khi AI lỗi, 422 khi topic rỗng hoặc AI trả sai schema.
+   * =====================================================================
+   */
+  suggestBrief(id, payload) {
+    return $api(`${BASE}/writing-profiles/${id}/sandbox/brief`, { method: 'POST', body: payload })
   },
 
   /**

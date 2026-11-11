@@ -45,6 +45,10 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/writing-style')->name('wri
     Route::post('writing-profiles/{writing_profile}/sandbox/steps/{step}', [WritingSandboxController::class, 'runStep'])
         ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox.steps.run');
 
+    // Sinh gợi ý brief bằng AI cho Phòng thử DNA (nút ✨ ở ô chủ đề).
+    Route::post('writing-profiles/{writing_profile}/sandbox/brief', [WritingSandboxController::class, 'suggestBrief'])
+        ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox.brief');
+
     // Lưu & xóa bản viết thử trong Phòng thử DNA (sandbox_samples_json).
     Route::post('writing-profiles/{writing_profile}/sandbox-samples', [WritingSandboxController::class, 'saveSample'])
         ->middleware('permission:writing.evaluate')->name('writing-profiles.sandbox-samples.store');

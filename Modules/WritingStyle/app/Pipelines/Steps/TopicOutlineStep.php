@@ -334,7 +334,7 @@ class TopicOutlineStep implements SandboxStepContract
         $system = PromptPack::role('planner', $brief->data['content_type'] ?? null);
         $prompt = PromptPack::json(['brief' => $brief->data, 'style_summary' => $snapshot->styleSummary]);
         PromptPack::checkContext($system, $prompt);
-        $options = ['temperature' => PromptPack::temperature('planner'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096)];
+        $options = ['temperature' => PromptPack::temperature('planner'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096), 'timeout' => 180];
         $response = $this->ai->executeStructured(AiStructuredRequest::fromPrompt(
             $prompt,
             system: $system,
@@ -350,6 +350,10 @@ class TopicOutlineStep implements SandboxStepContract
             ...$plan,
             'schema_version' => 3,
             'input_fingerprint' => WritingContentPlan::fingerprint($snapshot, $brief),
+            // Đưa system_prompt của snapshot DNA vào artifact để FE/DB hiển thị đầy đủ
+            // Ô 1/2/3 + sliders ngay ở bước lập dàn ý (trước đây chỉ trả provenance
+            // khiến bản thử topic_outline báo "ô 3 chưa được kèm theo").
+            'system_prompt' => $snapshot->systemPrompt,
             'ai_run_id' => $this->ai->lastRun()?->id,
             'provenance' => array_replace($snapshot->provenance, [
                 'schema_version' => 3,

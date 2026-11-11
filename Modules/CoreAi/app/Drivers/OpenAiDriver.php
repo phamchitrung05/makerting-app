@@ -149,12 +149,16 @@ class OpenAiDriver extends AbstractAiDriver
                 }
             }
 
+            // Timeout HTTP lấy từ options của request (ví dụ 180 cho analyzer
+            // dài) nếu được truyền; provider->request_timeout mặc định 120s là
+            // không đủ cho max_tokens lớn.
+            $httpTimeout = (int) ($request->options['timeout'] ?? 0);
             $data = $this->client()->requestJson(
                 $r->provider,
                 $this->url($r->provider, 'chat/completions'),
                 $payload,
                 $this->headers($r->apiKey),
-                ['keyIndex' => $r->keyIndex]
+                ['keyIndex' => $r->keyIndex, ...($httpTimeout > 0 ? ['timeout' => $httpTimeout] : [])]
             );
 
             $choice = $data['choices'][0] ?? null;

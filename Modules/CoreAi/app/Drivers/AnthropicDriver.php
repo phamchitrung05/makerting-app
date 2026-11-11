@@ -136,17 +136,20 @@ class AnthropicDriver extends AbstractAiDriver
             }
 
             foreach ($request->options as $k => $v) {
-                if (! in_array($k, ['model', 'messages', 'system', 'tools', 'tool_choice', 'max_tokens'], true)) {
+                if (! in_array($k, ['model', 'messages', 'system', 'tools', 'tool_choice', 'max_tokens', 'timeout'], true)) {
                     $payload[$k] = $v;
                 }
             }
 
+            // Timeout HTTP lấy từ options của request nếu được truyền — provider
+            // default 120s là không đủ cho analyzer với max_tokens lớn.
+            $httpTimeout = (int) ($request->options['timeout'] ?? 0);
             $data = $this->client()->requestJson(
                 $r->provider,
                 $this->url($r->provider, 'v1/messages'),
                 $payload,
                 $this->headers($r->apiKey),
-                ['keyIndex' => $r->keyIndex]
+                ['keyIndex' => $r->keyIndex, ...($httpTimeout > 0 ? ['timeout' => $httpTimeout] : [])]
             );
 
             [$text, $parsed] = $this->parseOutput($data, $toolName);

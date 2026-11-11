@@ -134,14 +134,6 @@ const STRUCTURE_RULE_KEYS = [
   'ending',
 ]
 
-/* Quy tắc lược bỏ theo từng cấp độ độ dài (khớp config/writingstyle.php) */
-const TIER_DROP_RULES = {
-  micro: ['headings', 'bullets', 'paragraph_rhythm', 'structure_patterns', 'opening', 'transitions', 'technical_terms', 'examples'],
-  short: ['headings', 'bullets', 'structure_patterns', 'technical_terms', 'examples'],
-  medium: ['headings'],
-  long: [],
-}
-
 /* ---------------------------------------------------------------------
  * CẤP ĐỘ ĐỘ DÀI (LengthTier) — nạp từ GET /writing-profiles/options.
  * ------------------------------------------------------------------- */
@@ -241,7 +233,6 @@ const detectedTierMeta = computed(() => {
 /* ---------------------------------------------------------------------
  * GIẢI MÃ DNA VĂN PHONG & BẰNG CHỨNG
  * ------------------------------------------------------------------- */
-const selectedDnaTierFilter = ref('long')
 
 /* savedProfileId: id profile ĐÃ LƯU qua nút Lưu (sống sót qua các lần
  * re-analyze — phân tích lại KHÔNG reset id này; Lưu lần sau = PUT cùng
@@ -259,11 +250,6 @@ const isAnalyzing = computed(() => store.analyzing || store.analysisPolling)
 
 const hasAnalysisResult = computed(() => !!rawRulesJson.value)
 
-/* Các khóa bị lược bỏ theo tier đang chọn */
-const droppedRuleKeys = computed(() => {
-  return styleAnalysis.value?.schema_version === 3 ? [] : (TIER_DROP_RULES[selectedDnaTierFilter.value] ?? [])
-})
-
 /* Câu hỏi giải mã từ API: key -> question */
 const ruleQuestionByKey = computed(() =>
   Object.fromEntries((store.ruleKeys ?? []).map(r => [r.key, r.question])),
@@ -272,17 +258,15 @@ const ruleQuestionByKey = computed(() =>
 /* Danh sách quy tắc thực tế đã được AI trích xuất (chỉ chứa các khóa có dữ liệu) */
 const dnaRuleExtractions = ref([])
 
-/* Chỉ hiển thị những quy tắc thực sự có trong kết quả phân tích và thuộc tier đang chọn */
+/* Hiển thị những quy tắc thực sự có trong kết quả phân tích V3 */
 const filteredDnaRules = computed(() => {
   if (!hasAnalysisResult.value) return []
 
-  return dnaRuleExtractions.value
-    .filter(rule => !droppedRuleKeys.value.includes(rule.key))
-    .map(rule => ({
-      ...rule,
-      title: ruleLabel(rule.key),
-      question: ruleQuestionByKey.value[rule.key] ?? '',
-    }))
+  return dnaRuleExtractions.value.map(rule => ({
+    ...rule,
+    title: ruleLabel(rule.key),
+    question: ruleQuestionByKey.value[rule.key] ?? '',
+  }))
 })
 
 /* Các quy tắc thuộc nhóm Cấu trúc trong số các quy tắc đã trích xuất */
@@ -317,7 +301,7 @@ const styleDnaMetrics = computed(() => [
     label: 'Quy tắc DNA trích xuất',
     value: hasAnalysisResult.value ? `${filteredDnaRules.value.length} quy tắc` : '—',
     sub: hasAnalysisResult.value
-      ? `Áp dụng cho cấp độ ${selectedDnaTierFilter.value.toUpperCase()}`
+      ? 'Trích xuất theo khung phân tích V3'
       : 'Chưa chạy phân tích',
     icon: 'tabler-dna',
     color: 'success',
@@ -572,7 +556,6 @@ function applyAnalysisResult(analysis) {
 
   const backendTier = analysis?.detected_tier || result.detected_tier || detectedTier.value
   if (backendTier) {
-    selectedDnaTierFilter.value = backendTier
     profileForm.dominantTier = backendTier
   }
 
@@ -1718,20 +1701,6 @@ onBeforeUnmount(() => {
                       />
                       Quy tắc DNA Văn phong đã trích xuất ({{ filteredDnaRules.length }} quy tắc)
                     </div>
-
-                    <!-- Bộ lọc xem theo cấp độ LengthTier -->
-                    <div class="d-flex align-center flex-wrap gap-1">
-                      <VBtn
-                        v-for="tierOpt in tierOptions"
-                        :key="tierOpt.value"
-                        size="x-small"
-                        :variant="selectedDnaTierFilter === tierOpt.value ? 'flat' : 'tonal'"
-                        :color="selectedDnaTierFilter === tierOpt.value ? 'primary' : 'secondary'"
-                        @click="selectedDnaTierFilter = tierOpt.value"
-                      >
-                        {{ tierOpt.value }}
-                      </VBtn>
-                    </div>
                   </div>
 
                   <VRow dense>
@@ -1783,7 +1752,7 @@ onBeforeUnmount(() => {
                   v-else-if="!extractedStructureRules.length"
                   class="tonal-panel pa-4 rounded text-caption text-medium-emphasis"
                 >
-                  Ở cấp độ <strong>{{ selectedDnaTierFilter.toUpperCase() }}</strong>, bài viết quá ngắn nên không áp dụng các quy tắc cấu trúc dàn ý dài.
+                  Bài viết mẫu chưa có đủ dữ liệu để xác định các quy tắc cấu trúc (mở bài, chuyển ý, tiêu đề con, danh sách hoặc kết bài).
                 </div>
 
                 <VRow

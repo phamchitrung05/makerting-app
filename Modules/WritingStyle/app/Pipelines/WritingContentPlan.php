@@ -124,7 +124,7 @@ final class WritingContentPlan
         $data = Validator::make($artifact, [
             'central_message' => ['required', 'string', 'max:800'],
             'target_angle' => ['required', 'string', 'max:800'],
-            'structure_type' => ['required', 'string', 'max:80'],
+            'structure_type' => ['required', 'string', 'max:120'],
             'sections' => ['required', 'array', 'max:12'],
             'sections.*' => ['required', 'array:id,parent_id,role,heading_level,title,key_points,fact_ids,length_budget'],
             'sections.*.id' => ['required', 'string', 'max:40', 'distinct'],
@@ -138,12 +138,21 @@ final class WritingContentPlan
             'sections.*.fact_ids.*' => ['string', 'max:40'],
             'sections.*.length_budget' => ['required', 'integer', 'between:1,2000'],
             'evidence_requests' => ['present', 'array', 'max:12'],
-            'evidence_requests.*' => ['string', 'max:300'],
             'missing_fields' => ['present', 'array', 'max:12'],
-            'missing_fields.*' => ['string', 'max:100'],
             'warnings' => ['present', 'array', 'max:12'],
-            'warnings.*' => ['string', 'max:300'],
         ])->validate();
+
+        // Các trường metadata cảnh báo (không phải nội dung writer cần) —
+        // AI có thể trả văn bản dài hơn giới hạn, nên truncate an toàn thay vì
+        // chặn toàn bộ plan (user không thể sửa metadata này bằng tay được).
+        foreach (['evidence_requests', 'missing_fields', 'warnings'] as $metaKey) {
+            $items = (array) ($data[$metaKey] ?? []);
+            Validator::make(['items' => $items], ['items.*' => ['string']])->validate();
+            $data[$metaKey] = array_map(
+                static fn ($item) => mb_substr((string) $item, 0, 500),
+                $items,
+            );
+        }
 
         $sections = array_column($data['sections'], null, 'id');
         $facts = array_column($brief->data['provided_facts'], 'id');

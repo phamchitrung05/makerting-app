@@ -52,6 +52,7 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     saving: false,
     analyzing: false,
     sandboxing: false,
+    suggestingBrief: false, // đang gọi AI sinh brief trong sandbox (nút ✨ ô chủ đề)
     lastAnalysis: null,      // {analysis_id, task_run_id} của lần analyze gần nhất
     analysisResult: null,    // WritingAnalysisResource của lần giải mã đã đọc xong
     analysisPolling: false,
@@ -60,7 +61,6 @@ export const useWritingStyleStore = defineStore('writingStyle', {
     _pollWakeup: null,       // hàm đánh thức Promise chờ khi stopPolling() được gọi
     _pollAbort: null,        // AbortController của request poll đang bay (hủy fetch giữa chừng)
     _pollDeadlineTimer: null, // setTimeout hết hạn — cắt cả request treo không trả
-    sandboxResult: null,     // SandboxResultDto gần nhất
     slugSuggesting: false,   // đang gọi API gợi ý slug (để SlugField hiện spinner)
     _slugSuggestSeq: 0,      // seq tăng dần — chỉ nhận kết quả request mới nhất
     _slugSuggestKey: null,   // key request đang bay (dedup đúng: chỉ trùng khi cùng input)
@@ -617,38 +617,6 @@ export const useWritingStyleStore = defineStore('writingStyle', {
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: Chạy thử nghiệm viết bài theo DNA văn phong (DNA Sandbox)
-     * =====================================================================
-     *
-     * INPUT:
-     * - id (number|string): ID hồ sơ văn phong
-     * - payload (Object): { topic, target_tier, target_sentences? }
-     *
-     * OUTPUT:
-     * - Promise<Object>: { text, target_tier, snapshot, ai_run_id }
-     *
-     * SIDE EFFECT:
-     * - Bật/tắt sandboxing, lưu kết quả vào sandboxResult
-     *
-     * EXCEPTION:
-     * - ApiError khi gọi AI thất bại hoặc hồ sơ chưa sẵn sàng
-     * =====================================================================
-     */
-    async sandbox(id, payload) {
-      this.sandboxing = true
-      try {
-        const res = await writingStyleApi.sandbox(id, payload)
-
-        this.sandboxResult = res
-
-        return res
-      } finally {
-        this.sandboxing = false
-      }
-    },
-
-    /**
-     * =====================================================================
      * CHỨC NĂNG: Thực thi 1 bước (step) trong quy trình Sandbox Pipeline
      * =====================================================================
      *
@@ -713,6 +681,34 @@ export const useWritingStyleStore = defineStore('writingStyle', {
      */
     async saveSandboxSample(id, payload) {
       return await writingStyleApi.saveSandboxSample(id, payload)
+    },
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Gọi AI sinh gợi ý Brief cho Phòng thử DNA từ chủ đề
+     * =====================================================================
+     *
+     * INPUT:
+     * - id (number|string): ID hồ sơ văn phong
+     * - payload (Object): { topic, target_tier?, target_sentences? }
+     *
+     * OUTPUT:
+     * - Promise<Object>: brief đã chuẩn hóa (camelCase khớp WritingBrief)
+     *
+     * SIDE EFFECT:
+     * - Bật/tắt suggestingBrief; gọi AI structured nhỏ.
+     *
+     * EXCEPTION:
+     * - ApiError truyền lên; không tự bắt lỗi để caller hiển thị snackbar.
+     * =====================================================================
+     */
+    async suggestBrief(id, payload) {
+      this.suggestingBrief = true
+      try {
+        return await writingStyleApi.suggestBrief(id, payload)
+      } finally {
+        this.suggestingBrief = false
+      }
     },
 
     /**

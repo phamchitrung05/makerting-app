@@ -225,6 +225,75 @@ class WritingPromptPackTest extends TestCase
 
     /**
      * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng structure_type mô tả dài (tới 120 ký tự) vẫn hợp lệ
+     * =====================================================================
+     *
+     * Bug: trước đây max:80 khiến planner trả mô tả kết hợp như
+     * "storytelling_ket_hop_guide_va_listicle_dia_diem" (hoặc câu mô tả dài hơn
+     * 80 ký tự) bị chặn. Giới hạn nới lên 120 để chấp nhận nhãn cấu trúc dài.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên plan hợp lệ và lỗi cho > 120 ký tự
+     * =====================================================================
+     */
+    public function test_plan_accepts_descriptive_structure_type_up_to_limit(): void
+    {
+        $brief = WritingBrief::fromInput('Đà Nẵng', 'long', ['brief' => $this->brief()]);
+
+        // structure_type dài ~95 ký tự (mô tả kết hợp) — trước fix bị max:80 chặn.
+        $plan = $this->plan();
+        $plan['structure_type'] = 'storytelling_ket_hop_guide_du_lich_va_listicle_diem_den_trai_nghiem_theo_thu_tu_tuyen_tinh';
+        $validated = WritingContentPlan::validate($plan, $brief);
+        $this->assertSame($plan['structure_type'], $validated['structure_type']);
+
+        // Vượt 120 ký tự vẫn bị chặn.
+        $plan['structure_type'] = str_repeat('x', 121);
+        $this->expectException(ValidationException::class);
+        WritingContentPlan::validate($plan, $brief);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng missing_fields/evidence_requests/warnings văn bản dài
+     * =====================================================================
+     *
+     * Bug: khi AI sinh brief rồi planner trả missing_fields dài hơn 100 ký tự
+     * → validate chặn toàn bộ plan. Các trường metadata cảnh báo này không phải
+     * nội dung writer cần, nên giờ được truncate an toàn 500 ký tự/mục thay
+     * vì ném exception.
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên plan hợp lệ và truncation
+     * =====================================================================
+     */
+    public function test_plan_truncates_long_meta_fields_instead_of_rejecting(): void
+    {
+        $brief = WritingBrief::fromInput('Đà Nẵng', 'long', ['brief' => $this->brief()]);
+        $plan = $this->plan();
+
+        // missing_fields văn bản ~200 ký tự — trước fix bị max:100 chặn.
+        $plan['missing_fields'] = [
+            'Cần thêm thông tin về lịch trình tour cụ thể, giá vé tham quan các điểm đến, chi phí ăn uống và khách sạn để viết được bài đầy đủ hơn cho người đọc.',
+        ];
+        // evidence_requests > 300 ký tự — trước fix bị max:300 chặn.
+        $plan['evidence_requests'] = [str_repeat('dẫn chứng ', 40)]; // ~400+ ký tự
+        $plan['warnings'] = [str_repeat('cảnh báo ', 50)]; // ~400+ ký tự
+
+        $validated = WritingContentPlan::validate($plan, $brief);
+
+        $this->assertSame(mb_substr($plan['missing_fields'][0], 0, 500), $validated['missing_fields'][0]);
+        $this->assertSame(mb_substr($plan['evidence_requests'][0], 0, 500), $validated['evidence_requests'][0]);
+        $this->assertSame(mb_substr($plan['warnings'][0], 0, 500), $validated['warnings'][0]);
+    }
+
+    /**
+     * =====================================================================
      * CHỨC NĂNG: Kiểm chứng planner nhận văn phong, writer nhận dàn ý và từ chối dàn ý cũ
      * =====================================================================
      *

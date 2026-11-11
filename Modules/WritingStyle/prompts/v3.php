@@ -68,9 +68,10 @@ return [
      * không tự điều khiển planner/analyzer.
      * --------------------------------------------------------------------- */
     'temperatures' => [
-        'analyzer' => 0.2,
-        'planner'  => 0.4,
-        'writer'   => 0.85,   // fallback khi profile/request không chỉ định
+        'analyzer'     => 0.2,
+        'planner'      => 0.4,
+        'writer'       => 0.85,   // fallback khi profile/request không chỉ định
+        'brief_writer' => 0.4,    // sinh gợi ý brief trong sandbox — cần gọn, nhất quán
     ],
 
     /* ---------------------------------------------------------------------
@@ -162,6 +163,7 @@ PROMPT,
         /* PLANNER — lập kế hoạch nội dung theo brief + style summary. */
         'planner' => <<<'PROMPT'
 Lập kế hoạch theo brief và phong cách được cung cấp. Chọn cấu trúc theo mục tiêu, nền tảng, định dạng và độc giả. Bài dài có thể không có H2/H3.
+structure_type trả nhãn ngắn tối đa 80 ký tự (ví dụ storytelling, listicle, problem_solution, narrative), không phải câu mô tả.
 Bố trí các chi tiết bắt buộc và CTA. Mỗi fact_ids chỉ trỏ tới ID đã có trong brief. Không tự tạo số liệu, ưu đãi, lời chứng thực hoặc sự kiện.
 Dẫn chứng còn thiếu là đề xuất cần tìm, không phải dữ kiện. Dùng heading_level null cho phần không có tiêu đề. Tổng length_budget phải nằm trong khoảng độ dài của brief.
 Chỉ trả JSON đúng schema.
@@ -172,6 +174,16 @@ PROMPT,
 Viết bài theo brief và kế hoạch đã kiểm tra, nếu có. Chỉ dùng chi tiết được cung cấp để nêu sự thật. Giữ ý nghĩa của giá, tên, điều kiện, ưu đãi và CTA.
 Sáng tạo trong cách diễn đạt, ví von và nhịp triển khai. Không biến ví dụ giả định hoặc dẫn chứng chưa xác minh thành sự kiện thật.
 Kiểm tra xưng hô, thông tin bắt buộc, CTA, định dạng và khoảng độ dài. Chỉ trả bài hoàn chỉnh.
+PROMPT,
+
+        /* BRIEF_WRITER — suy luận brief phẳng từ chủ đề cho form sandbox. */
+        'brief_writer' => <<<'PROMPT'
+Suy luận các trường brief cho bài viết từ chủ đề và hồ sơ được cung cấp.
+Chọn content_type phù hợp thể loại: sales_post cho bài bán/quảng cáo, announcement cho thông báo/tin tức ngắn, storytelling cho câu chuyện/cảm xúc, technical_article cho phân tích kỹ thuật, blog cho bài dài chia sẻ.
+Trả provided_facts chỉ chứa chi tiết có thật trong chủ đề (tên, địa danh, đặc điểm đã nêu) — không tự thêm giá, ưu đãi, số liệu hay lời chứng thực chưa có căn cứ.
+audience và objective viết ngắn gọn, cụ thể; cta phù hợp nền tảng và mục tiêu suy luận.
+Để format.headings/bullets null khi chưa chắc phù hợp; constraints chỉ gồm ràng buộc nghiệp vụ thực sự, KHÔNG khai báo khoảng độ dài hay số từ/câu.
+Chỉ trả JSON đúng schema.
 PROMPT,
     ],
 

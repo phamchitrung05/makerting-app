@@ -149,12 +149,15 @@ class GeminiDriver extends AbstractAiDriver
                 $payload['generationConfig'] = $genConfig;
             }
 
+            // Timeout HTTP lấy từ options của request nếu được truyền — provider
+            // default 120s là không đủ cho analyzer với max_tokens lớn.
+            $httpTimeout = (int) ($request->options['timeout'] ?? 0);
             $data = $this->client()->requestJson(
                 $r->provider,
                 $this->url($r->provider, "v1beta/models/" . $this->bareModelId($r->model->remote_model_id) . ":generateContent"),
                 $payload,
                 $this->headers($r->apiKey),
-                ['keyIndex' => $r->keyIndex]
+                ['keyIndex' => $r->keyIndex, ...($httpTimeout > 0 ? ['timeout' => $httpTimeout] : [])]
             );
 
             $text = '';

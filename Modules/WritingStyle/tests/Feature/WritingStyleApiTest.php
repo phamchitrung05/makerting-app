@@ -1833,4 +1833,157 @@ class WritingStyleApiTest extends TestCase
             ->assertJsonCount(1, 'data.samples')
             ->assertJsonPath('data.samples.0.topic', 'Chủ đề trà chiều');
     }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng POST /sandbox/brief trả brief đã chuẩn hóa
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên response và dữ liệu liên quan
+     *
+     * SIDE EFFECT:
+     * - Tạo fixture, gửi HTTP nội bộ và dùng fake khi cần; không gọi AI thật.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi sai kỳ vọng; RefreshDatabase quản lý dữ liệu kiểm thử.
+     * =====================================================================
+     */
+    public function test_sandbox_brief_tra_brief_chuan_hoa(): void
+    {
+        $u = $this->admin(['writing.evaluate']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Du Lịch Đà Lạt', 'dominant_tier' => 'long', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'], 'evidence_json' => [],
+        ]);
+
+        // Mock AI trả brief gợi ý.
+        $this->app->instance(\Modules\CoreAi\Contracts\CoreAiGatewayContract::class, new class implements \Modules\CoreAi\Contracts\CoreAiGatewayContract {
+            public function executeStructured(\Modules\CoreAi\DTOs\AiStructuredRequest $r): \Modules\CoreAi\DTOs\AiStructuredResponse {
+                if ($r->operation === 'sandbox_brief_suggest') {
+                    return new \Modules\CoreAi\DTOs\AiStructuredResponse(
+                        text: '',
+                        data: [
+                            'content_type' => 'blog',
+                            'platform' => 'Facebook',
+                            'audience' => 'Người yêu du lịch miền Trung',
+                            'objective' => 'Giới thiệu Đà Nẵng vui nhộn',
+                            'offer' => null,
+                            'cta' => 'Khám phá Đà Nẵng ngay',
+                            'provided_facts' => [
+                                ['text' => 'Đà Nẵng là thành phố biển miền Trung'],
+                            ],
+                            'format' => ['headings' => true, 'bullets' => true],
+                            'constraints' => [],
+                            'warnings' => [],
+                        ],
+                        remoteModelId: 'fake',
+                        raw: ['choices' => [['finish_reason' => 'stop']]],
+                    );
+                }
+
+                return new \Modules\CoreAi\DTOs\AiStructuredResponse(text: '', data: []);
+            }
+
+            public function generateImage(\Modules\CoreAi\DTOs\AiImageRequest $r): \Modules\CoreAi\DTOs\AiImageResponse { throw new \LogicException; }
+            public function synthesizeSpeech(\Modules\CoreAi\DTOs\AiSpeechRequest $r): \Modules\CoreAi\DTOs\AiSpeechResponse { throw new \LogicException; }
+            public function transcribeAudio(\Modules\CoreAi\DTOs\AiTranscribeRequest $r): \Modules\CoreAi\DTOs\AiTranscribeResponse { throw new \LogicException; }
+            public function lastRun() { return (object) ['id' => 'run-brief']; }
+        });
+
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/brief",
+            ['topic' => 'Đà Nẵng, thành phố vui nhộn thời đại mới', 'target_tier' => 'long'],
+            $t,
+        );
+
+        $res->assertOk()
+            ->assertJsonPath('data.content_type', 'blog')
+            ->assertJsonPath('data.platform', 'Facebook')
+            ->assertJsonPath('data.cta', 'Khám phá Đà Nẵng ngay')
+            ->assertJsonPath('data.provided_facts.0.id', 'fact_01')
+            ->assertJsonPath('data.provided_facts.0.source', 'user')
+            ->assertJsonPath('data.format.headings', true);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng POST /sandbox/brief trả 422 khi thiếu topic
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên response 422
+     *
+     * SIDE EFFECT:
+     * - Tạo fixture và gửi request không có topic.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi sai status kỳ vọng.
+     * =====================================================================
+     */
+    public function test_sandbox_brief_thieu_topic_tra_422(): void
+    {
+        $u = $this->admin(['writing.evaluate']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'P', 'dominant_tier' => 'medium', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true, 'rules_json' => [], 'evidence_json' => [],
+        ]);
+
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/brief",
+            ['target_tier' => 'long'],
+            $t,
+        );
+
+        $res->assertStatus(422)
+            ->assertJsonPath('success', false);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng POST /sandbox/brief trả 403 khi thiếu quyền
+     * =====================================================================
+     *
+     * INPUT:
+     * - Không có tham số; sử dụng state hoặc config của lớp.
+     *
+     * OUTPUT:
+     * - void; assertions trên response 403
+     *
+     * SIDE EFFECT:
+     * - User chỉ có quyền view; không có writing.evaluate.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError khi sai status kỳ vọng.
+     * =====================================================================
+     */
+    public function test_sandbox_brief_thieu_quyen_tra_403(): void
+    {
+        $u = $this->admin(['writing.profile.view']); // chỉ view, không evaluate
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'P', 'dominant_tier' => 'medium', 'origin' => 'manual',
+            'status' => 'active', 'is_enabled' => true, 'rules_json' => [], 'evidence_json' => [],
+        ]);
+
+        $res = $this->postJson(
+            "/api/v1/admin/writing-style/writing-profiles/{$profile->id}/sandbox/brief",
+            ['topic' => 'Chủ đề test', 'target_tier' => 'medium'],
+            $t,
+        );
+
+        $res->assertForbidden();
+    }
 }

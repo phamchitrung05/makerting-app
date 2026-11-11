@@ -89,7 +89,7 @@ final class WritingStyleAnalysisV3
             $prompt,
             system: $system,
             schema: $this->schema(),
-            options: ['temperature' => PromptPack::temperature('analyzer'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096) * 2],
+            options: ['temperature' => PromptPack::temperature('analyzer'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096) * 2, 'timeout' => 180],
             module: 'writingstyle',
             operation: 'analyze_v3',
         );
