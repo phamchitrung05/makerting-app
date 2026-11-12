@@ -64,23 +64,4 @@ const suffixMeta = computed(() => {
       />
     </template>
   </AppTextField>
-
-  <!-- Thông báo trạng thái: đổi slug / đã có / đã suffix -1,-2 -->
-  <div
-    v-if="!suggesting && available === true"
-    class="text-caption text-success mt-1"
-  >
-    Slug khả dụng.
-  </div>
-  <div
-    v-else-if="!suggesting && available === false"
-    class="text-caption text-warning mt-1"
-  >
-    <template v-if="takenBy && modelValue !== takenBy">
-      Slug "<strong>{{ takenBy }}</strong>" đã được dùng — hệ thống sẽ lưu là "<strong>{{ modelValue }}</strong>".
-    </template>
-    <template v-else>
-      Slug đã được sử dụng.
-    </template>
-  </div>
 </template>

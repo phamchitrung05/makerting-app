@@ -33,6 +33,10 @@ return [
     ],
     'v3' => require __DIR__.'/../prompts/v3.php',
 
+    /* Rules validation + enum loại nội dung của WritingBrief — tách file
+     * riêng để chỉnh giới hạn/enum không sửa DTO (xem config/brief.php). */
+    'brief' => require __DIR__.'/brief.php',
+
     /* ---------------------------------------------------------------------
      * Thứ tự 15 khóa DNA (+ uncertainties) — dùng khi lặp/validate options
      * và map FE. Câu hỏi từng khóa nằm trong prompt pack (v3.questions).

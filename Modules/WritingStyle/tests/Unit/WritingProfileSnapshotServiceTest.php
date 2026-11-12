@@ -115,7 +115,7 @@ class WritingProfileSnapshotServiceTest extends TestCase
     {
         $sn = $this->svc()->buildSnapshot($this->profile(), WritingProfile::TIER_LONG);
 
-        $this->assertSame('800–1200 từ', $sn->sentenceHint);
+        $this->assertSame('2000–3000 từ', $sn->sentenceHint);
         $this->assertSame(3, $sn->provenance['prompt_version']);
         $this->assertSame(3, $sn->provenance['compiler_version']);
         $this->assertSame(42, $sn->provenance['profile_id']);

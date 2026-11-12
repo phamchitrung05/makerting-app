@@ -59,7 +59,8 @@ return [
      * GIỚI HẠN CHUNG
      * --------------------------------------------------------------------- */
     'limits' => [
-        'max_context_chars'  => 40000,   // chặn input quá dài (checkContext)
+        'max_context_chars'  => 40000,   // brief/planner/writer: tổng ký tự prompt
+        'analyzer_max_context_chars' => 120000, // bài mẫu + câu hỏi/trục/JSON; không cắt nội dung mẫu
         'max_output_tokens'  => 4096,
     ],
 
@@ -76,13 +77,16 @@ return [
 
     /* ---------------------------------------------------------------------
      * ĐỘ DÀI ĐÍCH THEO TIER — preset viết mới (không phải phân tầng mẫu).
-     * micro/short/medium theo số câu; long theo số từ (800–1200).
+     * Toàn bộ theo SỐ TỪ (unit = words) để thống nhất với giới hạn
+     * max:2000 của brief.length và tính "câu" khó đoán ở bài dài.
+     * Giới hạn câu của WritingBrief (max 200 câu) chỉ áp dụng khi user
+     * tự đặt brief.length.unit = sentences.
      * --------------------------------------------------------------------- */
     'lengths' => [
-        'micro'  => ['unit' => 'sentences', 'min' => 1,   'max' => 3],
-        'short'  => ['unit' => 'sentences', 'min' => 4,   'max' => 10],
-        'medium' => ['unit' => 'sentences', 'min' => 11,  'max' => 30],
-        'long'   => ['unit' => 'words',     'min' => 800, 'max' => 1200],
+        'micro'  => ['unit' => 'words', 'min' => 30,   'max' => 100],
+        'short'  => ['unit' => 'words', 'min' => 150,   'max' => 800],
+        'medium' => ['unit' => 'words', 'min' => 1000,  'max' => 1800],
+        'long'   => ['unit' => 'words', 'min' => 2000, 'max' => 3000],
     ],
 
     /* ---------------------------------------------------------------------

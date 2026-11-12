@@ -2,6 +2,7 @@
 
 namespace Modules\WritingStyle\DTOs;
 
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Modules\WritingStyle\Services\PromptPack;
 
@@ -67,33 +68,109 @@ final readonly class WritingBrief
      */
     public static function rules(): array
     {
+        $topic = self::topicLimits();
+        $fields = (array) self::config('fields', []);
+        $facts = (array) self::config('provided_facts', []);
+        $details = (array) self::config('required_details', []);
+        $requiredFields = (array) self::config('required_fields', []);
+        $constraints = (array) self::config('constraints', []);
+        $lengthMin = (int) self::config('length.min', 1);
+        $lengthMax = (int) self::config('length.max_words', 2000);
+        $field = static fn (string $key, int $default) => ['nullable', 'string', 'max:'.(int) ($fields[$key] ?? $default)];
+
         return [
             'brief' => ['nullable', 'array:topic,platform,content_type,audience,objective,provided_facts,required_details,required_fields,offer,cta,length,format,constraints'],
-            'brief.topic' => ['nullable', 'string', 'min:3', 'max:2000'],
-            'brief.platform' => ['nullable', 'string', 'max:80'],
-            'brief.content_type' => ['nullable', 'in:sales_post,announcement,storytelling,technical_article,blog'],
-            'brief.audience' => ['nullable', 'string', 'max:500'],
-            'brief.objective' => ['nullable', 'string', 'max:500'],
-            'brief.provided_facts' => ['nullable', 'array', 'max:30'],
+            'brief.topic' => ['nullable', 'string', 'min:'.$topic['min'], 'max:'.$topic['max']],
+            'brief.platform' => $field('platform', 80),
+            'brief.content_type' => ['nullable', Rule::in(self::contentTypes())],
+            'brief.audience' => $field('audience', 500),
+            'brief.objective' => $field('objective', 500),
+            'brief.provided_facts' => ['nullable', 'array', 'max:'.(int) ($facts['max_items'] ?? 30)],
             'brief.provided_facts.*' => ['array:id,text,source'],
-            'brief.provided_facts.*.id' => ['required', 'string', 'max:40', 'distinct', 'regex:/^[a-zA-Z0-9_-]+$/'],
-            'brief.provided_facts.*.text' => ['required', 'string', 'max:500'],
+            'brief.provided_facts.*.id' => ['required', 'string', 'max:'.(int) ($facts['id_max'] ?? 40), 'distinct', 'regex:'.($facts['id_regex'] ?? '/^[a-zA-Z0-9_-]+$/')],
+            'brief.provided_facts.*.text' => ['required', 'string', 'max:'.(int) ($facts['text_max'] ?? 500)],
             'brief.provided_facts.*.source' => ['sometimes', 'in:user'],
-            'brief.required_details' => ['nullable', 'array', 'max:30'],
-            'brief.required_details.*' => ['string', 'max:500', 'distinct'],
-            'brief.required_fields' => ['nullable', 'array', 'max:7'],
-            'brief.required_fields.*' => ['in:audience,objective,offer,cta,provided_facts,platform,content_type', 'distinct'],
-            'brief.offer' => ['nullable', 'string', 'max:500'],
-            'brief.cta' => ['nullable', 'string', 'max:500'],
+            'brief.required_details' => ['nullable', 'array', 'max:'.(int) ($details['max_items'] ?? 30)],
+            'brief.required_details.*' => ['string', 'max:'.(int) ($details['item_max'] ?? 500), 'distinct'],
+            'brief.required_fields' => ['nullable', 'array', 'max:'.count($requiredFields)],
+            'brief.required_fields.*' => [Rule::in($requiredFields), 'distinct'],
+            'brief.offer' => $field('offer', 500),
+            'brief.cta' => $field('cta', 500),
             'brief.length' => ['nullable', 'array:unit,min,max'],
-            'brief.length.unit' => ['required_with:brief.length', 'in:words,sentences'],
-            'brief.length.min' => ['required_with:brief.length', 'integer', 'between:1,2000'],
-            'brief.length.max' => ['required_with:brief.length', 'integer', 'gte:brief.length.min', 'between:1,2000'],
+            'brief.length.unit' => ['required_with:brief.length', Rule::in((array) self::config('length.units', ['words', 'sentences']))],
+            'brief.length.min' => ['required_with:brief.length', 'integer', "between:{$lengthMin},{$lengthMax}"],
+            'brief.length.max' => ['required_with:brief.length', 'integer', 'gte:brief.length.min', "between:{$lengthMin},{$lengthMax}"],
             'brief.format' => ['nullable', 'array:headings,bullets'],
             'brief.format.headings' => ['sometimes', 'boolean'],
             'brief.format.bullets' => ['sometimes', 'boolean'],
-            'brief.constraints' => ['nullable', 'array', 'max:12'],
-            'brief.constraints.*' => ['string', 'max:300'],
+            'brief.constraints' => ['nullable', 'array', 'max:'.(int) ($constraints['max_items'] ?? 12)],
+            'brief.constraints.*' => ['string', 'max:'.(int) ($constraints['item_max'] ?? 300)],
+        ];
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Đọc một giá trị trong config/brief.php
+     * =====================================================================
+     * INPUT : string $key (dot notation dưới writingstyle.brief), mixed $default.
+     * OUTPUT: mixed giá trị cấu hình hoặc $default.
+     * SIDE EFFECT: chỉ đọc config.
+     * =====================================================================
+     */
+    public static function config(string $key, mixed $default = null): mixed
+    {
+        return config('writingstyle.brief.'.$key, $default);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Danh sách loại bài hợp lệ (brief.content_type)
+     * =====================================================================
+     * OUTPUT: string[] — đọc writingstyle.brief.content_types.
+     * =====================================================================
+     */
+    public static function contentTypes(): array
+    {
+        return array_values((array) self::config('content_types', ['sales_post', 'announcement', 'storytelling', 'technical_article', 'blog']));
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Giới hạn số ký tự của chủ đề
+     * =====================================================================
+     * OUTPUT: array{min:int, max:int}.
+     * =====================================================================
+     */
+    public static function topicLimits(): array
+    {
+        return [
+            'min' => (int) self::config('topic.min', 3),
+            'max' => (int) self::config('topic.max', 2000),
+        ];
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Rule dùng chung cho `topic` và `target_sentences` của các
+     * FormRequest sandbox/brief.
+     * =====================================================================
+     * INPUT : array $topicPresence — tiền tố rule có mặt cho topic
+     *         (vd ['required'] hoặc ['required_without:brief.topic', 'nullable']).
+     * OUTPUT: array rule cho 'topic' và 'target_sentences'.
+     * =====================================================================
+     */
+    public static function requestRules(array $topicPresence): array
+    {
+        $topic = self::topicLimits();
+
+        return [
+            'topic' => [...$topicPresence, 'string', 'min:'.$topic['min'], 'max:'.$topic['max']],
+            'target_sentences' => [
+                'nullable',
+                'integer',
+                'min:'.(int) self::config('target_sentences.min', 1),
+                'max:'.(int) self::config('target_sentences.max', 200),
+            ],
         ];
     }
 
@@ -135,8 +212,11 @@ final readonly class WritingBrief
             }
             $length = $explicit;
         }
-        if ($length['unit'] === 'sentences' && $length['max'] > 200) {
-            throw ValidationException::withMessages(['brief.length.max' => 'Số câu tối đa là 200.']);
+        // Trần riêng cho đơn vị câu (rule tĩnh chỉ chặn theo max_words) —
+        // xem config/brief.php → length.max_sentences.
+        $maxSentences = (int) self::config('length.max_sentences', 200);
+        if ($length['unit'] === 'sentences' && $length['max'] > $maxSentences) {
+            throw ValidationException::withMessages(['brief.length.max' => "Số câu tối đa là {$maxSentences}."]);
         }
 
         $facts = array_map(static fn (array $fact) => ['id' => $fact['id'], 'text' => $fact['text'], 'source' => 'user'], array_values($input['provided_facts'] ?? []));

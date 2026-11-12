@@ -89,7 +89,7 @@ class WritingBriefSuggestService
         $string = ['type' => 'string'];
         $nullableString = ['type' => ['string', 'null']];
         $nullableBoolean = ['type' => ['boolean', 'null']];
-        $contentType = ['type' => ['string', 'null'], 'enum' => ['sales_post', 'announcement', 'storytelling', 'technical_article', 'blog', null]];
+        $contentType = ['type' => ['string', 'null'], 'enum' => [...WritingBrief::contentTypes(), null]];
 
         return PromptPack::objectSchema([
             'content_type'    => $contentType,
@@ -213,7 +213,7 @@ class WritingBriefSuggestService
      */
     private function normalize(array $data): array
     {
-        $allowedTypes = ['sales_post', 'announcement', 'storytelling', 'technical_article', 'blog'];
+        $allowedTypes = WritingBrief::contentTypes();
         $contentType = $data['content_type'] ?? null;
         if ($contentType !== null && ! in_array($contentType, $allowedTypes, true)) {
             throw ValidationException::withMessages(['content_type' => "AI trả loại bài không hợp lệ: {$contentType}"]);
@@ -227,7 +227,7 @@ class WritingBriefSuggestService
             }
         }
 
-        $facts = array_slice($facts, 0, 10);
+        $facts = array_slice($facts, 0, (int) WritingBrief::config('provided_facts.suggest_max', 10));
         $providedFacts = [];
         foreach ($facts as $index => $text) {
             $providedFacts[] = [

@@ -143,8 +143,10 @@ class OpenAiDriver extends AbstractAiDriver
             }
 
             // Merge options driver (temperature, max_tokens, top_p...).
+            // 'timeout' là cài đặt HTTP client, KHÔNG phải tham số API —
+            // không nhét vào body để tránh 400 invalid_request.
             foreach ($request->options as $k => $v) {
-                if (! in_array($k, ['model', 'messages', 'response_format'], true)) {
+                if (! in_array($k, ['model', 'messages', 'response_format', 'timeout'], true)) {
                     $payload[$k] = $v;
                 }
             }

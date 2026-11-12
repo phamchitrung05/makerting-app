@@ -21,6 +21,8 @@ use Modules\WritingStyle\Services\WritingStyleAnalyzerService;
  *
  * CÁC HÀM/METHOD TRONG FILE:
  * - handle() : markRunning -> analyzer->analyze -> complete/fail task run.
+ * - __construct(): gắn queue ai-text và yêu cầu dispatch sau commit.
+ * - failed(): chốt trạng thái khi job hết lượt thử hoặc bị lỗi cuối cùng.
  *
  * INPUT/OUTPUT CỦA CLASS (tổng thể):
  * - INPUT : analysisId + taskRunId.
@@ -44,6 +46,9 @@ class AnalyzeWritingProfileJob implements ShouldQueue
         public readonly string $analysisId,
         public readonly string $taskRunId,
     ) {
+        $this->timeout = (int) config('writingstyle.analysis.job.timeout', 300);
+        $this->tries = (int) config('writingstyle.analysis.job.tries', 2);
+
         // Chạy SAU khi transaction tạo analysis + taskRun đã commit —
         // tránh worker đọc bản ghi trước khi ghi xuống DB (spec Task 7).
         $this->afterCommit();
@@ -56,17 +61,25 @@ class AnalyzeWritingProfileJob implements ShouldQueue
      * =====================================================================
      * INPUT: TaskTrackerContract + WritingStyleAnalyzerService.
      * OUTPUT: void — cập nhật status 2 bảng.
+     * SIDE EFFECT:
+     * - CLI bỏ giới hạn thời gian PHP của tiến trình, tránh worker bị dừng
+     *   lúc ngủ giữa các job; queue và timeout HTTP quản lý từng tác vụ.
+     * - Web/sync giữ ngân sách PHP bằng timeout của job.
+     * - Đọc analysis; cập nhật trạng thái analysis/task qua service và tracker.
+     * EXCEPTION/TRANSACTION:
+     * - Lỗi transient của analyzer truyền về queue để retry; không tự mở
+     *   transaction. Timeout worker cần pcntl; trên Windows cURL vẫn tự giới
+     *   hạn từng request AI, không dùng max_execution_time để thay timeout job.
      * =====================================================================
      */
     public function handle(
         TaskTrackerContract $tracker,
         WritingStyleAnalyzerService $analyzer,
     ): void {
-        // PHP timeout của CLI có thể nhỏ hơn $timeout job (vd php.ini=180s nhưng
-        // job timeout=300s). Giới hạn trong process phải >= timeout job để PHP
-        // không kill worker trước khi `$tries`/`$timeout` của Laravel kịp tính.
+        // max_execution_time là đồng hồ của cả process, không phải riêng job.
+        // Nếu để giá trị hữu hạn, worker có thể chết sau job khi đang sleep().
         if (function_exists('set_time_limit')) {
-            @set_time_limit((int) $this->timeout);
+            @set_time_limit(PHP_SAPI === 'cli' ? 0 : (int) $this->timeout);
         }
 
         $analysis = WritingProfileAnalysis::find($this->analysisId);

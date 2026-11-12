@@ -103,7 +103,7 @@ class WritingStyleAnalyzerService
             'reference_text'  => $referenceText,
             'prompt_version'  => 3,
             'status'          => WritingProfileAnalysis::STATUS_PENDING,
-            'expires_at'      => now()->addDays((int) config('writingstyle.analysis_retention_days', 30)),
+            'expires_at'      => now()->addDays((int) config('writingstyle.analysis.storage.retention_days', config('writingstyle.analysis_retention_days', 30))),
         ]);
         $analysis->markRunning();
 

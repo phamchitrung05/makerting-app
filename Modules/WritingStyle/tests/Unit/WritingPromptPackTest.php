@@ -28,6 +28,12 @@ use Tests\TestCase;
  * CÁC HÀM/METHOD TRONG FILE:
  * - setUp(): Khởi tạo test và bật cấu hình prompt V3 trong ứng dụng kiểm thử.
  * - test_analysis_preserves_bullets_and_drops_unsupported_observations(): Kiểm chứng phân tích giữ bullet, loại trích dẫn sai và giữ slider chưa biết là null.
+ * - test_analysis_accepts_long_sample_without_truncating_blocks(): Bài mẫu dài
+ *   vượt trần sinh bài vẫn phân tích được và giữ đủ các block nguồn.
+ * - test_analysis_rejects_context_above_its_own_limit(): Chặn mẫu vượt trần
+ *   analyzer và trả lỗi đúng trường reference_text.
+ * - test_large_analysis_budget_does_not_relax_other_requests(): Trần analyzer
+ *   cao hơn không làm nới giới hạn chung của brief/planner/writer.
  * - test_compiler_preserves_signature_and_honors_explicit_removal(): Kiểm chứng compiler giữ dấu ấn, xóa chỉ dẫn theo null và áp dụng brief.
  * - test_brief_rejects_required_information_absent_from_provided_facts(): Kiểm chứng brief từ chối chi tiết bắt buộc chưa được cung cấp.
  * - test_plan_rejects_unknown_fact_references(): Kiểm chứng dàn ý từ chối fact ID ngoài brief.
@@ -68,6 +74,104 @@ class WritingPromptPackTest extends TestCase
     {
         parent::setUp();
         config(['writingstyle.prompt_version' => 3]);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng bài mẫu nhiều đoạn không bị chặn bởi trần sinh bài
+     * =====================================================================
+     *
+     * INPUT:
+     * - Fixture 632 block tiếng Việt, tổng prompt vượt 40.000 ký tự.
+     *
+     * OUTPUT:
+     * - void; assertions xác nhận request giữ toàn bộ nội dung và thứ tự block.
+     *
+     * SIDE EFFECT:
+     * - Dựng request trong bộ nhớ, không gọi gateway hoặc ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - AssertionFailedError nếu còn dùng trần chung hoặc nội dung bị cắt.
+     *   Không mở transaction.
+     * =====================================================================
+     */
+    public function test_analysis_accepts_long_sample_without_truncating_blocks(): void
+    {
+        $blocks = array_fill(0, 632, 'Mỗi hành trình đều mở ra một góc nhìn mới về thành phố.');
+        $request = (new WritingStyleAnalysisV3(implode("\n\n", $blocks)))->request();
+        $promptChars = array_sum(array_map(static fn (array $message): int => mb_strlen($message['content']), $request->messages));
+        $sourceBlocks = json_decode($request->messages[1]['content'], true, flags: JSON_THROW_ON_ERROR)['source_blocks'];
+
+        $this->assertGreaterThan(PromptPack::limit('max_context_chars'), $promptChars);
+        $this->assertLessThanOrEqual(PromptPack::limit('analyzer_max_context_chars'), $promptChars);
+        $this->assertSame($blocks, array_column($sourceBlocks, 'text'));
+        $this->assertSame(range(1, 632), array_column($sourceBlocks, 'id'));
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng analyzer vẫn từ chối đầu vào vượt trần riêng
+     * =====================================================================
+     *
+     * INPUT:
+     * - Bài mẫu có 120.001 ký tự; cấu hình analyzer tối đa 120.000 ký tự.
+     *
+     * OUTPUT:
+     * - void; assertions xác nhận lỗi tại reference_text nêu rõ giới hạn.
+     *
+     * SIDE EFFECT:
+     * - Đổi config trong ứng dụng kiểm thử; chỉ dựng request trong bộ nhớ.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException là kết quả mong đợi; AssertionFailedError nếu không
+     *   chặn hoặc sai trường lỗi. Không gọi AI, ghi DB hoặc mở transaction.
+     * =====================================================================
+     */
+    public function test_analysis_rejects_context_above_its_own_limit(): void
+    {
+        config(['writingstyle.v3.limits.analyzer_max_context_chars' => 120000]);
+        PromptPack::flush();
+
+        try {
+            (new WritingStyleAnalysisV3(str_repeat('a', 120001)))->request();
+            $this->fail('Analyzer phải chặn context vượt giới hạn riêng.');
+        } catch (ValidationException $error) {
+            $this->assertArrayHasKey('reference_text', $error->errors());
+            $this->assertStringContainsString('120.000', $error->errors()['reference_text'][0]);
+        }
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng tăng trần analyzer không nới context sinh bài
+     * =====================================================================
+     *
+     * INPUT:
+     * - Cùng chuỗi 40.001 ký tự được đưa qua guard analyzer và guard chung.
+     *
+     * OUTPUT:
+     * - void; analyzer chấp nhận, guard chung vẫn trả lỗi ở trường brief.
+     *
+     * SIDE EFFECT:
+     * - Chỉ đếm chuỗi trong bộ nhớ; không gọi AI hoặc ghi DB.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException của guard chung là kết quả mong đợi;
+     *   AssertionFailedError nếu giới hạn bị thay đổi ngoài phạm vi analyzer.
+     *   Không mở transaction.
+     * =====================================================================
+     */
+    public function test_large_analysis_budget_does_not_relax_other_requests(): void
+    {
+        $prompt = str_repeat('a', 40001);
+        PromptPack::checkAnalysisContext($prompt);
+
+        try {
+            PromptPack::checkContext($prompt);
+            $this->fail('Trần context chung phải giữ nguyên 40.000 ký tự.');
+        } catch (ValidationException $error) {
+            $this->assertArrayHasKey('brief', $error->errors());
+        }
     }
 
     /**
@@ -169,7 +273,7 @@ class WritingPromptPackTest extends TestCase
         $this->assertStringNotContainsString('BÌNH TĨNH GỐC', $snapshot->systemPrompt);
         $this->assertStringNotContainsString('TRÍCH DẪN RIÊNG TƯ', $snapshot->systemPrompt);
         $this->assertArrayHasKey('bullets', $snapshot->rulesJson);
-        $this->assertSame('4–10 câu', $snapshot->sentenceHint);
+        $this->assertSame('150–800 từ', $snapshot->sentenceHint);
     }
 
     /**

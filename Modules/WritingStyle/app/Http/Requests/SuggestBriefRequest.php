@@ -74,9 +74,8 @@ class SuggestBriefRequest extends FormRequest
     {
         return [
             ...WritingBrief::rules(),
-            'topic'            => ['required', 'string', 'min:3', 'max:2000'],
+            ...WritingBrief::requestRules(['required']),
             'target_tier'      => ['nullable', 'in:micro,short,medium,long'],
-            'target_sentences' => ['nullable', 'integer', 'min:1', 'max:200'],
         ];
     }
 }

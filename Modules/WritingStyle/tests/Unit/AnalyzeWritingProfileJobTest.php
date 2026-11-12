@@ -11,11 +11,67 @@ use Modules\WritingStyle\Services\WritingStyleAnalyzerService;
 use Tests\TestCase;
 
 /**
- * Test dispatchAnalysis (Task 7) — job + SystemTaskRun record.
+ * =====================================================================
+ * CHỨC NĂNG FILE: Kiểm thử dispatch và thực thi job phân tích văn phong
+ * =====================================================================
+ *
+ * Xác nhận vòng đời analysis/TaskRun, dedupe, retry và việc job không để lại
+ * giới hạn PHP hữu hạn làm worker CLI bị dừng sau khi đã xử lý xong.
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - test_dispatch_tao_analysis_pending_taskrun_va_job(): tạo analysis/task/job.
+ * - test_dispatch_dedupe_cung_source_hash(): tái sử dụng lượt đang chạy.
+ * - v3Payload(): dữ liệu AI giả cho ca thực thi job.
+ * - test_handle_chay_pipeline_va_complete_taskrun(): hoàn tất analysis/task.
+ * - test_cli_job_clears_process_execution_limit_even_when_analysis_is_missing():
+ *   xóa đồng hồ hữu hạn của process trước cả nhánh thoát sớm.
+ * - test_dispatch_tra_lai_analysis_khi_dang_pending(): giữ đúng task pending.
+ * - test_retry_tao_analysis_va_taskrun_moi_sau_failed(): tạo lượt thử mới.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Fixtures DB kiểm thử và gateway/tracker mock.
+ * - OUTPUT: Assertions; RefreshDatabase quản lý dữ liệu DB kiểm thử.
+ * =====================================================================
  */
 class AnalyzeWritingProfileJobTest extends TestCase
 {
     use RefreshDatabase;
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng job bỏ giới hạn PHP hữu hạn cả khi thoát sớm
+     * =====================================================================
+     * INPUT: Giới hạn process 210s, UUID analysis không tồn tại, tracker mock.
+     * OUTPUT: void; giới hạn CLI bằng 0 và tracker nhận analysis_not_found.
+     * SIDE EFFECT: Đọc DB, gọi mock tracker; khôi phục giới hạn PHP trong
+     * finally. Không gọi AI hoặc ghi task/analysis thật trong ca này.
+     * EXCEPTION/TRANSACTION: AssertionFailedError nếu giới hạn còn hữu hạn
+     * hoặc gọi analyzer; dữ liệu kiểm thử do RefreshDatabase quản lý.
+     * =====================================================================
+     */
+    public function test_cli_job_clears_process_execution_limit_even_when_analysis_is_missing(): void
+    {
+        if (PHP_SAPI !== 'cli') {
+            $this->markTestSkipped('Ca kiểm thử dành cho queue worker CLI.');
+        }
+
+        $tracker = $this->mock(\Modules\TaskCenter\Contracts\TaskTrackerContract::class);
+        $tracker->shouldReceive('fail')->once()
+            ->with('missing-task', 'analysis_not_found', 'Không tìm thấy bản ghi phân tích')
+            ->andReturn(new SystemTaskRun);
+        $analyzer = $this->mock(WritingStyleAnalyzerService::class);
+        $analyzer->shouldNotReceive('analyze');
+
+        $previousLimit = (int) ini_get('max_execution_time');
+        try {
+            set_time_limit(210);
+            $job = new AnalyzeWritingProfileJob('00000000-0000-0000-0000-000000000000', 'missing-task');
+            $job->handle($tracker, $analyzer);
+            $this->assertSame(0, (int) ini_get('max_execution_time'));
+        } finally {
+            set_time_limit($previousLimit);
+        }
+    }
 
     public function test_dispatch_tao_analysis_pending_taskrun_va_job(): void
     {

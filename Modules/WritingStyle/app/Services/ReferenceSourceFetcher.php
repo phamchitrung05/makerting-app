@@ -78,17 +78,19 @@ class ReferenceSourceFetcher
         $this->assertHtml($result);
 
         $text = $this->extractBodyText($result->body);
-        if (mb_strlen($text) < self::MIN_CHARS) {
+        $minChars = (int) config('writingstyle.analysis.fetcher.min_chars', self::MIN_CHARS);
+        if (mb_strlen($text) < $minChars) {
             throw RemoteFetchException::network(
                 $result->finalUrl,
-                'noi dung trich xuat qua ngan (<' . self::MIN_CHARS . ' ky tu) — co the trang can dang nhap hoac la SPA',
+                'noi dung trich xuat qua ngan (<' . $minChars . ' ky tu) — co the trang can dang nhap hoac la SPA',
             );
         }
 
         // Cắt mềm nội dung quá dài thay vì fail — AnalyzeTextRequest giới
         // hạn 200000 ký tự; giữ phần đầu để giải mã vẫn đại diện được giọng.
-        if (mb_strlen($text) > 180000) {
-            $text = mb_substr($text, 0, 180000);
+        $softTruncate = (int) config('writingstyle.analysis.fetcher.soft_truncate_chars', 180000);
+        if (mb_strlen($text) > $softTruncate) {
+            $text = mb_substr($text, 0, $softTruncate);
         }
 
         return [
@@ -113,11 +115,14 @@ class ReferenceSourceFetcher
     protected function followRedirects(string $url): RemoteFetchResultDto
     {
         $current = $url;
+        $maxRedirects = (int) config('writingstyle.analysis.fetcher.max_redirects', self::MAX_REDIRECTS);
+        $timeout = (int) config('writingstyle.analysis.fetcher.timeout', 15);
+        $maxBytes = (int) config('writingstyle.analysis.fetcher.max_bytes', self::MAX_BYTES);
 
-        for ($i = 0; $i <= self::MAX_REDIRECTS; $i++) {
+        for ($i = 0; $i <= $maxRedirects; $i++) {
             $result = $this->fetcher->fetch($current, [
-                'timeout'  => 15,
-                'maxBytes' => self::MAX_BYTES,
+                'timeout'  => $timeout,
+                'maxBytes' => $maxBytes,
             ]);
 
             if (! $this->isRedirect($result->status)) {
@@ -133,7 +138,7 @@ class ReferenceSourceFetcher
             $current = $this->resolveLocation($current, $location);
         }
 
-        throw RemoteFetchException::network($url, 'vuot qua so luot redirect toi da (' . self::MAX_REDIRECTS . ')');
+        throw RemoteFetchException::network($url, 'vuot qua so luot redirect toi da (' . $maxRedirects . ')');
     }
 
     /**

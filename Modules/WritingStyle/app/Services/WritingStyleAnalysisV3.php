@@ -68,7 +68,9 @@ final class WritingStyleAnalysisV3
      * - Đọc cấu hình và dựng yêu cầu, chưa gọi gateway.
      *
      * EXCEPTION/TRANSACTION:
-     * - ValidationException khi context quá dài; JsonException khi mã hóa thất bại. Không mở transaction.
+     * - ValidationException tại reference_text khi context vượt giới hạn riêng
+     *   analyzer_max_context_chars; JsonException khi mã hóa thất bại.
+     *   Không mở transaction; bài mẫu được giữ nguyên, không cắt để vừa context.
      * =====================================================================
      */
     public function request(): AiStructuredRequest
@@ -83,13 +85,20 @@ final class WritingStyleAnalysisV3
                 array_keys($this->blocks),
             ),
         ]);
-        PromptPack::checkContext($system, $prompt);
+        PromptPack::checkAnalysisContext($system, $prompt);
+
+        $timeout = (int) config('writingstyle.analysis.ai_request.timeout', 180);
+        $multiplier = (int) config('writingstyle.analysis.ai_request.max_tokens_multiplier', 2);
 
         return AiStructuredRequest::fromPrompt(
             $prompt,
             system: $system,
             schema: $this->schema(),
-            options: ['temperature' => PromptPack::temperature('analyzer'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096) * 2, 'timeout' => 180],
+            options: [
+                'temperature' => PromptPack::temperature('analyzer'),
+                'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096) * $multiplier,
+                'timeout' => $timeout,
+            ],
             module: 'writingstyle',
             operation: 'analyze_v3',
         );
@@ -164,32 +173,48 @@ final class WritingStyleAnalysisV3
     public function normalize(array $data): array
     {
         $keys = array_keys((array) PromptPack::dict('questions'));
+
+        $descMax = (int) config('writingstyle.analysis.normalization.feature_description_max', 500);
+        $featEvIdsMax = (int) config('writingstyle.analysis.normalization.feature_evidence_ids_max', 20);
+        $evIdMax = (int) config('writingstyle.analysis.normalization.evidence_id_max', 40);
+        $evMaxItems = (int) config('writingstyle.analysis.normalization.evidence_max_items', 20);
+        $evBlockIdsMax = (int) config('writingstyle.analysis.normalization.evidence_block_ids_max', 20);
+        $evTextMax = (int) config('writingstyle.analysis.normalization.evidence_text_max', 500);
+        $sigMaxItems = (int) config('writingstyle.analysis.normalization.signature_language_max_items', 8);
+        $sigItemMax = (int) config('writingstyle.analysis.normalization.signature_language_item_max', 60);
+        $srcSpecMaxItems = (int) config('writingstyle.analysis.normalization.source_specific_max_items', 30);
+        $srcSpecItemMax = (int) config('writingstyle.analysis.normalization.source_specific_item_max', 200);
+        $uncertMaxItems = (int) config('writingstyle.analysis.normalization.uncertainties_max_items', 15);
+        $uncertItemMax = (int) config('writingstyle.analysis.normalization.uncertainties_item_max', 500);
+        $styleMax = (int) config('writingstyle.analysis.normalization.style_instructions_max', 2500);
+        $voiceMax = (int) config('writingstyle.analysis.normalization.voice_texture_instructions_max', 2500);
+
         $rules = [
             'features' => ['required', 'array:'.implode(',', $keys), 'required_array_keys:'.implode(',', $keys)],
             'features.*' => ['required', 'array:state,description,confidence,evidence_ids'],
             'features.*.state' => ['required', 'in:observed,inferred,unknown'],
-            'features.*.description' => ['present', 'string', 'max:500'],
+            'features.*.description' => ['present', 'string', 'max:'.$descMax],
             'features.*.confidence' => ['required', 'in:low,medium,high'],
-            'features.*.evidence_ids' => ['present', 'array', 'max:20'],
-            'features.*.evidence_ids.*' => ['string', 'max:40'],
-            'evidence' => ['present', 'array', 'max:20'],
+            'features.*.evidence_ids' => ['present', 'array', 'max:'.$featEvIdsMax],
+            'features.*.evidence_ids.*' => ['string', 'max:'.$evIdMax],
+            'evidence' => ['present', 'array', 'max:'.$evMaxItems],
             'evidence.*' => ['array:id,kind,block_ids,text'],
-            'evidence.*.id' => ['required', 'string', 'max:40', 'distinct'],
+            'evidence.*.id' => ['required', 'string', 'max:'.$evIdMax, 'distinct'],
             'evidence.*.kind' => ['required', 'in:excerpt,structure_observation'],
-            'evidence.*.block_ids' => ['required', 'array', 'max:20'],
+            'evidence.*.block_ids' => ['required', 'array', 'max:'.$evBlockIdsMax],
             'evidence.*.block_ids.*' => ['integer', 'min:1'],
-            'evidence.*.text' => ['required', 'string', 'max:500'],
+            'evidence.*.text' => ['required', 'string', 'max:'.$evTextMax],
             'signature_language' => ['required', 'array:self_reference,audience_reference,particles'],
-            'source_specific_items' => ['present', 'array', 'max:30'],
-            'source_specific_items.*' => ['string', 'max:200'],
-            'uncertainties' => ['present', 'array', 'max:15'],
-            'uncertainties.*' => ['string', 'max:500'],
-            'style_instructions' => ['present', 'string', 'max:2500'],
-            'voice_texture_instructions' => ['present', 'string', 'max:2500'],
+            'source_specific_items' => ['present', 'array', 'max:'.$srcSpecMaxItems],
+            'source_specific_items.*' => ['string', 'max:'.$srcSpecItemMax],
+            'uncertainties' => ['present', 'array', 'max:'.$uncertMaxItems],
+            'uncertainties.*' => ['string', 'max:'.$uncertItemMax],
+            'style_instructions' => ['present', 'string', 'max:'.$styleMax],
+            'voice_texture_instructions' => ['present', 'string', 'max:'.$voiceMax],
         ];
         foreach (['self_reference', 'audience_reference', 'particles'] as $key) {
-            $rules['signature_language.'.$key] = ['present', 'array', 'max:8'];
-            $rules['signature_language.'.$key.'.*'] = ['string', 'max:60'];
+            $rules['signature_language.'.$key] = ['present', 'array', 'max:'.$sigMaxItems];
+            $rules['signature_language.'.$key.'.*'] = ['string', 'max:'.$sigItemMax];
         }
         foreach (['voice_texture_sliders_json' => WritingProfile::VOICE_TEXTURE_KEYS, 'tone_sliders_json' => WritingProfile::TONE_AXIS_KEYS] as $field => $axes) {
             $rules[$field] = ['required', 'array:'.implode(',', $axes)];

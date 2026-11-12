@@ -67,12 +67,18 @@ class SandboxRequest extends FormRequest
      */
     public function rules(): array
     {
+        $tempMin = config('writingstyle.profile.temperature.min', 0);
+        $tempMax = config('writingstyle.profile.temperature.max', 2);
+        $styleMin = (int) config('writingstyle.profile.instructions.style_min', 1);
+        $styleMax = (int) config('writingstyle.profile.instructions.style_max', 10000);
+        $voiceTextureMax = (int) config('writingstyle.profile.instructions.voice_texture_max', 10000);
+        $toneMax = (int) config('writingstyle.profile.instructions.tone_max', 10000);
+
         return [
             ...WritingBrief::rules(),
-            'topic'            => ['required_without:brief.topic', 'nullable', 'string', 'min:3', 'max:2000'],
+            ...WritingBrief::requestRules(['required_without:brief.topic', 'nullable']),
             'target_tier'      => ['nullable', 'in:micro,short,medium,long'],
-            'target_sentences' => ['nullable', 'integer', 'min:1', 'max:200'],
-            'temperature'      => ['nullable', 'numeric', 'min:0', 'max:2'],
+            'temperature'      => ['nullable', 'numeric', "min:{$tempMin}", "max:{$tempMax}"],
 
             // Hiệu chỉnh tone runtime — 8 trục theo config('writingstyle.v3.axes').
             // Chỉ nhận key hợp lệ + giá trị 0..100; không bắt buộc đủ 8.
@@ -80,11 +86,11 @@ class SandboxRequest extends FormRequest
             'tone_overrides.*'          => ['nullable', 'integer', 'min:0', 'max:100'],
 
             // Ghi đè style_instructions (Ô 1) khi cần (FE muốn Sandbox thấy NGAY, không bắt Lưu trước).
-            'style_instructions'        => ['nullable', 'string', 'min:1', 'max:10000'],
+            'style_instructions'        => ['nullable', 'string', "min:{$styleMin}", "max:{$styleMax}"],
 
             // Ghi đè voice_texture_instructions (Ô 2) và 5 thanh trượt Chất văn runtime.
-            'voice_texture_instructions'        => ['nullable', 'string', 'max:10000'],
-            'tone_instructions'                 => ['nullable', 'string', 'max:10000'],
+            'voice_texture_instructions'        => ['nullable', 'string', "max:{$voiceTextureMax}"],
+            'tone_instructions'                 => ['nullable', 'string', "max:{$toneMax}"],
             'voice_texture_sliders_json'        => ['nullable', 'array'],
             'voice_texture_sliders_json.*'      => ['nullable', 'integer', 'min:0', 'max:100'],
         ];

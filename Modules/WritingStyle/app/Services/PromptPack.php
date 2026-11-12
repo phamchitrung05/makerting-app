@@ -22,6 +22,22 @@ use Modules\WritingStyle\Pipelines\Exceptions\InvalidPipelineException;
  *     (`specialties[content_type]`) — deep-merge khi request chỉ định.
  *
  * Khung key pack chuẩn xem `prompts/v3.php` (header file).
+ *
+ * CÁC HÀM/METHOD TRONG FILE:
+ * - keyFor(), rawPack(): chọn khóa cấu hình và nạp pack thô.
+ * - deepMerge(), resolve(), resolveVersion(): hợp nhất pack và chuỗi kế thừa.
+ * - pack(), role(), dict(): đọc cấu hình có áp specialty theo loại nội dung.
+ * - version(), cap(), limit(), temperature(): đọc phiên bản, năng lực và thông số.
+ * - flush(): xóa cache khi cấu hình trong process thay đổi.
+ * - objectSchema(), json(): dựng schema strict và mã hóa dữ liệu prompt.
+ * - checkContext(): kiểm tra giới hạn context chung cho các tác vụ sinh bài.
+ * - checkAnalysisContext(): kiểm tra giới hạn riêng cho phân tích bài mẫu.
+ * - requireComplete(): từ chối phản hồi bị cắt trước khi hoàn tất.
+ *
+ * INPUT/OUTPUT CỦA CLASS (tổng thể):
+ * - INPUT : Cấu hình writingstyle, vai trò, dữ liệu hoặc các phần prompt.
+ * - OUTPUT: Pack/schema/JSON hoặc giá trị cấu hình; ném lỗi khi context vượt
+ *   giới hạn hay AI chưa hoàn tất. Không gọi AI hoặc ghi DB; cache trong process.
  * =====================================================================
  */
 final class PromptPack
@@ -346,6 +362,43 @@ final class PromptPack
     {
         if (array_sum(array_map('mb_strlen', $parts)) > (int) self::limit('max_context_chars', 40000)) {
             throw ValidationException::withMessages(['brief' => 'Đầu vào quá dài. Hãy rút gọn bài mẫu, hồ sơ hoặc brief.']);
+        }
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm tra tổng context riêng cho tác vụ phân tích bài mẫu
+     * =====================================================================
+     *
+     * INPUT:
+     * - $parts: system prompt và user prompt đã mã hóa, gồm bài mẫu, block ID,
+     *   câu hỏi DNA và định nghĩa trục; giới hạn theo analyzer_max_context_chars.
+     *
+     * OUTPUT:
+     * - void nếu tổng ký tự không vượt giới hạn, mặc định 120.000 ký tự.
+     *
+     * SIDE EFFECT:
+     * - Đọc cấu hình và đếm ký tự Unicode; không cắt mẫu, ghi DB hoặc gọi AI.
+     *
+     * EXCEPTION/TRANSACTION:
+     * - ValidationException tại reference_text khi vượt giới hạn, kèm tổng
+     *   ký tự thực tế và mức tối đa để người dùng biết cần rút gọn bao nhiêu.
+     *   Không mở transaction; giới hạn token thực tế vẫn do model/provider quyết định.
+     * =====================================================================
+     */
+    public static function checkAnalysisContext(string ...$parts): void
+    {
+        $actual = array_sum(array_map('mb_strlen', $parts));
+        $limit = (int) self::limit('analyzer_max_context_chars', 120000);
+
+        if ($actual > $limit) {
+            throw ValidationException::withMessages([
+                'reference_text' => sprintf(
+                    'Bài mẫu và cấu hình phân tích có %s ký tự, vượt giới hạn %s ký tự. Hãy rút gọn bài mẫu.',
+                    number_format($actual, 0, ',', '.'),
+                    number_format($limit, 0, ',', '.'),
+                ),
+            ]);
         }
     }
 

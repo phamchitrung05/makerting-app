@@ -17,6 +17,8 @@ use Modules\CoreAi\Exceptions\AiGatewayException;
  * - POST/PUT JSON + multipart (upload audio/binary).
  * - Nhận binary lớn (audio TTS, ảnh sinh ra) — maxBytes riêng.
  * - Timeout theo provider (`request_timeout`, default 120s).
+ *   Thời gian sống của worker CLI do queue/process manager quản lý; client
+ *   không thay max_execution_time của CLI sau mỗi request AI.
  * - Map lỗi HTTP/curl sang `AiGatewayException` với errorCode phân loại
  *   và context KHÔNG chứa api key/header Authorization.
  *
@@ -60,7 +62,13 @@ class AiProviderClient extends SafeRemoteFetcher
      *
      * OUTPUT: RemoteFetchResultDto — status/body/contentType/finalUrl.
      * EXCEPTION: AiGatewayException (network/auth/rate_limit/provider_error).
-     * SIDE EFFECT: DNS resolve + TCP qua cURL + CURLOPT_RESOLVE (DNS pin).
+     * SIDE EFFECT:
+     * - DNS resolve + TCP qua cURL + CURLOPT_RESOLVE (DNS pin).
+     * - Trong web request, tăng thời gian chạy PHP để đủ ngân sách HTTP và
+     *   xử lý kết quả. Trong CLI, giữ nguyên max_execution_time của caller để
+     *   không để lại đồng hồ hữu hạn làm queue worker chết lúc chờ job mới.
+     * - Timeout HTTP vẫn áp dụng bằng CURLOPT_TIMEOUT ở mọi SAPI.
+     * TRANSACTION: Không mở transaction.
      * =====================================================================
      */
     public function request(
@@ -73,7 +81,9 @@ class AiProviderClient extends SafeRemoteFetcher
     ): RemoteFetchResultDto {
         $method = strtoupper($method);
         $timeout = (int) ($options['timeout'] ?? $provider->request_timeout ?? 120);
-        @set_time_limit(max(180, $timeout + 30));
+        if (PHP_SAPI !== 'cli') {
+            @set_time_limit(max(180, $timeout + 30));
+        }
         $maxBytes = (int) ($options['maxBytes'] ?? $this->maxBytes);
         $keyIndex = (int) ($options['keyIndex'] ?? 0);
 
