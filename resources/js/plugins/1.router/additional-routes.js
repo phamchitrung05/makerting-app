@@ -32,6 +32,11 @@ export const redirects = [
     name: 'pages-account-settings',
     redirect: () => ({ name: 'pages-account-settings-tab', params: { tab: 'account' } }),
   },
+  {
+    path: '/admin/media/media',
+    name: 'admin-media-legacy-redirect',
+    redirect: () => ({ name: 'admin-media' }),
+  },
 ]
 export const routes = [
   // Email filter

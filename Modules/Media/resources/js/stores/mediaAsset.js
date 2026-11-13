@@ -43,6 +43,8 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
       folder: '',
       'channel_group_id': '', // eslint-disable-line camelcase,
       search: '',
+      quick: '',      // bộ lọc nhanh cột trái: 'recent'|'shared'|'ai' ('' = tất cả)
+      trashed: '',    // '1' = chỉ asset đã xóa (nhóm Thùng rác)
     },
     pagination: {
       page: 1,
@@ -59,6 +61,45 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
     /* Có filter nào đang áp dụng không. */
     hasActiveFilters: state =>
       Object.values(state.filters).some(v => v !== '' && v !== null),
+
+    /* Tổng số asset hiện có (không tính thùng rác) — chip "Tất cả tệp tin". */
+    totalAssets: state => {
+      const keep = state.items.length
+      
+      return state.filters.trashed ? keep : state.total
+    },
+
+    /* Cây thư mục cho cột trái trang media — dựng từ API folders [{name,count}]
+     * (phân cấp theo dấu '/' đầu tiên, ví dụ 'products/images' → con của 'products'). */
+    folderTree: state => {
+      const flat = state.folders || []
+      const map = new Map()
+      const roots = []
+
+      // Duyệt 2 lần: pass 1 dựng node, pass 2 gắn con vào cha theo prefix.
+      for (const f of flat) {
+        map.set(f.name, { id: f.name, name: f.name.split('/').pop(), count: f.count, expanded: false })
+      }
+      for (const f of flat) {
+        const node = map.get(f.name)
+        const slash = f.name.lastIndexOf('/')
+        if (slash > 0) {
+          const parentName = f.name.slice(0, slash)
+          const parent = map.get(parentName)
+          if (parent) {
+            ;(parent.children ||= []).push(node)
+            continue
+          }
+        }
+        roots.push(node)
+      }
+      
+      return roots
+    },
+
+    /* Tổng dung lượng các item trên trang hiện tại (bytes) — chip đã chọn. */
+    selectedSizeBytes: () => (items = []) =>
+      items.reduce((sum, a) => sum + (Number(a.size) || 0), 0),
 
     /* Slot metadata theo tên (helper cho MediaSlotField). */
     slotInfo: state => slot =>
@@ -96,7 +137,15 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
 
     /* Xóa toàn bộ filter. */
     clearFilters() {
-      this.filters = { kind: '', visibility: '', folder: '', 'channel_group_id': '', search: '' } // eslint-disable-line camelcase
+      this.filters = { kind: '', visibility: '', folder: '', 'channel_group_id': '', search: '', quick: '', trashed: '' } // eslint-disable-line camelcase
+      this.pagination.page = 1
+      this.refresh()
+    },
+
+    /* Chọn bộ lọc nhanh cột trái — 'trash' đi qua trashed riêng, còn lại qua quick. */
+    setQuickFilter(id) {
+      this.filters.quick = (id === 'all' || id === 'trash') ? '' : id
+      this.filters.trashed = id === 'trash' ? '1' : ''
       this.pagination.page = 1
       this.refresh()
     },
@@ -157,9 +206,31 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
       }
     },
 
-    /* Nạp folder distinct. */
+    /* Nạp danh sách folder distinct kèm số asset — API trả [{name,count}]. */
     async loadFolders() {
       this.folders = await mediaApi.folders()
+    },
+
+    /* Xóa mềm asset trên server rồi gỡ khỏi items (trừ khi đang xem thùng rác,
+     * thì giữ lại để phản ánh đúng trạng thái đã xóa). */
+    async deleteAsset(id) {
+      await mediaApi.deleteAsset(id)
+      if (this.filters.trashed) {
+        this.refresh() // đang ở nhóm thùng rác → refetch thay vì gỡ tay
+      } else {
+        this.remove(id)
+      }
+    },
+
+    /* Cập nhật metadata asset (title/alt_text/folder/visibility) rồi sửa in-place. */
+    async updateAsset(id, payload) {
+      const asset = await mediaApi.updateAsset(id, payload)
+      const idx = this.items.findIndex(i => i.id === asset.id)
+      if (idx >= 0) {
+        this.items.splice(idx, 1, asset)
+      }
+      
+      return asset
     },
 
     /* Nạp metadata slot registry. */

@@ -373,6 +373,14 @@
     "useCardLoading": true,
     "htmlToText": true,
     "mergeRuleEdits": true,
-    "textToHtml": true
+    "textToHtml": true,
+    "deriveAspectRatio": true,
+    "extOf": true,
+    "fmtDate": true,
+    "fmtDateTime": true,
+    "fmtDuration": true,
+    "fmtSize": true,
+    "previewOf": true,
+    "thumbOf": true
   }
 }

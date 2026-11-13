@@ -18,6 +18,6 @@ export default [
   {
     title: 'Thư viện Media',
     icon: { icon: 'tabler-photo' },
-    to: 'admin-media-media',
+    to: 'admin-media',
   },
 ]

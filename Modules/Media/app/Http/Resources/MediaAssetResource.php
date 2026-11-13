@@ -48,6 +48,9 @@ class MediaAssetResource extends JsonResource
             'created_by' => $dto->createdBy,
             'checksum_sha256' => $dto->checksumSha256,
             'conversions' => $dto->conversions,
+            /* Metadata AI sinh ảnh (visual_style_id/shot_id/prompt/ai_run_id)
+             * ghi bởi StoreGeneratedMediaAction — FE hiển thị ở tab "Prompt". */
+            'ai_generation' => $this->mediaFile()?->getCustomProperty('ai_generation'),
             'usages_count' => $this->whenCounted('usages'),
             'creator' => $this->whenLoaded('creator', fn () => [
                 'id' => $this->creator?->id,

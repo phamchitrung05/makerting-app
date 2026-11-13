@@ -183,6 +183,14 @@ class MediaHttpTest extends TestCase
             ->getJson('/api/v1/admin/media/assets')
             ->assertForbidden();
     }
+
+    public function test_unauthenticated_non_json_api_request_returns_401_not_route_login_500(): void
+    {
+        $this->withHeaders(['Accept' => 'image/webp,image/png,*/*;q=0.8'])
+            ->get('/api/v1/admin/media/assets/1/stream')
+            ->assertUnauthorized()
+            ->assertJsonPath('success', false);
+    }
 }
 
 class TestPostModel extends Model

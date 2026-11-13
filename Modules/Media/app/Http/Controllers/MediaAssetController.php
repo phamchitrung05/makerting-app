@@ -71,10 +71,22 @@ class MediaAssetController extends Controller
         $query = MediaAsset::query()
             ->with(['creator', 'channelGroup'])
             ->withCount('usages')
+            /* Nhóm Thùng rác: chỉ asset đã soft-delete — phải khai báo trước
+             * các filter khác để global scope SoftDeletes không lọc trước. */
+            ->when(
+                filter_var($request->query('trashed'), FILTER_VALIDATE_BOOLEAN),
+                fn ($q) => $q->onlyTrashed()
+            )
             ->when($request->filled('kind'), fn ($q) => $q->where('kind', $request->query('kind')))
             ->when($request->filled('visibility'), fn ($q) => $q->where('visibility', $request->query('visibility')))
             ->when($request->filled('folder'), fn ($q) => $q->where('folder', $request->query('folder')))
             ->when($request->filled('channel_group_id'), fn ($q) => $q->where('channel_group_id', $request->query('channel_group_id')))
+            /* Bộ lọc nhanh cột trái:
+             * - recent : 30 ngày gần nhất.
+             * - shared : đang được gán vào model nào đó (usages > 0).
+             * - ai     : có metadata ai_generation trong file media. */
+            ->when($request->query('quick') === 'recent', fn ($q) => $q->where('created_at', '>=', now()->subDays(30)))
+            ->when($request->query('quick') === 'shared', fn ($q) => $q->has('usages'))
             ->when($request->filled('search'), fn ($q) => $q->where(function ($qq) use ($request) {
                 $s = (string) $request->query('search');
                 $qq->where('title', 'like', "%{$s}%")
@@ -142,11 +154,14 @@ class MediaAssetController extends Controller
      */
     public function folders()
     {
+        /* Mỗi folder kèm số asset — FE cây thư mục cột trái hiển thị count. */
         $folders = MediaAsset::query()
             ->select('folder')
-            ->distinct()
+            ->selectRaw('COUNT(*) as count')
+            ->groupBy('folder')
             ->orderBy('folder')
-            ->pluck('folder')
+            ->get()
+            ->map(fn ($row) => ['name' => $row->folder, 'count' => (int) $row->count])
             ->values();
 
         return BaseResponse::success($folders);

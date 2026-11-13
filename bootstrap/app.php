@@ -19,6 +19,17 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
         ]);
+
+        // Tránh lỗi "Route [login] not defined": app là SPA — không có route
+        // Laravel tên 'login' (đăng nhập là route Vue /login). Request API
+        // (hoặc expectsJson) trả null -> Authenticate ném AuthenticationException
+        // không redirect -> exception handler render 401 JSON "Chưa xác thực"
+        // và $api.forceLogout tự điều hướng Vue Router sang /login phía client.
+        // Request web thường (vào thẳng /admin/... chưa đăng nhập) vẫn cần
+        // redirect về trang đăng nhập SPA.
+        $middleware->redirectGuestsTo(fn (Request $request) => (
+            $request->is('api/*') || $request->expectsJson()
+        ) ? null : '/login');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Render mọi exception của route /api/* thành envelope BaseResponse chuẩn

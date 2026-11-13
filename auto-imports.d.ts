@@ -44,12 +44,18 @@ declare global {
   const defineComponent: typeof import('vue')['defineComponent']
   const definePage: typeof import('unplugin-vue-router/runtime')['definePage']
   const defineStore: typeof import('pinia')['defineStore']
+  const deriveAspectRatio: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['deriveAspectRatio']
   const eagerComputed: typeof import('@vueuse/core')['eagerComputed']
   const effectScope: typeof import('vue')['effectScope']
   const emailValidator: typeof import('./resources/js/@core/utils/validators.js')['emailValidator']
+  const extOf: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['extOf']
   const extendRef: typeof import('@vueuse/core')['extendRef']
   const fieldErrors: typeof import('./resources/js/utils/api.js')['fieldErrors']
   const firstErrorMessage: typeof import('./resources/js/utils/api.js')['firstErrorMessage']
+  const fmtDate: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDate']
+  const fmtDateTime: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDateTime']
+  const fmtDuration: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDuration']
+  const fmtSize: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtSize']
   const formatDate: typeof import('./resources/js/@core/utils/formatters.js')['formatDate']
   const formatDateToMonthShort: typeof import('./resources/js/@core/utils/formatters.js')['formatDateToMonthShort']
   const getActivePinia: typeof import('pinia')['getActivePinia']
@@ -112,6 +118,7 @@ declare global {
   const passwordValidator: typeof import('./resources/js/@core/utils/validators.js')['passwordValidator']
   const pausableWatch: typeof import('@vueuse/core')['pausableWatch']
   const prefixWithPlus: typeof import('./resources/js/@core/utils/formatters.js')['prefixWithPlus']
+  const previewOf: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['previewOf']
   const provide: typeof import('vue')['provide']
   const provideLocal: typeof import('@vueuse/core')['provideLocal']
   const reactify: typeof import('@vueuse/core')['reactify']
@@ -147,6 +154,7 @@ declare global {
   const textToHtml: typeof import('./Modules/WritingStyle/resources/js/utils/sampleText.js')['textToHtml']
   const throttledRef: typeof import('@vueuse/core')['throttledRef']
   const throttledWatch: typeof import('@vueuse/core')['throttledWatch']
+  const thumbOf: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['thumbOf']
   const toRaw: typeof import('vue')['toRaw']
   const toReactive: typeof import('@vueuse/core')['toReactive']
   const toRef: typeof import('vue')['toRef']
@@ -417,12 +425,18 @@ declare module 'vue' {
     readonly defineComponent: UnwrapRef<typeof import('vue')['defineComponent']>
     readonly definePage: UnwrapRef<typeof import('unplugin-vue-router/runtime')['definePage']>
     readonly defineStore: UnwrapRef<typeof import('pinia')['defineStore']>
+    readonly deriveAspectRatio: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['deriveAspectRatio']>
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
     readonly emailValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['emailValidator']>
+    readonly extOf: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['extOf']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
     readonly fieldErrors: UnwrapRef<typeof import('./resources/js/utils/api.js')['fieldErrors']>
     readonly firstErrorMessage: UnwrapRef<typeof import('./resources/js/utils/api.js')['firstErrorMessage']>
+    readonly fmtDate: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDate']>
+    readonly fmtDateTime: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDateTime']>
+    readonly fmtDuration: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtDuration']>
+    readonly fmtSize: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['fmtSize']>
     readonly formatDate: UnwrapRef<typeof import('./resources/js/@core/utils/formatters.js')['formatDate']>
     readonly formatDateToMonthShort: UnwrapRef<typeof import('./resources/js/@core/utils/formatters.js')['formatDateToMonthShort']>
     readonly getActivePinia: UnwrapRef<typeof import('pinia')['getActivePinia']>
@@ -485,6 +499,7 @@ declare module 'vue' {
     readonly passwordValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['passwordValidator']>
     readonly pausableWatch: UnwrapRef<typeof import('@vueuse/core')['pausableWatch']>
     readonly prefixWithPlus: UnwrapRef<typeof import('./resources/js/@core/utils/formatters.js')['prefixWithPlus']>
+    readonly previewOf: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['previewOf']>
     readonly provide: UnwrapRef<typeof import('vue')['provide']>
     readonly provideLocal: UnwrapRef<typeof import('@vueuse/core')['provideLocal']>
     readonly reactify: UnwrapRef<typeof import('@vueuse/core')['reactify']>
@@ -520,6 +535,7 @@ declare module 'vue' {
     readonly textToHtml: UnwrapRef<typeof import('./Modules/WritingStyle/resources/js/utils/sampleText.js')['textToHtml']>
     readonly throttledRef: UnwrapRef<typeof import('@vueuse/core')['throttledRef']>
     readonly throttledWatch: UnwrapRef<typeof import('@vueuse/core')['throttledWatch']>
+    readonly thumbOf: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['thumbOf']>
     readonly toRaw: UnwrapRef<typeof import('vue')['toRaw']>
     readonly toReactive: UnwrapRef<typeof import('@vueuse/core')['toReactive']>
     readonly toRef: UnwrapRef<typeof import('vue')['toRef']>
