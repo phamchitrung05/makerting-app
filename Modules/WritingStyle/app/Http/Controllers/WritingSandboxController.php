@@ -224,17 +224,18 @@ class WritingSandboxController extends Controller
      */
     public function saveSample(Request $request, WritingProfile $writingProfile)
     {
+        $cfg = config('writingstyle.brief.sandbox_samples', []);
         $data = $request->validate([
             ...WritingBrief::rules(),
-            'id'                 => ['nullable', 'string', 'max:100'],
-            'topic'              => ['required', 'string', 'max:500'],
+            'id'                 => ['nullable', 'string', 'max:'.($cfg['id_max'] ?? 100)],
+            'topic'              => ['required', 'string', 'max:'.($cfg['topic_max'] ?? 500)],
             'target_tier'        => ['nullable', 'string', 'in:micro,short,medium,long'],
             'status'             => ['nullable', 'string', 'in:in_progress,completed'],
             'current_step_index' => ['nullable', 'integer', 'min:0'],
             'steps'              => ['nullable', 'array'],
             'artifacts'          => ['nullable', 'array'],
-            'text'               => ['nullable', 'string', 'max:50000'],
-            'system_prompt'      => ['nullable', 'string', 'max:50000'],
+            'text'               => ['nullable', 'string', 'max:'.($cfg['text_max'] ?? 50000)],
+            'system_prompt'      => ['nullable', 'string', 'max:'.($cfg['text_max'] ?? 50000)],
         ]);
 
         $samples = is_array($writingProfile->sandbox_samples_json)
@@ -276,8 +277,9 @@ class WritingSandboxController extends Controller
             array_unshift($samples, $newSample);
         }
 
-        // Giữ tối đa 30 bản viết thử gần nhất để tối ưu dung lượng JSON
-        $samples = array_slice(array_values($samples), 0, 30);
+        // Giữ tối đa N bản viết thử gần nhất — đọc từ config để chỉnh không sửa code
+        $maxSamples = (int) (config('writingstyle.brief.sandbox_samples.max_items') ?? 30);
+        $samples = array_slice(array_values($samples), 0, $maxSamples);
 
         $writingProfile->update([
             'sandbox_samples_json' => $samples,

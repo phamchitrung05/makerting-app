@@ -102,12 +102,29 @@ class WritingProfileController extends Controller
     public function options()
     {
         $tiers = [];
+        $prevS = 0;
+        $prevW = 0;
         foreach (WritingProfile::TIERS as $t) {
+            $maxS = (int) config("writingstyle.tiers.{$t}.max_sentences", PHP_INT_MAX);
+            $maxW = (int) config("writingstyle.tiers.{$t}.max_words", PHP_INT_MAX);
+
+            // Ngưỡng phân loại mẫu (detectTier) — FE hiển thị trực tiếp
+            // trong "Cấp độ tự nhận diện" mà không cần tự suy ngưỡng.
+            $hint = $maxS === PHP_INT_MAX
+                ? "> {$prevS} câu hoặc > {$prevW} từ"
+                : "≤ {$maxS} câu hoặc ≤ {$maxW} từ";
+
             $tiers[] = [
                 'value'         => $t,
                 'label'         => config("writingstyle.tiers.{$t}.label", $t),
                 'sentence_hint' => WritingBrief::fromInput('', $t, [])->lengthHint(),
+                // Ngưỡng phân loại từ config — FE chỉ hiển thị, không tự tính.
+                'hint'          => $hint,
+                'max_sentences' => $maxS,
+                'max_words'     => $maxW,
             ];
+            $prevS = $maxS;
+            $prevW = $maxW;
         }
 
         // Câu hỏi DNA lấy từ prompt pack (15 khóa quan sát); `uncertainties`

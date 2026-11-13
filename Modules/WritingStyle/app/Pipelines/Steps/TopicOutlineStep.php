@@ -334,7 +334,7 @@ class TopicOutlineStep implements SandboxStepContract
         $system = PromptPack::role('planner', $brief->data['content_type'] ?? null);
         $prompt = PromptPack::json(['brief' => $brief->data, 'style_summary' => $snapshot->styleSummary]);
         PromptPack::checkContext($system, $prompt);
-        $options = ['temperature' => PromptPack::temperature('planner'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096), 'timeout' => 180];
+        $options = ['temperature' => PromptPack::temperature('planner'), 'max_tokens' => (int) PromptPack::limit('max_output_tokens', 4096), 'timeout' => (int) config('writingstyle.pipeline.ai.topic_outline_timeout', 180)];
         $response = $this->ai->executeStructured(AiStructuredRequest::fromPrompt(
             $prompt,
             system: $system,

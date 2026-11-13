@@ -171,8 +171,9 @@ class WritingBriefSuggestService
             schema: $this->schema(),
             options: [
                 'temperature' => PromptPack::temperature('brief_writer', 0.4),
-                'max_tokens'  => 800,
-                'timeout'     => 60,
+                // max_tokens/timeout đọc từ config('writingstyle.brief.suggest.*')
+                'max_tokens'  => (int) config('writingstyle.brief.suggest.max_tokens', 800),
+                'timeout'     => (int) config('writingstyle.brief.suggest.timeout', 60),
             ],
             module: 'writingstyle',
             operation: 'sandbox_brief_suggest',

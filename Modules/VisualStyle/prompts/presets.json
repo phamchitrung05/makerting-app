@@ -1,0 +1,39 @@
+{
+  "shot_presets": [
+    {
+      "code": "hero",
+      "name": "Hero — Ảnh chủ đạo",
+      "description": "Ảnh chính đại diện thương hiệu, chất ảnh đầy đủ DNA, không override",
+      "suggested_aspect_ratio": "16:9",
+      "sort_order": 0
+    },
+    {
+      "code": "thumbnail",
+      "name": "Thumbnail — Ảnh bìa",
+      "description": "Ảnh bìa bài viết/video: tương phản cao, chủ thể nổi giữa khung",
+      "suggested_aspect_ratio": "16:9",
+      "sort_order": 10
+    },
+    {
+      "code": "social_feed",
+      "name": "Social Feed — Ảnh đăng mạng xã hội",
+      "description": "Tỷ lệ dọc nhẹ cho Facebook/Instagram feed, không khí sáng",
+      "suggested_aspect_ratio": "4:5",
+      "sort_order": 20
+    },
+    {
+      "code": "story",
+      "name": "Story — Ảnh dọc màn hình",
+      "description": "9:16 cho Reels/Shorts/TikTok bối cảnh, chủ thể đứng giữa",
+      "suggested_aspect_ratio": "9:16",
+      "sort_order": 30
+    },
+    {
+      "code": "b_roll",
+      "name": "B-Roll — Ảnh nền phụ",
+      "description": "Chi tiết cận cảnh hỗ trợ kể chuyện, bokeh hậu cảnh",
+      "suggested_aspect_ratio": "16:9",
+      "sort_order": 40
+    }
+  ]
+}

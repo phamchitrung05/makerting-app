@@ -72,7 +72,7 @@ final readonly class WritingBrief
         $fields = (array) self::config('fields', []);
         $facts = (array) self::config('provided_facts', []);
         $details = (array) self::config('required_details', []);
-        $requiredFields = (array) self::config('required_fields', []);
+        $requiredFields = (array) self::config('required_fields.allowed_keys', []);
         $constraints = (array) self::config('constraints', []);
         $lengthMin = (int) self::config('length.min', 1);
         $lengthMax = (int) self::config('length.max_words', 2000);
@@ -138,14 +138,16 @@ final readonly class WritingBrief
      * =====================================================================
      * CHỨC NĂNG: Giới hạn số ký tự của chủ đề
      * =====================================================================
-     * OUTPUT: array{min:int, max:int}.
+     * OUTPUT: array{min:int, max:int} — đọc writingstyle.brief.fields.topic.
      * =====================================================================
      */
     public static function topicLimits(): array
     {
+        $topic = (array) self::config('fields.topic', []);
+
         return [
-            'min' => (int) self::config('topic.min', 3),
-            'max' => (int) self::config('topic.max', 2000),
+            'min' => (int) ($topic['min'] ?? 3),
+            'max' => (int) ($topic['max'] ?? 2000),
         ];
     }
 
@@ -162,14 +164,15 @@ final readonly class WritingBrief
     public static function requestRules(array $topicPresence): array
     {
         $topic = self::topicLimits();
+        $ts = (array) self::config('length.target_sentences', []);
 
         return [
             'topic' => [...$topicPresence, 'string', 'min:'.$topic['min'], 'max:'.$topic['max']],
             'target_sentences' => [
                 'nullable',
                 'integer',
-                'min:'.(int) self::config('target_sentences.min', 1),
-                'max:'.(int) self::config('target_sentences.max', 200),
+                'min:'.(int) ($ts['min'] ?? 1),
+                'max:'.(int) ($ts['max'] ?? 200),
             ],
         ];
     }
@@ -239,7 +242,12 @@ final readonly class WritingBrief
             'constraints' => array_values($input['constraints'] ?? []),
         ];
         $missing = array_values(array_filter($input['required_fields'] ?? [], static fn (string $key) => blank($data[$key] ?? null)));
-        $supplied = implode("\n", [$topic, $data['offer'] ?? '', $data['cta'] ?? '', ...array_column($facts, 'text')]);
+        // $supplied = nội dung "có" — gồm topic + offer + cta + text facts +
+        // required_details (chi tiết người dùng khai báo bắt buộc xuất hiện
+        // trong bài). Cho phép người dùng gõ thêm chi tiết mới trực tiếp
+        // ở ô "Chi tiết bắt buộc xuất hiện" thay vì chỉ khóa lại chi tiết
+        // đã nêu ở facts/offer/cta.
+        $supplied = implode("\n", [$topic, $data['offer'] ?? '', $data['cta'] ?? '', ...array_column($facts, 'text'), ...$data['required_details']]);
         foreach ($data['required_details'] as $detail) {
             if (mb_stripos($supplied, $detail) === false) {
                 $missing[] = $detail;

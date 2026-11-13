@@ -319,8 +319,8 @@ class ArticleWriterStep implements SandboxStepContract
         $options = ['temperature' => $temperature];
         $options['max_tokens'] = (int) PromptPack::limit('max_output_tokens', 4096);
         // Timeout HTTP đủ lớn để AI hoàn tất bài dài (long có thể ~3.000 tokens
-        // mất >120s — provider default 120s là nguyên nhân timeout cắt giữa).
-        $options['timeout'] = 180;
+        // mất >120s — đọc từ config để chỉnh không sửa code).
+        $options['timeout'] = (int) config('writingstyle.pipeline.ai.article_writer_timeout', 180);
         PromptPack::checkContext($snapshot->systemPrompt, $userPrompt);
 
         $resp = $this->ai->executeStructured(

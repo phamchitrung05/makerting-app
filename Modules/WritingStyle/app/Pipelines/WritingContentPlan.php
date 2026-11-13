@@ -121,25 +121,31 @@ final class WritingContentPlan
      */
     public static function validate(array $artifact, WritingBrief $brief): array
     {
+        $p = config('writingstyle.pipeline.plan', []);
+        $max = static fn (string $key, int $default): string => 'max:'.(int) ($p[$key] ?? $default);
+        $maxLen = (int) ($p['meta_item_max'] ?? 500);
+        $budgetMin = (int) ($p['length_budget']['min'] ?? 1);
+        $budgetMax = (int) ($p['length_budget']['max'] ?? 2000);
+
         $data = Validator::make($artifact, [
-            'central_message' => ['required', 'string', 'max:800'],
-            'target_angle' => ['required', 'string', 'max:800'],
-            'structure_type' => ['required', 'string', 'max:120'],
-            'sections' => ['required', 'array', 'max:12'],
+            'central_message' => ['required', 'string', $max('central_message_max', 800)],
+            'target_angle' => ['required', 'string', $max('target_angle_max', 800)],
+            'structure_type' => ['required', 'string', $max('structure_type_max', 120)],
+            'sections' => ['required', 'array', $max('sections_max', 12)],
             'sections.*' => ['required', 'array:id,parent_id,role,heading_level,title,key_points,fact_ids,length_budget'],
-            'sections.*.id' => ['required', 'string', 'max:40', 'distinct'],
-            'sections.*.parent_id' => ['present', 'nullable', 'string', 'max:40'],
-            'sections.*.role' => ['required', 'string', 'max:80'],
+            'sections.*.id' => ['required', 'string', $max('section_id_max', 40), 'distinct'],
+            'sections.*.parent_id' => ['present', 'nullable', 'string', $max('section_id_max', 40)],
+            'sections.*.role' => ['required', 'string', $max('role_max', 80)],
             'sections.*.heading_level' => ['present', 'nullable', 'integer', 'in:2,3'],
-            'sections.*.title' => ['required', 'string', 'max:200'],
-            'sections.*.key_points' => ['required', 'array', 'max:8'],
-            'sections.*.key_points.*' => ['string', 'max:350'],
-            'sections.*.fact_ids' => ['present', 'array', 'max:30'],
-            'sections.*.fact_ids.*' => ['string', 'max:40'],
-            'sections.*.length_budget' => ['required', 'integer', 'between:1,2000'],
-            'evidence_requests' => ['present', 'array', 'max:12'],
-            'missing_fields' => ['present', 'array', 'max:12'],
-            'warnings' => ['present', 'array', 'max:12'],
+            'sections.*.title' => ['required', 'string', $max('title_max', 200)],
+            'sections.*.key_points' => ['required', 'array', $max('key_points_max', 8)],
+            'sections.*.key_points.*' => ['string', $max('key_point_max', 350)],
+            'sections.*.fact_ids' => ['present', 'array', $max('fact_ids_max', 30)],
+            'sections.*.fact_ids.*' => ['string', $max('fact_id_max', 40)],
+            'sections.*.length_budget' => ['required', 'integer', "between:{$budgetMin},{$budgetMax}"],
+            'evidence_requests' => ['present', 'array', $max('evidence_requests_max', 12)],
+            'missing_fields' => ['present', 'array', $max('missing_fields_max', 12)],
+            'warnings' => ['present', 'array', $max('warnings_max', 12)],
         ])->validate();
 
         // Các trường metadata cảnh báo (không phải nội dung writer cần) —
@@ -149,7 +155,7 @@ final class WritingContentPlan
             $items = (array) ($data[$metaKey] ?? []);
             Validator::make(['items' => $items], ['items.*' => ['string']])->validate();
             $data[$metaKey] = array_map(
-                static fn ($item) => mb_substr((string) $item, 0, 500),
+                static fn ($item) => mb_substr((string) $item, 0, $maxLen),
                 $items,
             );
         }

@@ -52,12 +52,19 @@ return [
      * 4 cấp độ độ dài (LengthTier) — bảng định nghĩa dùng chung.
      * label = tên hiển thị tiếng Việt trả cho FE (GET /options.tiers).
      * Khoảng độ dài ĐÍCH khi viết nằm trong prompt pack (v3.lengths).
+     *
+     * Ngưỡng PHÂN LOẠI bài mẫu (detectTier) theo số câu (ưu tiên) / số từ
+     * (fallback khi không tách được câu). Khớp bảng trong detectTier():
+     *   micro : ≤ 3 câu  HOẶC ≤ 59 từ   (status, caption, hook)
+     *   short : ≤ 10 câu HOẶC ≤ 180 từ  (FB ngắn, Threads, ad copy)
+     *   medium: ≤ 30 câu HOẶC ≤ 600 từ  (storytelling, kịch bản 60s)
+     *   long  : > 30 câu HOẶC > 600 từ  (blog, báo chí, kịch bản dài)
      * --------------------------------------------------------------------- */
     'tiers' => [
-        'micro'  => ['label' => 'Micro — Cực ngắn'],
-        'short'  => ['label' => 'Short — Ngắn'],
-        'medium' => ['label' => 'Medium — Trung bình'],
-        'long'   => ['label' => 'Long — Dài'],
+        'micro'  => ['label' => 'Micro — Cực ngắn',     'max_sentences' => 3,  'max_words' => 59],
+        'short'  => ['label' => 'Short — Ngắn',         'max_sentences' => 10, 'max_words' => 180],
+        'medium' => ['label' => 'Medium — Trung bình',  'max_sentences' => 30, 'max_words' => 600],
+        'long'   => ['label' => 'Long — Dài',           'max_sentences' => PHP_INT_MAX, 'max_words' => PHP_INT_MAX],
     ],
 
     /* Số ngày giữ bản ghi phân tích trước khi cleanup (bảo mật text mẫu). */

@@ -138,10 +138,10 @@ const STRUCTURE_RULE_KEYS = [
  * CẤP ĐỘ ĐỘ DÀI (LengthTier) — nạp từ GET /writing-profiles/options.
  * ------------------------------------------------------------------- */
 const TIER_OPTIONS_FALLBACK = [
-  { title: 'Micro — Cực ngắn (1–3 câu, < 60 từ)', value: 'micro', hint: '2–3 câu', color: 'error' },
-  { title: 'Short — Ngắn (4–10 câu, 60–180 từ)', value: 'short', hint: '3–4 câu', color: 'warning' },
-  { title: 'Medium — Trung bình (11–30 câu, 180–600 từ)', value: 'medium', hint: '20–30 câu', color: 'info' },
-  { title: 'Long — Bài dài (> 30 câu, > 600 từ)', value: 'long', hint: 'bài dài (phân đoạn rõ ràng)', color: 'primary' },
+  { title: 'Micro — Cực ngắn (1–3 câu, < 60 từ)',      value: 'micro',  hint: '≤ 3 câu hoặc ≤ 59 từ',     color: 'error',   max_sentences: 3,  max_words: 59 },
+  { title: 'Short — Ngắn (4–10 câu, 60–180 từ)',      value: 'short',  hint: '≤ 10 câu hoặc ≤ 180 từ',   color: 'warning', max_sentences: 10, max_words: 180 },
+  { title: 'Medium — Trung bình (11–30 câu, 180–600 từ)', value: 'medium', hint: '≤ 30 câu hoặc ≤ 600 từ',  color: 'info',    max_sentences: 30, max_words: 600 },
+  { title: 'Long — Bài dài (> 30 câu, > 600 từ)',     value: 'long',   hint: '> 30 câu hoặc > 600 từ',   color: 'primary', max_sentences: Number.MAX_SAFE_INTEGER, max_words: Number.MAX_SAFE_INTEGER },
 ]
 
 const TIER_COLOR = Object.fromEntries(
@@ -156,8 +156,12 @@ const tierOptions = computed(() => {
   return apiTiers.map(t => ({
     value: t.value,
     title: t.label ?? t.value,
-    hint: t.sentence_hint ?? '',
+    hint: t.hint ?? t.sentence_hint ?? '',
     color: TIER_COLOR[t.value] ?? 'secondary',
+    // Ngưỡng phân loại mẫu từ config backend (detectTier) — nếu API cũ
+    // chưa trả thì fallback về ngưỡng của TIER_OPTIONS_FALLBACK.
+    max_sentences: t.max_sentences ?? TIER_OPTIONS_FALLBACK.find(f => f.value === t.value)?.max_sentences ?? Number.MAX_SAFE_INTEGER,
+    max_words: t.max_words ?? TIER_OPTIONS_FALLBACK.find(f => f.value === t.value)?.max_words ?? Number.MAX_SAFE_INTEGER,
   }))
 })
 
@@ -209,15 +213,34 @@ const sentenceCount = computed(() => {
 const detectedTier = computed(() => {
   const s = sentenceCount.value
   const w = wordCount.value
-  if (s <= 1 && w >= 60) {
-    if (w <= 180) return 'short'
-    if (w <= 600) return 'medium'
+
+  // Ngưỡng lấy từ config backend qua GET /options (store.tiers), fallback
+  // TIER_OPTIONS_FALLBACK nếu API cũ chưa trả max_sentences/max_words.
+  const thresh = tierOptions.value.find(t => t.value === 'micro')
+    ? tierOptions.value
+    : TIER_OPTIONS_FALLBACK
+
+  const get = tier => thresh.find(t => t.value === tier) ?? TIER_OPTIONS_FALLBACK.find(t => t.value === tier) ?? {}
+  const microMaxS = get('micro').max_sentences ?? 3
+  const shortMaxS = get('short').max_sentences ?? 10
+  const mediumMaxS = get('medium').max_sentences ?? 30
+  const microMaxW = get('micro').max_words ?? 59
+  const shortMaxW = get('short').max_words ?? 180
+  const mediumMaxW = get('medium').max_words ?? 600
+
+  // Text không dấu câu (0/1 câu) nhưng rất dài theo từ — phân theo từ.
+  // Ngưỡng bùng nổ = "đủ lớn để không còn là micro" (micro.max_words + 1).
+  if (s <= 1 && w > microMaxW) {
+    if (w <= shortMaxW) return 'short'
+    if (w <= mediumMaxW) return 'medium'
 
     return 'long'
   }
-  if (s <= 3) return 'micro'
-  if (s <= 10) return 'short'
-  if (s <= 30) return 'medium'
+
+  // Phân theo số câu — khớp detectTier() backend.
+  if (s <= microMaxS) return 'micro'
+  if (s <= shortMaxS) return 'short'
+  if (s <= mediumMaxS) return 'medium'
 
   return 'long'
 })
@@ -1422,7 +1445,7 @@ onBeforeUnmount(() => {
                         v-if="wordCount > 0"
                         class="text-caption text-primary font-weight-medium"
                       >
-                        LengthTier: {{ detectedTier }}
+                        LengthTier: {{ detectedTier }} ({{ detectedTierMeta.hint }})
                       </span>
                     </div>
                     <div class="d-flex align-center gap-2">

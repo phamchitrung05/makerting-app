@@ -94,22 +94,38 @@ class WritingProfileDefinition
         $sentences = self::countSentences($referenceText);
         $words = self::countWords($referenceText);
 
+        // Ngưỡng phân tầng đọc từ config('writingstyle.tiers'); fallback
+        // về đúng giá trị mặc định khi config chưa nạp (unit test, artisan).
+        $t = (array) config('writingstyle.tiers', []);
+        $maxS = static fn (string $tier, int $default): int =>
+            (int) ($t[$tier]['max_sentences'] ?? $default);
+        $maxW = static fn (string $tier, int $default): int =>
+            (int) ($t[$tier]['max_words'] ?? $default);
+
+        $microMaxS  = $maxS(WritingProfile::TIER_MICRO, 3);
+        $shortMaxS  = $maxS(WritingProfile::TIER_SHORT, 10);
+        $mediumMaxS = $maxS(WritingProfile::TIER_MEDIUM, 30);
+        $microMaxW  = $maxW(WritingProfile::TIER_MICRO, 59);
+        $shortMaxW  = $maxW(WritingProfile::TIER_SHORT, 180);
+        $mediumMaxW = $maxW(WritingProfile::TIER_MEDIUM, 600);
+
         // Khi không tách được câu (0/1 câu do không dấu câu) nhưng text rất
         // dài theo từ — phân theo từ để tránh ép vào micro sai.
-        if ($sentences <= 1 && $words >= 60) {
+        // Ngưỡng bùng nổ = "đủ lớn để không còn là micro" (micro.max_words+1).
+        if ($sentences <= 1 && $words > $microMaxW) {
             return match (true) {
-                $words <= 180  => WritingProfile::TIER_SHORT,
-                $words <= 600  => WritingProfile::TIER_MEDIUM,
-                default        => WritingProfile::TIER_LONG,
+                $words <= $shortMaxW  => WritingProfile::TIER_SHORT,
+                $words <= $mediumMaxW => WritingProfile::TIER_MEDIUM,
+                default               => WritingProfile::TIER_LONG,
             };
         }
 
         // Phân theo số câu — đường biên khớp config('writingstyle.tiers').
         return match (true) {
-            $sentences <= 3  => WritingProfile::TIER_MICRO,
-            $sentences <= 10 => WritingProfile::TIER_SHORT,
-            $sentences <= 30 => WritingProfile::TIER_MEDIUM,
-            default          => WritingProfile::TIER_LONG,
+            $sentences <= $microMaxS  => WritingProfile::TIER_MICRO,
+            $sentences <= $shortMaxS  => WritingProfile::TIER_SHORT,
+            $sentences <= $mediumMaxS => WritingProfile::TIER_MEDIUM,
+            default                    => WritingProfile::TIER_LONG,
         };
     }
 

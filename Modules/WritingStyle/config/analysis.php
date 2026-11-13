@@ -10,10 +10,12 @@
  * tách văn bản từ URL công khai, thông số gọi AI giải mã (Prompt Pack V3),
  * quy tắc chuẩn hóa kết quả AI và cấu hình job xử lý bất đồng bộ.
  *
- * Mỗi key trong file đều có chú thích chi tiết ứng với field request,
- * tham số crawler hoặc thuộc tính cấu trúc DNA.
- *
  * Truy cập bằng: config('writingstyle.analysis.*')
+ *
+ * Cách đọc comment trong file này:
+ *   Field: 'tên_trường' — đây là trường THẬT trong request, DB hoặc artifact
+ *   mà giá trị cấu hình này ảnh hưởng đến. Thay đổi = đổi giới hạn/tham số
+ *   của đúng field đó.
  *
  * Sau khi thay đổi trên môi trường production đã cache config, chạy:
  *   php artisan config:clear
@@ -76,7 +78,7 @@ return [
      * --------------------------------------------------------------------- */
 
     'ai_request' => [
-        // Thời gian timeout tối đa cho lời gọi AI giải mã (giây)
+        // Field: request 'options.timeout' — Thời gian chờ HTTP của lời gọi AI giải mã (giây)
         'timeout' => 180,
 
         // Hệ số nhân cho max_output_tokens so với limit cơ sở của PromptPack (4096 * 2 = 8192)
@@ -137,10 +139,10 @@ return [
      * --------------------------------------------------------------------- */
 
     'job' => [
-        // Timeout tối đa của job giải mã trong hàng đợi (giây)
+        // Field: job $timeout — Timeout tối đa của job giải mã trong hàng đợi (giây)
         'timeout' => 300,
 
-        // Số lần thử lại tối đa khi gặp lỗi tạm thời (transient error: mạng, timeout, rate limit)
+        // Field: job $tries — Số lần thử lại tối đa khi gặp lỗi tạm thời (transient error)
         'tries' => 2,
     ],
 

@@ -294,10 +294,32 @@ class WritingPromptPackTest extends TestCase
      * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
      * =====================================================================
      */
-    public function test_brief_rejects_required_information_absent_from_provided_facts(): void
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng required_details được chấp nhận khi đã nêu trong
+     * các nguồn khác (topic/offer/cta/facts) hoặc tự khai báo ở chính ô đó.
+     * =====================================================================
+     *
+     * Trước: required_details phải xuất hiện trong nguồn khác — gõ mới ở ô
+     * "Chi tiết bắt buộc xuất hiện" bị missing_fields. Sau: người dùng có
+     * thể tự khai báo chi tiết mới trực tiếp qua ô đó (writer được lệnh
+     * chêm vào bài), nên trường hợp này giờ hợp lệ.
+     * =====================================================================
+     */
+    public function test_brief_accepts_required_details_as_new_declared_details(): void
     {
-        $this->expectException(ValidationException::class);
-        WritingBrief::fromInput('Thiệp cưới', 'short', ['brief' => ['required_details' => ['Giá 80.000đ']]]);
+        // Chi tiết chưa nêu ở đâu khác — người dùng tự khai báo.
+        $brief = WritingBrief::fromInput('Thiệp cưới', 'short', ['brief' => ['required_details' => ['Malibu Print']]]);
+        $this->assertSame(['Malibu Print'], $brief->data['required_details']);
+
+        // Chi tiết đã nêu ở provided_facts — vẫn hợp lệ (giữ hành vi cũ).
+        $brief = WritingBrief::fromInput('Thiệp cưới', 'short', [
+            'brief' => [
+                'provided_facts' => [['id' => 'f1', 'text' => 'Có dịch vụ Malibu Print']],
+                'required_details' => ['Malibu Print'],
+            ],
+        ]);
+        $this->assertSame(['Malibu Print'], $brief->data['required_details']);
     }
 
     /**
