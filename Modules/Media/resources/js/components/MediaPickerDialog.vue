@@ -262,7 +262,7 @@ defineExpose({ open, close })
                 >
                   <AppSelect
                     v-model="folderFilter"
-                    :items="[{ title: 'Tất cả thư mục', value: '' }, ...store.folders.map(f => ({ title: f, value: f }))]"
+                    :items="[{ title: 'Tất cả thư mục', value: '' }, ...store.folders.map(f => ({ title: f?.name ?? f, value: f?.name ?? f }))]"
                     placeholder="Thư mục"
                     hide-details
                   />

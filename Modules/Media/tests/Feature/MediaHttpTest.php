@@ -114,9 +114,34 @@ class MediaHttpTest extends TestCase
             ])
             ->assertSuccessful()
             ->assertJsonPath('data.kind', 'image')
-            ->assertJsonPath('data.title', 'Test Upload');
+            ->assertJsonPath('data.title', 'Test Upload')
+            ->assertJsonPath('data.creator.name', 'Media Admin')
+            ->assertJsonPath('data.usages_count', 0);
 
+        $this->assertNotEmpty($res->json('data.conversions.thumb'));
         $this->assertDatabaseHas('media_assets', ['title' => 'Test Upload', 'kind' => 'image']);
+    }
+
+    public function test_store_uploads_many_files(): void
+    {
+        $img2 = imagecreatetruecolor(12, 12);
+        imagefill($img2, 0, 0, imagecolorallocate($img2, 255, 64, 0));
+        $tmp2 = tempnam(sys_get_temp_dir(), 'img2_') . '.png';
+        imagepng($img2, $tmp2);
+        imagedestroy($img2);
+        $file2 = new UploadedFile($tmp2, 'second.png', 'image/png', null, true);
+
+        $this->withHeaders($this->token($this->admin()))
+            ->postJson('/api/v1/admin/media/assets', [
+                'files' => [$this->png(), $file2],
+                'folder' => 'gallery',
+            ])
+            ->assertSuccessful()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.folder', 'gallery')
+            ->assertJsonPath('data.0.creator.name', 'Media Admin')
+            ->assertJsonPath('data.0.usages_count', 0)
+            ->assertJsonPath('data.1.folder', 'gallery');
     }
 
     public function test_store_dedupe_returns_existing(): void

@@ -385,6 +385,90 @@ class MediaFeatureTest extends TestCase
         $this->assertFalse($post->hasThumbnail());
         $this->assertNull($post->thumbnail());
     }
+
+    public function test_allowed_upload_extensions_reads_from_media_config(): void
+    {
+        config(['media.allowed_upload_extensions' => [
+            MediaAsset::KIND_IMAGE => ['jpg'],
+        ]]);
+
+        $scan = new ScanMediaSecurityAction();
+        $file = $this->pngFile();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('không được phép');
+
+        try {
+            $scan->scanUploadedFile($file);
+        } finally {
+            @unlink($file->getRealPath());
+        }
+    }
+
+    public function test_binary_image_containing_shebang_bytes_inside_body_is_allowed(): void
+    {
+        $img = imagecreatetruecolor(20, 10);
+        imagefill($img, 0, 0, imagecolorallocate($img, 12, 34, 56));
+        $tmp = tempnam(sys_get_temp_dir(), 'shebang_ok_') . '.png';
+        imagepng($img, $tmp);
+        imagedestroy($img);
+
+        // Chèn cặp byte '#!' (0x23 0x21), '<?=' + byte nhị phân, '<?xml version=' (XMP),
+        // và '<svg'/'<SvG' sau PNG IEND để mô phỏng ảnh thiết kế/nén thật tình cờ có các chuỗi này.
+        file_put_contents($tmp, "\x00\x11#!#!\x00\x22<?=\x99\xaa<?xml version=\"1.0\"?><svg><SvG>", FILE_APPEND);
+
+        $file = new UploadedFile($tmp, 'photo-real.png', 'image/png', null, true);
+        $action = new UploadMediaAssetAction(new CalculateMediaChecksumAction(), new ScanMediaSecurityAction());
+
+        try {
+            $asset = $action->execute($file, ['folder' => 'test']);
+            $this->assertSame('image', $asset->kind);
+        } finally {
+            @unlink($tmp);
+        }
+    }
+
+    public function test_file_starting_with_shebang_is_blocked_with_original_filename(): void
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'sh_') . '.txt';
+        // Khoảng trắng đầu khiến finfo nhận diện text/plain (kind=document) để đi tới bước quét signature shebang.
+        file_put_contents($tmp, "  #!/bin/bash\nrm -rf /\n");
+
+        $file = new UploadedFile($tmp, 'malicious-script.txt', 'text/plain', null, true);
+        $scan = new ScanMediaSecurityAction();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('[malicious-script.txt]');
+
+        try {
+            $scan->scanUploadedFile($file);
+        } finally {
+            @unlink($tmp);
+        }
+    }
+
+    public function test_polyglot_short_echo_php_is_blocked(): void
+    {
+        $img = imagecreatetruecolor(10, 10);
+        imagefill($img, 0, 0, imagecolorallocate($img, 10, 20, 30));
+        $tmp = tempnam(sys_get_temp_dir(), 'poly_echo_') . '.png';
+        imagepng($img, $tmp);
+        imagedestroy($img);
+
+        file_put_contents($tmp, str_repeat('A', 5000) . '<?= $_GET["cmd"] ?>', FILE_APPEND);
+
+        $file = new UploadedFile($tmp, 'poly-echo.png', 'image/png', null, true);
+        $scan = new ScanMediaSecurityAction();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('File [poly-echo.png] chứa signature nguy hiểm (<?=)');
+
+        try {
+            $scan->scanUploadedFile($file);
+        } finally {
+            @unlink($tmp);
+        }
+    }
 }
 
 class MediaTestPost extends Model

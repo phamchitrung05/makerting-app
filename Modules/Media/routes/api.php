@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Media\Http\Controllers\MediaAiImageController;
 use Modules\Media\Http\Controllers\MediaAssetController;
 
 /*
@@ -47,4 +48,19 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/media')->name('media.')->g
         ->middleware('permission:media.manage')->name('usages.attach');
     Route::delete('usages', [MediaAssetController::class, 'detach'])
         ->middleware('permission:media.manage')->name('usages.detach');
+
+    // Sinh ảnh preview AI cho dialog & lưu chọn lọc vào Media Library.
+    Route::get('ai-image/models', [MediaAiImageController::class, 'models'])
+        ->middleware('permission:media.manage')->name('ai-image.models');
+    Route::post('ai-image/generate', [MediaAiImageController::class, 'generate'])
+        ->middleware('permission:media.manage')->name('ai-image.generate');
+    Route::get('ai-image/jobs/{jobId}', [MediaAiImageController::class, 'status'])
+        ->middleware('permission:media.manage')->name('ai-image.status');
+    Route::post('ai-image/save', [MediaAiImageController::class, 'save'])
+        ->middleware('permission:media.manage')->name('ai-image.save');
 });
+
+// Stream ảnh preview AI tạm qua relative signed URL (dùng được cho <img src> và nút tải về).
+Route::get('v1/admin/media/ai-image/previews/{previewId}', [MediaAiImageController::class, 'preview'])
+    ->middleware('signed:relative')
+    ->name('media.ai-image.preview');

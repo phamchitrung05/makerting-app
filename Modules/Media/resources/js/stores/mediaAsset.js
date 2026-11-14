@@ -163,35 +163,46 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
       this.refresh()
     },
 
-    /* Upload 1 file; nếu dedupe trả asset cũ (id trùng) -> update item thay vì prepend. */
-    async upload(file, options = {}) {
-      const asset = await mediaApi.upload(file, options)
-      const idx = this.items.findIndex(i => i.id === asset.id)
+    /* Đưa asset mới upload (hoặc vừa dedupe) lên đầu danh sách cột giữa. */
+    prependUploaded(uploadedAssets) {
+      const list = Array.isArray(uploadedAssets) ? uploadedAssets : [uploadedAssets]
+      const limit = Number(this.pagination.itemsPerPage) || 0
 
-      if (idx >= 0) {
-        this.items.splice(idx, 1, asset)
-      } else {
+      // Duyệt ngược để phần tử đầu mảng upload đứng ở vị trí 0.
+      for (const asset of [...list].reverse()) {
+        if (!asset?.id)
+          continue
+
+        const idx = this.items.findIndex(i => i.id === asset.id)
+        if (idx >= 0) {
+          this.items.splice(idx, 1)
+        } else {
+          this.total++
+        }
+
         this.items.unshift(asset)
-        this.total++
       }
+
+      if (limit > 0 && this.items.length > limit)
+        this.items.length = limit
+    },
+
+    /* Upload 1 file; mặc định đưa ngay vào đầu danh sách items (có thể trì hoãn qua prepend=false). */
+    async upload(file, options = {}, { prepend = true } = {}) {
+      const asset = await mediaApi.upload(file, options)
+
+      if (prepend)
+        this.prependUploaded(asset)
 
       return asset
     },
 
-    /* Upload nhiều file -> prepend mảng. */
-    async uploadMany(files, options = {}) {
+    /* Upload nhiều file -> mặc định đưa vào đầu danh sách items (có thể trì hoãn qua prepend=false). */
+    async uploadMany(files, options = {}, { prepend = true } = {}) {
       const assets = await mediaApi.uploadMany(files, options)
 
-      for (const asset of assets) {
-        const idx = this.items.findIndex(i => i.id === asset.id)
-
-        if (idx >= 0) {
-          this.items.splice(idx, 1, asset)
-        } else {
-          this.items.unshift(asset)
-          this.total++
-        }
-      }
+      if (prepend)
+        this.prependUploaded(assets)
 
       return assets
     },

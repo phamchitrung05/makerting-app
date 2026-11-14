@@ -15,6 +15,10 @@
  * - GET    /v1/admin/media/usages          -> usages() của model+slot
  * - POST   /v1/admin/media/usages          -> attach() gán media
  * - DELETE /v1/admin/media/usages          -> detach() gỡ media
+ * - GET    /v1/admin/media/ai-image/models -> aiImageModels() danh sách model AI tạo ảnh
+ * - POST   /v1/admin/media/ai-image/generate -> generateAiImages() dispatch job tạo ảnh
+ * - GET    /v1/admin/media/ai-image/jobs/{jobId} -> aiImageJobStatus() polling tiến độ
+ * - POST   /v1/admin/media/ai-image/save   -> saveAiImage() lưu preview vào thư viện
  *
  * upload() tự dựng FormData khi có File|Blob — còn lại dùng JSON body.
  * =====================================================================
@@ -122,5 +126,25 @@ export const mediaApi = {
   /* Gỡ media khỏi model — {linkable_type,linkable_id,slot,media_asset_ids?,detach_all?}. */
   detach(payload) {
     return $api(`${BASE}/usages`, { method: 'DELETE', body: payload })
+  },
+
+  /* Danh sách model AI khả dụng cho capability image_generation + default_model_id. */
+  aiImageModels() {
+    return $api(`${BASE}/ai-image/models`)
+  },
+
+  /* Khởi tạo job nền tạo ảnh preview AI (HTTP 202 Accepted) -> tracker job. */
+  generateAiImages(payload) {
+    return $api(`${BASE}/ai-image/generate`, { method: 'POST', body: payload })
+  },
+
+  /* Polling trạng thái & kết quả preview của job tạo ảnh AI. */
+  aiImageJobStatus(jobId) {
+    return $api(`${BASE}/ai-image/jobs/${encodeURIComponent(jobId)}`)
+  },
+
+  /* Lưu một ảnh preview AI tạm thành MediaAsset chính thức. */
+  saveAiImage(payload) {
+    return $api(`${BASE}/ai-image/save`, { method: 'POST', body: payload })
   },
 }

@@ -19,7 +19,8 @@
   - selectFolder(name)     : lọc theo folder (bật/tắt) -> store.setFilter.
   - onSelectFile(asset)    : chọn 1 asset trên lưới & mở lại cột chi tiết phải.
   - toggleSelected(asset)  : checkbox đa chọn trên thumbnail.
-  - onUploadClick/onFilesChosen : mở input file -> store.uploadMany.
+  - onUploadClick/onFilesChosen : mở input file -> uploadFiles (hỗ trợ cả kéo-thả vào cột giữa).
+  - uploadFiles(fileList)  : upload 1/nhiều file, đưa ngay vào đầu cột giữa & chọn xem chi tiết.
   - onDeleteSelected       : xóa nhiều asset (soft-delete).
   - syncScrollbarObservers : gắn ResizeObserver cập nhật PerfectScrollbar khi nội dung đổi.
   - pagedItems             : computed dùng trực tiếp store.items (server đã phân trang).
@@ -34,6 +35,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
+import { firstErrorMessage } from '@/utils/api'
+import AiGenerateImageDialog from '../components/AiGenerateImageDialog.vue'
 import { useMediaAssetStore } from '../stores/mediaAsset'
 import { extOf, fmtDate, fmtDuration, fmtSize, thumbOf } from '../utils/mediaFormat'
 import MediaDetailSidebar from '../views/MediaDetailSidebar.vue'
@@ -100,10 +103,23 @@ const selectedFile = ref(null)
 /* Checkbox đa chọn (Set id) — dùng cho action bar + chọn/xóa hàng loạt. */
 const selectedIds = ref(new Set())
 
-/* Đang upload/xóa — disable nút + spinner. */
+/* Đang upload/xóa — disable nút + spinner + placeholder card ở cột giữa. */
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 const uploading = ref(false)
+const uploadingFiles = ref([])
 const deleting = ref(false)
+const isAiGenerateDialogOpen = ref(false)
 const fileInput = ref(null)
+const isDraggingOver = ref(false)
+let dragCounter = 0
+
+const snackbar = ref({
+  show: false,
+  color: 'success',
+  text: '',
+})
+
+let suppressFilterWatch = false
 
 /* Ref tới vùng PerfectScrollbar của cột trái và lưới giữa để đồng bộ thanh cuộn. */
 const leftScrollRef = ref(null)
@@ -151,10 +167,15 @@ function syncScrollbarObservers() {
 let searchTimer = null
 watch(searchQuery, v => {
   clearTimeout(searchTimer)
+  if (suppressFilterWatch) return
   searchTimer = setTimeout(() => store.setFilter('search', v || ''), 350)
 })
-watch(kindFilter, v => store.setFilter('kind', v || ''))
+watch(kindFilter, v => {
+  if (suppressFilterWatch) return
+  store.setFilter('kind', v || '')
+})
 watch(sortFilter, v => {
+  if (suppressFilterWatch) return
   const map = { newest: ['id', 'desc'], oldest: ['id', 'asc'], name: ['title', 'asc'] }
   const [sortBy, orderBy] = map[v] || map.newest
 
@@ -263,6 +284,147 @@ const selectedAssets = computed(() => pagedItems.value.filter(f => selectedIds.v
 const selectedSizeText = computed(() => fmtSize(store.selectedSizeBytes(selectedAssets.value)))
 
 /* ============ ACTION: UPLOAD / DELETE / DOWNLOAD / SAVE ============ */
+function showNotice(text, color = 'success') {
+  snackbar.value = { show: true, color, text }
+}
+
+/* Kiểm tra sự kiện kéo-thả có mang file thật từ máy người dùng không. */
+function hasDragFiles(event) {
+  return Array.from(event?.dataTransfer?.types || []).includes('Files')
+}
+
+/* Đảm bảo bộ lọc & trang hiện tại cho phép asset vừa upload hiển thị ở đầu cột giữa. */
+async function syncViewAfterUpload(uploaded) {
+  if (!uploaded.length) {
+    uploadingFiles.value = []
+
+    return
+  }
+
+  const hasOnlyAiAssets = uploaded.every(a => Boolean(a?.ai_generation))
+
+  const incompatQuick = activeQuickFilter.value === 'trash'
+    || activeQuickFilter.value === 'shared'
+    || (activeQuickFilter.value === 'ai' && !hasOnlyAiAssets)
+
+  const incompatKind = Boolean(kindFilter.value && uploaded.some(a => a.kind !== kindFilter.value))
+  const incompatFolder = Boolean(activeFolder.value && uploaded.every(a => a.folder !== activeFolder.value))
+  const needsReset = incompatQuick || Boolean(searchQuery.value) || incompatKind || sortFilter.value !== 'newest' || store.pagination.page !== 1 || incompatFolder
+
+  if (needsReset) {
+    suppressFilterWatch = true
+    if (incompatQuick) {
+      activeQuickFilter.value = 'all'
+      store.filters.quick = ''
+      store.filters.trashed = ''
+    }
+    if (searchQuery.value) {
+      searchQuery.value = ''
+      store.filters.search = ''
+    }
+    if (incompatKind) {
+      kindFilter.value = ''
+      store.filters.kind = ''
+    }
+    if (sortFilter.value !== 'newest') {
+      sortFilter.value = 'newest'
+      store.pagination.sortBy = 'id'
+      store.pagination.orderBy = 'desc'
+    }
+    if (incompatFolder) {
+      activeFolder.value = ''
+      store.filters.folder = ''
+    }
+    store.pagination.page = 1
+    await nextTick()
+    suppressFilterWatch = false
+    await store.refresh()
+  }
+
+  // Hoán đổi đồng thời card loading -> card asset thật trong 1 tick render
+  // để không bao giờ hiện song song cả ô loading lẫn ô ảnh vừa tải lên.
+  store.prependUploaded(uploaded)
+  uploadingFiles.value = []
+  selectedFile.value = uploaded[0]
+  isRightSidebarOpen.value = true
+
+  await nextTick()
+  if (gridScrollRef.value?.$el)
+    gridScrollRef.value.$el.scrollTop = 0
+  gridScrollRef.value?.ps?.update()
+}
+
+/* Upload 1 hoặc nhiều file -> đưa ngay vào cột giữa và mở panel chi tiết. */
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || [])
+  if (!files.length || uploading.value)
+    return
+
+  const invalid = files.find(f => f.size <= 0 || f.size > MAX_UPLOAD_BYTES)
+  if (invalid) {
+    showNotice(
+      invalid.size <= 0
+        ? `Tệp "${invalid.name}" rỗng (0 byte), không thể tải lên.`
+        : `Tệp "${invalid.name}" vượt quá giới hạn 50 MB.`,
+      'error',
+    )
+
+    return
+  }
+
+  const targetFolder = activeFolder.value || 'root'
+
+  uploading.value = true
+  uploadingFiles.value = files.map((f, idx) => ({
+    key: `uploading-${Date.now()}-${idx}`,
+    name: f.name,
+    size: f.size,
+  }))
+
+  try {
+    let uploaded = []
+    if (files.length === 1) {
+      const asset = await store.upload(files[0], { folder: targetFolder }, { prepend: false })
+      if (asset)
+        uploaded = [asset]
+    } else {
+      uploaded = await store.uploadMany(files, { folder: targetFolder }, { prepend: false }) || []
+    }
+
+    await syncViewAfterUpload(uploaded)
+    uploading.value = false
+    await store.loadFolders()
+
+    if (uploaded.length === 1)
+      showNotice(`Đã tải lên "${uploaded[0].title}" và đưa vào cột giữa.`)
+    else if (uploaded.length > 1)
+      showNotice(`Đã tải lên ${uploaded.length} tệp tin vào cột giữa.`)
+  } catch (err) {
+    const message = err?.status === 413
+      ? 'Tệp vượt quá giới hạn dung lượng upload của máy chủ.'
+      : firstErrorMessage(err)
+
+    showNotice(message, 'error')
+  } finally {
+    uploading.value = false
+    uploadingFiles.value = []
+  }
+}
+
+function openAiGenerateDialog() {
+  isAiGenerateDialogOpen.value = true
+}
+
+/* Đưa ảnh AI vừa lưu từ dialog vào đầu cột giữa, cập nhật cây thư mục và chọn xem chi tiết. */
+async function onAiImageSaved(asset) {
+  if (!asset?.id)
+    return
+
+  await syncViewAfterUpload([asset])
+  await store.loadFolders()
+  showNotice(`Đã lưu ảnh AI "${asset.title}" vào thư viện.`)
+}
+
 function onUploadClick() {
   fileInput.value?.click()
 }
@@ -271,18 +433,35 @@ async function onFilesChosen(event) {
   const files = Array.from(event.target.files || [])
 
   event.target.value = ''        // cho phép chọn lại cùng file
-  if (!files.length) return
-  uploading.value = true
-  try {
-    const uploaded = await store.uploadMany(files, { folder: activeFolder.value || 'root' })
+  await uploadFiles(files)
+}
 
-    if (uploaded?.length)
-      selectedFile.value = uploaded[0]
+function onGridDragEnter(event) {
+  if (!hasDragFiles(event))
+    return
 
-    await store.loadFolders()    // folder mới có thể xuất hiện
-  } finally {
-    uploading.value = false
-  }
+  dragCounter++
+  isDraggingOver.value = true
+}
+
+function onGridDragOver(event) {
+  if (hasDragFiles(event))
+    isDraggingOver.value = true
+}
+
+function onGridDragLeave() {
+  dragCounter = Math.max(0, dragCounter - 1)
+  if (dragCounter === 0)
+    isDraggingOver.value = false
+}
+
+async function onGridDrop(event) {
+  dragCounter = 0
+  isDraggingOver.value = false
+  if (!hasDragFiles(event))
+    return
+
+  await uploadFiles(event.dataTransfer?.files)
 }
 
 async function onDeleteSelected() {
@@ -293,6 +472,8 @@ async function onDeleteSelected() {
     selectedIds.value = new Set()
     selectedFile.value = pagedItems.value[0] || null
     await store.loadFolders()
+  } catch (err) {
+    showNotice(firstErrorMessage(err), 'error')
   } finally {
     deleting.value = false
   }
@@ -486,6 +667,14 @@ async function onDeleteSelected() {
                   @change="onFilesChosen"
                 >
                 <VBtn
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="tabler-wand"
+                  @click="openAiGenerateDialog"
+                >
+                  Tạo ảnh bằng AI
+                </VBtn>
+                <VBtn
                   color="primary"
                   prepend-icon="tabler-upload"
                   :loading="uploading"
@@ -541,15 +730,44 @@ async function onDeleteSelected() {
             </div>
             <VDivider class="flex-shrink-0" />
 
-            <!-- Vùng lưới media: skeleton card khi nạp lần đầu, progress bar mỏng khi lọc/chuyển trang -->
-            <div class="media-grid-body d-flex flex-column position-relative">
+            <!-- Vùng lưới media: skeleton card khi nạp lần đầu, progress bar mỏng khi lọc/upload, kéo-thả trực tiếp vào cột giữa -->
+            <div
+              class="media-grid-body d-flex flex-column position-relative"
+              @dragenter.prevent="onGridDragEnter"
+              @dragover.prevent="onGridDragOver"
+              @dragleave.prevent="onGridDragLeave"
+              @drop.prevent="onGridDrop"
+            >
               <VProgressLinear
-                v-if="store.loading && pagedItems.length"
+                v-if="(store.loading || uploading) && (pagedItems.length || uploadingFiles.length)"
                 indeterminate
                 color="primary"
                 height="3"
                 class="media-grid-progress"
               />
+
+              <div
+                v-if="isDraggingOver"
+                class="media-drop-overlay d-flex flex-column align-center justify-center text-center pa-6"
+              >
+                <VAvatar
+                  color="primary"
+                  variant="tonal"
+                  size="56"
+                  class="mb-3"
+                >
+                  <VIcon
+                    icon="tabler-cloud-upload"
+                    size="28"
+                  />
+                </VAvatar>
+                <div class="text-h6 font-weight-medium text-primary mb-1">
+                  Thả tệp tin vào đây để tải lên
+                </div>
+                <div class="text-body-2 text-medium-emphasis">
+                  {{ activeFolder ? `Lưu vào thư mục "${activeFolder}" và đưa ngay vào cột giữa` : 'Tệp tải lên sẽ đưa ngay vào đầu cột giữa' }}
+                </div>
+              </div>
 
               <PerfectScrollbar
                 ref="gridScrollRef"
@@ -558,7 +776,7 @@ async function onDeleteSelected() {
               >
                 <!-- Loading lần đầu: Skeleton grid mô phỏng card thật -->
                 <div
-                  v-if="store.loading && !pagedItems.length"
+                  v-if="store.loading && !pagedItems.length && !uploadingFiles.length"
                   class="media-grid"
                 >
                   <div
@@ -585,7 +803,7 @@ async function onDeleteSelected() {
 
                 <!-- Empty state -->
                 <div
-                  v-else-if="!pagedItems.length"
+                  v-else-if="!pagedItems.length && !uploadingFiles.length"
                   class="d-flex flex-column align-center justify-center pa-12 text-center"
                 >
                   <VAvatar
@@ -605,7 +823,7 @@ async function onDeleteSelected() {
                   <p class="text-body-2 text-medium-emphasis mb-4">
                     {{ activeQuickFilter === 'trash'
                       ? 'Thùng rác trống — các asset đã xóa sẽ hiện ở đây.'
-                      : 'Tải lên ảnh/video đầu tiên để bắt đầu.' }}
+                      : 'Kéo thả tệp vào đây hoặc bấm Tải lên để đưa ngay vào thư viện.' }}
                   </p>
                   <VBtn
                     v-if="activeQuickFilter !== 'trash'"
@@ -623,6 +841,32 @@ async function onDeleteSelected() {
                   class="media-grid"
                   :class="{ 'media-grid--loading': store.loading }"
                 >
+                  <!-- Card tạm trong lúc file đang tải lên cột giữa -->
+                  <div
+                    v-for="item in uploadingFiles"
+                    :key="item.key"
+                    class="media-card media-card--uploading rounded border pa-2"
+                  >
+                    <div class="rounded overflow-hidden mb-2 thumb-wrap thumb-square d-flex flex-column align-center justify-center pa-2 text-center">
+                      <VProgressCircular
+                        indeterminate
+                        color="primary"
+                        size="28"
+                        width="3"
+                        class="mb-2"
+                      />
+                      <span class="text-caption text-primary font-weight-medium">
+                        Đang tải lên...
+                      </span>
+                    </div>
+                    <div class="text-body-2 font-weight-medium text-high-emphasis text-truncate mb-1">
+                      {{ item.name }}
+                    </div>
+                    <div class="text-caption text-medium-emphasis text-truncate">
+                      {{ fmtSize(item.size) }}
+                    </div>
+                  </div>
+
                   <div
                     v-for="file in pagedItems"
                     :key="file.id"
@@ -630,14 +874,14 @@ async function onDeleteSelected() {
                     :class="{ 'media-card--selected': selectedFile && selectedFile.id === file.id }"
                     @click="onSelectFile(file)"
                   >
-                    <div>
+                    <div class="media-card-body">
                       <!-- Thumbnail (vuông) — checkbox + menu phủ lên góc ảnh -->
                       <div class="position-relative rounded overflow-hidden mb-2 thumb-wrap thumb-square">
                         <VImg
                           v-if="file.kind === 'image' && thumbOf(file)"
                           :src="thumbOf(file)"
                           aspect-ratio="1"
-                          cover
+                          class="h-100 w-100"
                         />
                         <div
                           v-else-if="file.kind === 'image'"
@@ -796,6 +1040,21 @@ async function onDeleteSelected() {
         </VRow>
       </VCard>
     </VMain>
+
+    <AiGenerateImageDialog
+      v-model="isAiGenerateDialogOpen"
+      :folder="activeFolder || 'root'"
+      @saved="onAiImageSaved"
+    />
+
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      location="bottom end"
+      timeout="3500"
+    >
+      {{ snackbar.text }}
+    </VSnackbar>
   </VLayout>
 </template>
 
@@ -879,6 +1138,22 @@ async function onDeleteSelected() {
   inset-inline: 0;
 }
 
+.media-drop-overlay {
+  position: absolute;
+  z-index: 4;
+  border: 2px dashed rgb(var(--v-theme-primary));
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.92);
+  inset: 12px;
+  pointer-events: none;
+}
+
+.media-card--uploading {
+  border-style: dashed !important;
+  border-color: rgba(var(--v-theme-primary), 0.5) !important;
+  background: rgba(var(--v-theme-primary), 0.03);
+}
+
 /* Vùng cuộn co giãn của cột trái và lưới giữa (nhường phần cố định đầu/cuối cột). */
 .media-left-scroll,
 .media-grid-scroll {
@@ -887,11 +1162,12 @@ async function onDeleteSelected() {
   min-block-size: 0;
 }
 
-/* Lưới media: tối đa 6 item/hàng, co giãn theo chiều ngang cột giữa. */
+/* Lưới media: 6 cột bằng nhau tuyệt đối (minmax(0,1fr) ngăn tên dài kéo giãn cột), mọi hàng cao đều nhau. */
 .media-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
   gap: 12px;
+  grid-auto-rows: 1fr;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   transition: opacity 0.15s ease;
 }
 
@@ -915,13 +1191,13 @@ async function onDeleteSelected() {
   max-inline-size: 65%;
 }
 @media (max-width: 1280px) {
-  .media-grid { grid-template-columns: repeat(4, 1fr); }
+  .media-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
-  .media-grid { grid-template-columns: repeat(3, 1fr); }
+  .media-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
-  .media-grid { grid-template-columns: repeat(2, 1fr); }
+  .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* Điều hướng trái */
@@ -960,9 +1236,19 @@ async function onDeleteSelected() {
 }
 
 .media-card {
+  display: flex;
+  flex-direction: column;
   border-color: rgba(var(--v-border-color), var(--v-border-opacity));
   background: rgb(var(--v-theme-surface));
+  block-size: 100%;
+  min-inline-size: 0;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.media-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-inline-size: 0;
 }
 .media-card:hover {
   border-color: rgb(var(--v-theme-primary));
@@ -984,9 +1270,9 @@ async function onDeleteSelected() {
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
-/* Ô thumbnail vuông: khung 1:1 + VImg contain -> chiều dài ảnh lấp đầy,
-   phần nền dư (letterbox) là màu thumb-wrap. */
+/* Ô thumbnail vuông: khung 1:1 + object-fit: contain -> cạnh dài nhất chiếm 100%, cạnh kia tự co theo tỷ lệ. */
 .thumb-square {
+  flex-shrink: 0;
   aspect-ratio: 1;
   inline-size: 100%;
 }
@@ -996,6 +1282,8 @@ async function onDeleteSelected() {
 
 /* Hiệu ứng zoom nhẹ khi hover vào thumbnail. */
 .thumb-square :deep(.v-img) {
+  block-size: 100%;
+  inline-size: 100%;
   transition: transform 0.3s ease;
   will-change: transform;
 }

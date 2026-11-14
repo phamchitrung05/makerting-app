@@ -22,6 +22,7 @@ use Modules\Media\Http\Resources\MediaAssetUsageResource;
 use Modules\Media\Models\MediaAsset;
 use Modules\Media\Models\MediaAssetUsage;
 use Modules\Media\Registries\MediaSlotRegistry;
+use Spatie\MediaLibrary\MediaCollections\Exceptions\FileIsTooBig;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
@@ -87,6 +88,15 @@ class MediaAssetController extends Controller
              * - ai     : có metadata ai_generation trong file media. */
             ->when($request->query('quick') === 'recent', fn ($q) => $q->where('created_at', '>=', now()->subDays(30)))
             ->when($request->query('quick') === 'shared', fn ($q) => $q->has('usages'))
+            ->when(
+                $request->query('quick') === 'ai',
+                fn ($q) => $q->whereHas(
+                    'media',
+                    fn ($mq) => $mq
+                        ->where('collection_name', MediaAsset::COLLECTION_LIBRARY)
+                        ->whereNotNull('custom_properties->ai_generation')
+                )
+            )
             ->when($request->filled('search'), fn ($q) => $q->where(function ($qq) use ($request) {
                 $s = (string) $request->query('search');
                 $qq->where('title', 'like', "%{$s}%")
@@ -138,7 +148,7 @@ class MediaAssetController extends Controller
                 ? $a->mediaFile()?->getFullUrl()
                 : null,
             'thumb' => $a->visibility === MediaAsset::VISIBILITY_PUBLIC
-                ? ($a->mediaFile()?->getUrl('thumb') ?: $a->mediaFile()?->getFullUrl())
+                ? ($a->isImage() ? ($a->mediaFile()?->getUrl('thumb') ?: $a->mediaFile()?->getFullUrl()) : $a->mediaFile()?->getFullUrl())
                 : null,
         ])->values();
 
@@ -208,19 +218,23 @@ class MediaAssetController extends Controller
         if ($request->hasFile('files')) {
             try {
                 $assets = $this->upload->executeMany($request->file('files'), $options);
-            } catch (InvalidArgumentException $e) {
+            } catch (InvalidArgumentException | FileIsTooBig $e) {
                 return BaseResponse::error($e->getMessage(), 422);
             }
 
+            $assetCollection = collect($assets)->each(
+                fn (MediaAsset $item) => $item->load(['creator', 'channelGroup'])->loadCount('usages')
+            );
+
             return BaseResponse::success(
-                MediaAssetResource::collection(collect($assets)),
+                MediaAssetResource::collection($assetCollection),
                 'Tải lên ' . count($assets) . ' file thành công',
             );
         }
 
         try {
             $asset = $this->upload->execute($request->file('file'), $options);
-        } catch (InvalidArgumentException $e) {
+        } catch (InvalidArgumentException | FileIsTooBig $e) {
             return BaseResponse::error($e->getMessage(), 422);
         }
 

@@ -143,10 +143,17 @@ const privateObjectUrl = ref('')
 const folderSearch = ref('root')
 const titleInputRef = ref(null)
 const tabScrollRef = ref(null)
+const previewWrapRef = ref(null)
+const lightboxRef = ref(null)
+const lightboxStageRef = ref(null)
+const lightboxOpen = ref(false)
 
 let tabScrollObserver = null
 let detailSeq = 0
 let streamSeq = 0
+let lightboxPressedBackdrop = false
+let supportsDisplayTransitionCache
+let preloadedUrl = ''
 
 const snack = reactive({
   show: false,
@@ -245,6 +252,23 @@ const resolvedPreviewUrl = computed(() => {
     return previewOf(asset)
 
   return asset.url || null
+})
+
+const canZoomPreview = computed(() => Boolean(
+  liveAsset.value?.kind === 'image'
+  && resolvedPreviewUrl.value
+  && !previewFailed.value,
+))
+
+const resolvedFullscreenUrl = computed(() => {
+  const asset = liveAsset.value
+  if (!asset || asset.kind !== 'image')
+    return null
+
+  if (asset.visibility === 'private')
+    return privateObjectUrl.value || null
+
+  return asset.url || previewOf(asset) || null
 })
 
 const resolvedPathText = computed(() => {
@@ -683,11 +707,165 @@ watch([() => liveAsset.value?.id, isAddingTag, () => store.folders.length], () =
   nextTick(syncTabScroll)
 })
 
+function isLightboxBackdropTarget(target) {
+  return target === lightboxRef.value || target === lightboxStageRef.value
+}
+
+/* Kiểm tra trình duyệt có hỗ trợ hiệu ứng thoát top-layer (overlay + display allow-discrete) không. */
+function canTransitionDisplay() {
+  if (supportsDisplayTransitionCache !== undefined)
+    return supportsDisplayTransitionCache
+
+  if (!window.CSS?.supports?.('transition-behavior', 'allow-discrete') || !document.body)
+    return false
+
+  const probe = document.createElement('div')
+
+  probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;'
+  document.body.appendChild(probe)
+  void probe.offsetHeight
+  probe.style.display = 'none'
+  supportsDisplayTransitionCache = getComputedStyle(probe).display === 'block'
+  probe.remove()
+
+  return supportsDisplayTransitionCache
+}
+
+function supportsTopLayerExit() {
+  return Boolean(window.CSS?.supports?.('overlay', 'auto') && canTransitionDisplay())
+}
+
+/* Tính vị trí & tỷ lệ xuất phát từ khung preview cột phải tới tâm màn hình cho hiệu ứng trượt zoom. */
+function syncZoomOriginVars() {
+  const dialog = lightboxRef.value
+  const wrap = previewWrapRef.value
+  if (!dialog || !wrap || typeof window === 'undefined')
+    return
+
+  const rect = wrap.getBoundingClientRect()
+  const dx = Math.round(rect.left + rect.width / 2 - window.innerWidth / 2)
+  const dy = Math.round(rect.top + rect.height / 2 - window.innerHeight / 2)
+  const scale = Math.max(0.22, Math.min(0.65, rect.height / Math.max(window.innerHeight, 1)))
+
+  dialog.style.setProperty('--zoom-x', `${dx}px`)
+  dialog.style.setProperty('--zoom-y', `${dy}px`)
+  dialog.style.setProperty('--zoom-scale', scale.toFixed(3))
+}
+
+function preloadFullscreenUrl() {
+  const url = resolvedFullscreenUrl.value
+  if (!url || url === resolvedPreviewUrl.value || url === preloadedUrl || typeof Image === 'undefined')
+    return
+
+  preloadedUrl = url
+
+  const img = new Image()
+
+  img.src = url
+}
+
+/*
+ * CHỨC NĂNG: Mở lightbox xem ảnh toàn màn hình qua native modal <dialog> kèm hiệu ứng trượt zoom từ khung preview.
+ */
+async function openLightbox() {
+  const dialog = lightboxRef.value
+  if (!canZoomPreview.value || !dialog)
+    return
+
+  dialog.removeAttribute('data-closing')
+  lightboxOpen.value = true
+  await nextTick()
+
+  if (!canZoomPreview.value)
+    return
+
+  syncZoomOriginVars()
+  if (!dialog.open)
+    dialog.showModal()
+}
+
+/*
+ * CHỨC NĂNG: Đóng lightbox xem ảnh toàn màn hình (giữ animation thoát trên cả Chrome/Edge lẫn Firefox/Safari).
+ */
+async function closeLightbox() {
+  const dialog = lightboxRef.value
+  if (!dialog?.open || dialog.hasAttribute('data-closing'))
+    return
+
+  syncZoomOriginVars()
+
+  if (!supportsTopLayerExit()) {
+    dialog.setAttribute('data-closing', '')
+
+    const animations = dialog.getAnimations({ subtree: true })
+    if (animations.length > 0) {
+      await Promise.race([
+        Promise.allSettled(animations.map(a => a.finished)),
+        new Promise(resolve => setTimeout(resolve, 600)),
+      ])
+    }
+
+    if (!dialog.hasAttribute('data-closing'))
+      return
+
+    dialog.removeAttribute('data-closing')
+  }
+
+  if (dialog.open)
+    dialog.close()
+}
+
+async function onLightboxClose() {
+  const dialog = lightboxRef.value
+
+  lightboxPressedBackdrop = false
+  if (dialog) {
+    dialog.removeAttribute('data-closing')
+    dialog.returnValue = ''
+
+    // Chờ animation thoát top-layer (overlay/allow-discrete) kết thúc rồi mới unmount ảnh.
+    const animations = dialog.getAnimations({ subtree: true })
+    if (animations.length > 0) {
+      await Promise.race([
+        Promise.allSettled(animations.map(a => a.finished)),
+        new Promise(resolve => setTimeout(resolve, 600)),
+      ])
+    }
+  }
+
+  if (!dialog?.open)
+    lightboxOpen.value = false
+}
+
+function onLightboxPointerDown(event) {
+  lightboxPressedBackdrop = isLightboxBackdropTarget(event.target)
+}
+
+function onLightboxPointerUp(event) {
+  if (lightboxPressedBackdrop && isLightboxBackdropTarget(event.target))
+    closeLightbox()
+
+  lightboxPressedBackdrop = false
+}
+
+watch(canZoomPreview, ok => {
+  if (!ok && (lightboxOpen.value || lightboxRef.value?.open)) {
+    lightboxRef.value?.removeAttribute('data-closing')
+    if (lightboxRef.value?.open)
+      lightboxRef.value.close()
+    lightboxOpen.value = false
+  }
+})
+
 onMounted(() => {
   nextTick(syncTabScroll)
 })
 
 onBeforeUnmount(() => {
+  lightboxRef.value?.removeAttribute('data-closing')
+  if (lightboxRef.value?.open)
+    lightboxRef.value.close()
+  lightboxOpen.value = false
   tabScrollObserver?.disconnect()
   tabScrollObserver = null
   revokePrivateUrl()
@@ -733,13 +911,18 @@ onBeforeUnmount(() => {
 
       <template v-if="liveAsset">
         <!-- Khung xem trước media (hỗ trợ cả public URL và private /stream) -->
-        <div class="position-relative rounded overflow-hidden mb-4 border preview-thumb-wrap">
+        <div
+          ref="previewWrapRef"
+          class="position-relative rounded overflow-hidden mb-4 border preview-thumb-wrap"
+          :class="{ 'preview-thumb-wrap--zoomable': canZoomPreview }"
+          @pointerenter="preloadFullscreenUrl"
+        >
           <VImg
             v-if="liveAsset.kind === 'image' && resolvedPreviewUrl && !previewFailed"
             :src="resolvedPreviewUrl"
             :alt="detailForm.altText || detailForm.title"
-            height="180"
-            cover
+            class="h-100 w-100"
+            @click="openLightbox"
             @error="previewFailed = true"
           />
 
@@ -803,6 +986,20 @@ onBeforeUnmount(() => {
           >
             Private
           </VChip>
+
+          <button
+            v-if="canZoomPreview"
+            type="button"
+            class="preview-zoom-btn"
+            aria-label="Phóng to xem toàn màn hình"
+            title="Phóng to toàn màn hình"
+            @click.stop="openLightbox"
+          >
+            <VIcon
+              icon="tabler-zoom-in"
+              size="20"
+            />
+          </button>
         </div>
 
         <!-- Tabs: Thông tin / Prompt -->
@@ -1365,6 +1562,64 @@ onBeforeUnmount(() => {
     >
       {{ snack.text }}
     </VSnackbar>
+
+    <!-- Lightbox xem ảnh toàn màn hình (native modal <dialog> hỗ trợ Esc & bấm nền để đóng) -->
+    <dialog
+      ref="lightboxRef"
+      closedby="any"
+      aria-labelledby="media-lightbox-title"
+      class="media-lightbox"
+      @cancel.prevent="closeLightbox"
+      @close="onLightboxClose"
+      @pointerdown="onLightboxPointerDown"
+      @pointerup="onLightboxPointerUp"
+    >
+      <div
+        v-if="lightboxOpen && resolvedFullscreenUrl"
+        class="media-lightbox-shell"
+      >
+        <div class="media-lightbox-toolbar">
+          <div class="d-flex align-center gap-3 media-lightbox-meta">
+            <h2
+              id="media-lightbox-title"
+              class="text-subtitle-1 font-weight-medium text-white text-truncate ma-0"
+            >
+              {{ detailForm.title || liveAsset?.title || 'Xem trước ảnh' }}
+            </h2>
+            <span
+              v-if="dimensionsText !== '—'"
+              class="text-caption flex-shrink-0 media-lightbox-dims"
+            >
+              {{ dimensionsText }}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            class="media-lightbox-close"
+            aria-label="Đóng xem toàn màn hình"
+            autofocus
+            @click="closeLightbox"
+          >
+            <VIcon
+              icon="tabler-x"
+              size="20"
+            />
+          </button>
+        </div>
+
+        <div
+          ref="lightboxStageRef"
+          class="media-lightbox-stage"
+        >
+          <img
+            :src="resolvedFullscreenUrl"
+            :alt="detailForm.altText || detailForm.title || liveAsset?.title || ''"
+            class="media-lightbox-img"
+          >
+        </div>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -1386,22 +1641,284 @@ onBeforeUnmount(() => {
   opacity: 0.45;
 }
 
-/* Khung xem trước: cố định 180px để đồng nhất chiều cao giữa các loại file. */
+/* Khung xem trước: cố định 180px để đồng nhất chiều cao giữa các loại file; ảnh tự co tỷ lệ (contain). */
 .preview-thumb-wrap {
-  block-size: 180px;
   background: rgba(var(--v-theme-on-surface), 0.08);
+  block-size: 180px;
+  inline-size: 100%;
 }
 
+.preview-thumb-wrap :deep(.v-img) {
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+.preview-thumb-wrap :deep(.v-responsive__sizer) {
+  display: none;
+}
+
+.preview-thumb-wrap :deep(.v-img__img),
 .preview-fallback,
 .preview-media-el {
-  inline-size: 100%;
   block-size: 100%;
+  inline-size: 100%;
   object-fit: contain;
 }
 
 .preview-visibility-badge {
   position: absolute;
+  z-index: 3;
   inset-block-start: 8px;
   inset-inline-start: 8px;
+}
+
+.preview-thumb-wrap--zoomable {
+  cursor: zoom-in;
+}
+
+.preview-thumb-wrap--zoomable::after {
+  position: absolute;
+  z-index: 1;
+  background: rgba(15, 23, 42, 24%);
+  content: "";
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.preview-thumb-wrap--zoomable:hover::after,
+.preview-thumb-wrap--zoomable:focus-within::after {
+  opacity: 1;
+}
+
+.preview-zoom-btn {
+  position: absolute;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 35%);
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
+  background: rgba(15, 23, 42, 72%);
+  block-size: 40px;
+  color: #fff;
+  cursor: pointer;
+  inline-size: 40px;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.9);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.preview-zoom-btn:hover {
+  background: rgb(var(--v-theme-primary));
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.preview-zoom-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.preview-thumb-wrap--zoomable:hover .preview-zoom-btn,
+.preview-thumb-wrap--zoomable:focus-within .preview-zoom-btn {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+@media (hover: none) {
+  .preview-zoom-btn {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+</style>
+
+<!-- Giữ @starting-style & top-layer modal <dialog> ở phạm vi unscoped theo chuẩn top-layer transition -->
+<style lang="scss">
+.media-lightbox {
+  padding: 0;
+  border: 0;
+  margin: 0;
+  background: transparent;
+  color: #fff;
+  inset: 0;
+  max-block-size: none;
+  max-inline-size: none;
+  opacity: 0;
+  transition-behavior: allow-discrete;
+  transition-duration: 0.28s;
+  transition-property: opacity, display, overlay;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.media-lightbox[open] {
+  display: block;
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+.media-lightbox[open]:where(:not([data-closing])) {
+  opacity: 1;
+}
+
+@starting-style {
+  .media-lightbox[open]:where(:not([data-closing])) {
+    opacity: 0;
+  }
+}
+
+.media-lightbox:modal {
+  overscroll-behavior: contain;
+}
+
+.media-lightbox::backdrop {
+  overflow: hidden;
+  backdrop-filter: blur(0);
+  background-color: rgba(10, 12, 16, 0%);
+  overscroll-behavior: contain;
+  transition-behavior: allow-discrete;
+  transition-duration: 0.28s;
+  transition-property: background-color, backdrop-filter, display, overlay;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.media-lightbox[open]:where(:not([data-closing]))::backdrop {
+  backdrop-filter: blur(4px);
+  background-color: rgba(10, 12, 16, 90%);
+}
+
+@starting-style {
+  .media-lightbox[open]:where(:not([data-closing]))::backdrop {
+    backdrop-filter: blur(0);
+    background-color: rgba(10, 12, 16, 0%);
+  }
+}
+
+.media-lightbox-shell {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+.media-lightbox-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 65%), transparent);
+  gap: 16px;
+  opacity: 0;
+  padding-block: 12px;
+  padding-inline: 20px;
+  transition: opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1), transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.media-lightbox-meta {
+  min-inline-size: 0;
+}
+
+.media-lightbox-dims {
+  color: rgba(255, 255, 255, 72%);
+}
+
+.media-lightbox-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 25%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 14%);
+  block-size: 36px;
+  color: #fff;
+  cursor: pointer;
+  inline-size: 36px;
+  transition: background 0.15s ease;
+}
+
+.media-lightbox-close:hover {
+  background: rgba(255, 255, 255, 28%);
+}
+
+.media-lightbox-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.media-lightbox-stage {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 0;
+  padding-block: 12px 24px;
+  padding-inline: 24px;
+}
+
+.media-lightbox-img {
+  display: block;
+  border-radius: 4px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 50%);
+  max-block-size: 100%;
+  max-inline-size: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.media-lightbox[open]:where(:not([data-closing])) .media-lightbox-toolbar,
+.media-lightbox[open]:where(:not([data-closing])) .media-lightbox-img {
+  opacity: 1;
+}
+
+@starting-style {
+  .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-toolbar,
+  .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-img {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .media-lightbox-toolbar {
+    transform: translateY(-10px);
+  }
+
+  .media-lightbox-img {
+    transform: translate3d(var(--zoom-x, 0), var(--zoom-y, 24px), 0) scale(var(--zoom-scale, 0.88));
+  }
+
+  .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-toolbar {
+    transform: translateY(0);
+  }
+
+  .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-img {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  @starting-style {
+    .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-toolbar {
+      transform: translateY(-10px);
+    }
+
+    .media-lightbox[open]:where(:not([data-closing])) .media-lightbox-img {
+      transform: translate3d(var(--zoom-x, 0), var(--zoom-y, 24px), 0) scale(var(--zoom-scale, 0.88));
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-lightbox,
+  .media-lightbox::backdrop,
+  .media-lightbox-toolbar,
+  .media-lightbox-img {
+    transition-duration: 0.1s;
+  }
 }
 </style>

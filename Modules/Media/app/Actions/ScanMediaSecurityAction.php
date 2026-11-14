@@ -65,14 +65,14 @@ class ScanMediaSecurityAction
     ];
 
     /**
-     * Đuôi file cho phép theo kind.
+     * Đuôi file mặc định cho phép theo kind (fallback khi chưa nạp config('media.allowed_upload_extensions')).
      */
     private const KIND_EXTENSIONS = [
-        MediaAsset::KIND_IMAGE => ['jpg','jpeg','png','gif','webp','avif','bmp','ico'],
-        MediaAsset::KIND_VIDEO => ['mp4','mov','webm','mkv','avi','m4v','mpg','mpeg'],
-        MediaAsset::KIND_AUDIO => ['mp3','wav','m4a','aac','ogg','flac','opus'],
-        MediaAsset::KIND_DOCUMENT => ['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv','md','json','xml'],
-        MediaAsset::KIND_ARCHIVE => ['zip','rar','7z','gz','tar','bz2'],
+        MediaAsset::KIND_IMAGE => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'ico'],
+        MediaAsset::KIND_VIDEO => ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg'],
+        MediaAsset::KIND_AUDIO => ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'],
+        MediaAsset::KIND_DOCUMENT => ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'md', 'json', 'xml'],
+        MediaAsset::KIND_ARCHIVE => ['zip', 'rar', '7z', 'gz', 'tar', 'bz2'],
     ];
 
     /**
@@ -109,25 +109,27 @@ class ScanMediaSecurityAction
         }
 
         $path = $file->getRealPath();
-        $result = $this->scanPath($path, $allowedKinds, $maxBytes);
+        $label = $file->getClientOriginalName() ?: basename((string) $path);
+        $result = $this->scanPath($path, $allowedKinds, $maxBytes, $label);
 
         // Chặn khi đuôi file gợi ý kind KHÁC với MIME thực.
         // (Ví dụ .zip nhưng mime=image/png -> nghi polyglot.)
         $kind = $result['kind'];
         $result['extension_suspicious'] = false;
 
-        if ($ext !== '' && isset(self::KIND_EXTENSIONS[$kind])) {
+        $allowedByKind = self::allowedExtensionsByKind();
+        if ($ext !== '') {
             $declaredKind = self::kindFromExtension($ext);
             if ($declaredKind !== null && $declaredKind !== $kind) {
                 throw new InvalidArgumentException(
                     "Đuôi file [.{$ext}] gợi ý kind [{$declaredKind}] khác với MIME thực [{$kind}] — nghi polyglot, bị chặn.",
                 );
             }
-            if (! in_array($ext, self::KIND_EXTENSIONS[$kind], true)) {
-                // Đuôi lạ so với MIME nhưng không thuộc kind khác
-                // (vd .xyz với image/png) — vẫn chặn để tránh bypass.
+
+            $allowedForKind = $allowedByKind[$kind] ?? [];
+            if (! in_array($ext, $allowedForKind, true)) {
                 throw new InvalidArgumentException(
-                    "Đuôi file [.{$ext}] không khớp MIME [{$result['mime']}] — bị chặn.",
+                    "Đuôi file [.{$ext}] không được phép hoặc không khớp MIME [{$result['mime']}] — bị chặn.",
                 );
             }
         }
@@ -138,7 +140,7 @@ class ScanMediaSecurityAction
      * =====================================================================
      * CHỨC NĂNG: Quét file trên disk (đường dẫn tuyệt đối)
      * =====================================================================
-     * INPUT: $path, ?allowedKinds, ?maxBytes.
+     * INPUT: $path, ?allowedKinds, ?maxBytes, ?label (tên hiển thị khi lỗi).
      * OUTPUT: array{kind:string, mime:string, size:int}
      * EXCEPTION: InvalidArgumentException khi file độc/không hợp lệ.
      * =====================================================================
@@ -147,18 +149,21 @@ class ScanMediaSecurityAction
         string $path,
         ?array $allowedKinds = null,
         ?int $maxBytes = null,
+        ?string $label = null,
     ): array {
+        $displayLabel = $label ?: basename($path);
+
         if (! is_file($path)) {
-            throw new InvalidArgumentException("Đường dẫn [{$path}] không phải file.");
+            throw new InvalidArgumentException("Đường dẫn [{$displayLabel}] không phải file.");
         }
 
         $size = (int) @filesize($path);
-        $this->assertSizeOk($size, $maxBytes, $path);
+        $this->assertSizeOk($size, $maxBytes, $displayLabel);
 
         $mime = $this->detectMimeFromPath($path);
         $kind = $this->detectKind($mime);
-        $this->assertKindAllowed($kind, $allowedKinds, $path);
-        $this->assertNotDangerous($path, $kind);
+        $this->assertKindAllowed($kind, $allowedKinds, $displayLabel);
+        $this->assertNotDangerous($path, $kind, $displayLabel);
 
         return ['kind' => $kind, 'mime' => $mime, 'size' => $size];
     }
@@ -201,6 +206,13 @@ class ScanMediaSecurityAction
     {
         $mime = strtolower(trim($mime));
 
+        // SVG từng là vector XSS — chặn hẳn từ MIME trước khi khớp prefix 'image/'.
+        if (str_starts_with($mime, 'image/svg')) {
+            throw new InvalidArgumentException(
+                "Định dạng SVG [{$mime}] (có thể chứa script) — tạm thời bị chặn cho đến khi có sanitizer.",
+            );
+        }
+
         foreach (self::KIND_MIME_PREFIX as $kind => $prefixes) {
             foreach ($prefixes as $prefix) {
                 if (str_starts_with($mime, $prefix)) {
@@ -237,13 +249,38 @@ class ScanMediaSecurityAction
      * ===================================================================== */
 
     /**
+     * CHỨC NĂNG: Lấy map đuôi file được phép tải lên theo kind từ config('media.allowed_upload_extensions').
+     * INPUT: không. OUTPUT: array<string, array<int, string>>.
+     */
+    public static function allowedExtensionsByKind(): array
+    {
+        $configured = function_exists('config') ? config('media.allowed_upload_extensions') : null;
+        if (! is_array($configured) || $configured === []) {
+            return self::KIND_EXTENSIONS;
+        }
+
+        $normalized = [];
+        foreach ($configured as $kind => $exts) {
+            if (! is_array($exts)) {
+                continue;
+            }
+            $normalized[(string) $kind] = array_values(array_filter(array_map(
+                fn ($ext) => strtolower(ltrim(trim((string) $ext), '.')),
+                $exts,
+            ), fn ($ext) => $ext !== ''));
+        }
+
+        return $normalized;
+    }
+
+    /**
      * CHỨC NĂNG: Suy ra kind gợi ý từ đuôi file (dùng cho so khớp MIME).
      * INPUT: $ext (không dấu chấm). OUTPUT: ?MediaAsset::KIND_* hoặc null.
      */
     public static function kindFromExtension(string $ext): ?string
     {
         $ext = strtolower(ltrim($ext, '.'));
-        foreach (self::KIND_EXTENSIONS as $kind => $exts) {
+        foreach (self::allowedExtensionsByKind() as $kind => $exts) {
             if (in_array($ext, $exts, true)) {
                 return $kind;
             }
@@ -282,22 +319,24 @@ class ScanMediaSecurityAction
     }
 
     /**
-     * CHỨC NĂNG: Chặn pattern nguy hiểm trong 4KB đầu file vật lý.
-     * INPUT: $path, $kind. EXCEPTION: khi phát hiện shell/script/PE.
+     * CHỨC NĂNG: Chặn pattern nguy hiểm trong 2MB đầu file vật lý.
+     * INPUT: $path, $kind, ?$label. EXCEPTION: khi phát hiện shell/script/PE.
      */
-    private function assertNotDangerous(string $path, string $kind): void
+    private function assertNotDangerous(string $path, string $kind, ?string $label = null): void
     {
+        $displayLabel = $label ?: basename($path);
+
         // Đọc tối đa 2MB đầu file — đủ để phát hiện payload nằm sâu
         // (polyglot đặt shell sau 4KB). File lớn hơn 2MB vẫn chỉ đọc phần đầu
         // vì polyglot thường đặt payload gần header.
         $fp = @fopen($path, 'rb');
         if (! $fp) {
-            throw new InvalidArgumentException("Không mở được file [{$path}] để quét.");
+            throw new InvalidArgumentException("Không mở được file [{$displayLabel}] để quét.");
         }
         $head = (string) stream_get_contents($fp, 2 * 1024 * 1024);
         fclose($fp);
 
-        $this->assertContentClean($head, $kind, $path);
+        $this->assertContentClean($head, $kind, $displayLabel);
     }
 
     /**
@@ -317,41 +356,57 @@ class ScanMediaSecurityAction
      */
     private function assertContentClean(string $head, string $kind, string $label): void
     {
-        // PHP/shell/PE — luôn cấm trong mọi kind.
-        $forbidden = ['<?php', '<?=', '#!'];
-        // 'MZ' (PE executable) — kiểm tra bằng bytes
-        if (strlen($head) >= 2 && $head[0] === 'M' && $head[1] === 'Z') {
+        // 'MZ' (PE executable) và '#!' (shebang script) chỉ có ý nghĩa ở đầu file (offset 0);
+        // tìm '#!' trong toàn bộ 2MB nhị phân sẽ bắt nhầm ảnh/video bình thường chứa byte 0x23 0x21.
+        if (str_starts_with($head, 'MZ')) {
             throw new InvalidArgumentException(
                 "File [{$label}] chứa signature PE executable — bị chặn.",
             );
         }
-        foreach ($forbidden as $bad) {
-            if (str_contains($head, $bad)) {
-                throw new InvalidArgumentException(
-                    "File [{$label}] chứa signature nguy hiểm ({$bad}) — bị chặn.",
-                );
-            }
+        $shebangSample = $kind === MediaAsset::KIND_DOCUMENT ? ltrim($head) : $head;
+        if (str_starts_with($shebangSample, '#!')) {
+            throw new InvalidArgumentException(
+                "File [{$label}] chứa signature shebang (#!) — bị chặn.",
+            );
         }
 
         $lower = strtolower($head);
 
-        // HTML/script/php — cấm trong MỌI kind (kể cả image).
-        // SVG từng được phép chứa <script> là sai bảo mật — nay chặn hẳn.
-        foreach (['<script', '<html', '<!doctype', 'javascript:', 'onload=', 'onerror=', 'onclick=', 'onmouseover=', '<?xml version='] as $bad) {
+        if (str_contains($lower, '<?php')) {
+            throw new InvalidArgumentException(
+                "File [{$label}] chứa signature nguy hiểm (<?php) — bị chặn.",
+            );
+        }
+
+        // '<?=' chỉ dài 3 byte nên dễ trùng ngẫu nhiên trong dữ liệu nén; chỉ chặn khi mang cú pháp PHP thật.
+        if (preg_match('/<\?=\s*[\$_a-zA-Z(\'"`]/', $head) === 1) {
+            throw new InvalidArgumentException(
+                "File [{$label}] chứa signature nguy hiểm (<?=) — bị chặn.",
+            );
+        }
+
+        // HTML/script/XSS — cấm trong MỌI kind (kể cả image).
+        // Không đưa '<?xml version=' vào blacklist chung vì ảnh có metadata XMP
+        // hoặc tài liệu .xml hợp lệ đều có khai báo XML; SVG đã chặn ở detectKind() + kiểm tra header bên dưới.
+        foreach (['<script', '<!doctype', 'javascript:', 'onload=', 'onerror=', 'onclick=', 'onmouseover='] as $bad) {
             if (str_contains($lower, $bad)) {
                 throw new InvalidArgumentException(
                     "File [{$label}] (kind={$kind}) chứa script/markup nguy hiểm ({$bad}) — bị chặn.",
                 );
             }
         }
+        if (preg_match('/<html(?:\s|>)/i', $head) === 1) {
+            throw new InvalidArgumentException(
+                "File [{$label}] (kind={$kind}) chứa script/markup nguy hiểm (<html) — bị chặn.",
+            );
+        }
 
-        // SVG chặn riêng: kiểm tra thẻ <svg mà không có namespace -> vẫn cấm.
-        if ($kind === MediaAsset::KIND_IMAGE) {
-            if (str_contains($lower, '<svg')) {
-                throw new InvalidArgumentException(
-                    "File [{$label}] là SVG (có thể chứa script) — tạm thời bị chặn cho đến khi có sanitizer.",
-                );
-            }
+        // SVG chặn thêm theo phần đầu tệp (phòng trường hợp MIME không nhận diện ra image/svg+xml).
+        // Không tìm '<svg' (4 byte) rải rác trong 2MB pixel nén vì rất dễ bắt nhầm ảnh PNG/JPG thật.
+        if (preg_match('/^\s*(?:<\?xml\b[^>]*>\s*)*(?:<!doctype\s+svg\b[^>]*>\s*)*<svg\b/i', substr($head, 0, 1024)) === 1) {
+            throw new InvalidArgumentException(
+                "File [{$label}] là SVG (có thể chứa script) — tạm thời bị chặn cho đến khi có sanitizer.",
+            );
         }
     }
 }
