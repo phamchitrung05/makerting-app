@@ -90,6 +90,26 @@ class GenerateAiPreviewImagesAction
         $count = max(1, (int) ($payload['count'] ?? 1));
         $collectedCount = 0;
         $attempts = 0;
+        $referencePath = is_string($payload['reference_image_path'] ?? null)
+            ? $payload['reference_image_path']
+            : null;
+        $referenceImages = [];
+
+        if ($referencePath !== null && $referencePath !== '') {
+            $refBinary = $this->store->readTempReference($referencePath);
+            if ($refBinary === null) {
+                return $this->store->markJobFailed(
+                    $jobId,
+                    'Ảnh tham chiếu tạm đã hết hạn trước khi tạo ảnh. Vui lòng thử lại.',
+                    'reference_image_expired',
+                ) ?? [];
+            }
+
+            $referenceImages[] = [
+                'mime' => (string) ($payload['reference_image_mime'] ?? 'image/png'),
+                'data' => $refBinary,
+            ];
+        }
 
         try {
             while ($collectedCount < $count && $attempts < $count) {
@@ -99,7 +119,7 @@ class GenerateAiPreviewImagesAction
                     prompt: (string) $payload['prompt'],
                     negativePrompt: null,
                     aspectRatio: (string) ($payload['aspect_ratio'] ?? '1:1'),
-                    referenceImages: [],
+                    referenceImages: $referenceImages,
                     options: [],
                     providerKey: $payload['provider_key'] ?? null,
                     modelId: $payload['remote_model_id'] ?? null,
@@ -171,6 +191,10 @@ class GenerateAiPreviewImagesAction
                 'Không thể tạo ảnh từ AI: ' . $e->getMessage(),
                 'ai_preview_generation_failed',
             ) ?? [];
+        } finally {
+            if ($referencePath !== null && $referencePath !== '') {
+                $this->store->deleteTempReference($referencePath);
+            }
         }
     }
 

@@ -7,18 +7,17 @@
 
   LUỒNG TÍCH HỢP API:
   - Mở dialog: nạp danh sách model khả dụng (`mediaApi.aiImageModels()`).
-  - Bấm "Tạo ảnh" / "Tạo lại": gọi `mediaApi.generateAiImages()` nhận HTTP 202 `job_id` rồi polling `mediaApi.aiImageJobStatus(job_id)` mỗi 1.5s đến khi `ready` hoặc `failed`.
+  - Bước 1 - Bấm "Gợi ý prompt": gọi `mediaApi.suggestAiImagePrompt()` gửi `Mô tả hình ảnh` + `Ảnh tham chiếu` (nếu có) tới AI văn bản/vision để điền vào `Prompt *`.
+  - Bước 2 - Bấm "Tạo ảnh" / "Tạo lại": gọi `mediaApi.generateAiImages()` gửi `Prompt *` + `Ảnh tham chiếu` (nếu có), nhận HTTP 202 `job_id` rồi polling `mediaApi.aiImageJobStatus(job_id)` mỗi 1.5s đến khi `ready` hoặc `failed`.
   - Bấm "Lưu vào thư viện": gọi `mediaApi.saveAiImage()`, phát emit('saved', asset).
   - Bấm "Tải về": tải trực tiếp từ `download_url` (signed URL + `?download=1`).
-  - Các mục chưa nối backend (`Mô tả hình ảnh`, `Gợi ý prompt`, `Ảnh tham chiếu`, `Phong cách hình ảnh`, `Yêu thích`) vẫn giữ nguyên hoạt động UI cục bộ.
 
   CÁC HÀM/METHOD TRONG FILE: loadAiModels(), stopPolling(), pickDefaultModelId(),
-  generateImages(), pollJobStatus(), applyJobSnapshot(), saveToLibrary(),
-  downloadSelected(), downloadItem(), selectResult(), toggleLike(),
+  suggestPromptFromAi(), generateImages(), pollJobStatus(), applyJobSnapshot(),
+  saveToLibrary(), downloadSelected(), downloadItem(), selectResult(), toggleLike(),
   clearReferenceImage(), setReferenceImage(), onPickReferenceImage(),
   onReferenceFileChange(), onReferenceDragOver(), onReferenceDragLeave(),
-  onReferenceDrop(), applySamplePrompt(), clearActionAlert(), closeDialog(),
-  resetAfterLeave().
+  onReferenceDrop(), clearActionAlert(), closeDialog(), resetAfterLeave().
   INPUT: v-model (isOpen: boolean), props.folder (string, mặc định 'root').
   OUTPUT: emit('update:modelValue', bool), emit('saved', MediaAssetResource).
   SIDE EFFECT: Gọi API Media AI Image và dọn polling timer khi đóng/unmount.
@@ -48,13 +47,7 @@ const DEFAULT_AI_PROMPT = 'Hand-drawn watercolor beverage sticker label for "Olo
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const ALLOWED_REFERENCE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp']
 const POLL_INTERVAL_MS = 1500
-const MAX_POLL_ATTEMPTS = 120
-
-const samplePrompts = [
-  'Trà sữa Oolong nướng kem cheese, phong cách minh họa 3D hiện đại, tông màu ấm áp, ánh sáng studio chuyên nghiệp.',
-  'Cốc cà phê muối Hội An vẽ tay màu nước, kèm hạt cà phê và hoa giấy, nền kem nhẹ nhàng, phong cách vintage.',
-  'Poster quảng cáo nước ép dứa chanh leo mùa hè, màu sắc rực rỡ, hiệu ứng giọt nước mát lạnh, hiện đại.',
-]
+const MAX_POLL_ATTEMPTS = 240
 
 const aspectRatios = [
   { value: '1:1', label: 'Vuông', res: '1024 x 1024 px', boxWidth: 16, boxHeight: 16 },
@@ -122,16 +115,17 @@ const modelsLoadError = ref('')
 
 const resultViewMode = ref('grid')
 const selectedResultId = ref(null)
+const isSuggestingPrompt = ref(false)
 const isGenerating = ref(false)
 const isSaving = ref(false)
 const jobTotal = ref(0)
 const jobCompleted = ref(0)
 const actionAlert = ref(null)
-const samplePromptIndex = ref(0)
 const generatedResults = ref([])
 
 let pollTimer = null
 let generationSeq = 0
+let suggestSeq = 0
 
 const modelSelectOptions = computed(() => aiModels.value.map(model => ({
   title: model.provider_name
@@ -179,7 +173,7 @@ const resultHeaderSubtitle = computed(() => {
   return `Chưa tạo ảnh • ${currentResolutionText.value}`
 })
 
-const isBusy = computed(() => isGenerating.value || isSaving.value)
+const isBusy = computed(() => isGenerating.value || isSaving.value || isSuggestingPrompt.value)
 
 const referenceImageMetaText = computed(() => {
   if (!referenceImage.value)
@@ -371,11 +365,86 @@ function stopPolling() {
 }
 
 /**
- * Chuyển sang câu mô tả mẫu tiếp theo trong danh sách gợi ý tĩnh.
+ * Đóng gói payload JSON hoặc FormData (nếu có ảnh tham chiếu đính kèm).
  */
-function applySamplePrompt() {
-  promptText.value = samplePrompts[samplePromptIndex.value % samplePrompts.length]
-  samplePromptIndex.value += 1
+function toRequestBody(fields, refImage) {
+  if (!refImage?.file)
+    return fields
+
+  const form = new FormData()
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined && v !== null && v !== '')
+      form.append(k, String(v))
+  }
+  form.append('reference_image', refImage.file, refImage.name || 'reference.png')
+
+  return form
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Bước 1 — Gửi mô tả + ảnh tham chiếu cho AI văn bản gợi ý prompt.
+ * =====================================================================
+ * SIDE EFFECT: gọi mediaApi.suggestAiImagePrompt -> điền kết quả vào `Prompt *`.
+ */
+async function suggestPromptFromAi() {
+  if (isBusy.value)
+    return
+
+  actionAlert.value = null
+
+  const cleanDescription = promptText.value.trim()
+  const refImage = referenceImage.value
+
+  if (!cleanDescription && !refImage?.file) {
+    actionAlert.value = {
+      type: 'warning',
+      text: 'Vui lòng nhập mô tả hình ảnh hoặc tải lên ảnh tham chiếu trước khi bấm Gợi ý prompt.',
+    }
+
+    return
+  }
+
+  const reqSeq = ++suggestSeq
+
+  isSuggestingPrompt.value = true
+
+  try {
+    const body = toRequestBody({
+      description: cleanDescription || null,
+      style: selectedStyle.value,
+      aspect_ratio: selectedRatio.value, // eslint-disable-line camelcase
+    }, refImage)
+
+    const result = await mediaApi.suggestAiImagePrompt(body)
+
+    if (reqSeq !== suggestSeq || !isOpen.value)
+      return
+
+    if (result?.prompt) {
+      aiPromptText.value = result.prompt
+      promptError.value = ''
+      actionAlert.value = {
+        type: 'success',
+        text: refImage?.file
+          ? 'AI đã phân tích mô tả và ảnh tham chiếu để tạo prompt gợi ý.'
+          : 'AI đã gợi ý prompt chi tiết từ mô tả của bạn.',
+      }
+      await nextTick()
+      promptInputRef.value?.$el?.querySelector('textarea')?.focus()
+    }
+  } catch (err) {
+    if (reqSeq !== suggestSeq)
+      return
+
+    actionAlert.value = {
+      type: 'error',
+      text: firstErrorMessage(err) || 'Không thể gợi ý prompt từ AI.',
+    }
+  } finally {
+    if (reqSeq === suggestSeq)
+      isSuggestingPrompt.value = false
+  }
 }
 
 function onPromptUpdate(val) {
@@ -552,13 +621,15 @@ async function generateImages() {
   selectedResultId.value = null
 
   try {
-    const job = await mediaApi.generateAiImages({
+    const body = toRequestBody({
       prompt: cleanPrompt,
       description: promptText.value.trim() || null,
       aspect_ratio: selectedRatio.value, // eslint-disable-line camelcase
       ai_model_id: selectedModel.value || null, // eslint-disable-line camelcase
       count: batchCount.value,
-    })
+    }, referenceImage.value)
+
+    const job = await mediaApi.generateAiImages(body)
 
     if (runSeq !== generationSeq)
       return
@@ -700,9 +771,11 @@ function closeDialog() {
  */
 function resetAfterLeave() {
   generationSeq += 1
+  suggestSeq += 1
   stopPolling()
   clearReferenceImage()
   isReferenceDragging.value = false
+  isSuggestingPrompt.value = false
   isGenerating.value = false
   isSaving.value = false
   jobTotal.value = 0
@@ -717,7 +790,6 @@ function resetAfterLeave() {
   resultViewMode.value = 'grid'
   selectedResultId.value = null
   actionAlert.value = null
-  samplePromptIndex.value = 0
   generatedResults.value = []
 }
 
@@ -726,12 +798,15 @@ watch(isOpen, open => {
     loadAiModels()
   } else {
     generationSeq += 1
+    suggestSeq += 1
+    isSuggestingPrompt.value = false
     stopPolling()
   }
 })
 
 onBeforeUnmount(() => {
   generationSeq += 1
+  suggestSeq += 1
   stopPolling()
   revokeReferencePreviewUrl()
 })
@@ -800,8 +875,9 @@ onBeforeUnmount(() => {
                   variant="tonal"
                   color="primary"
                   prepend-icon="tabler-wand"
+                  :loading="isSuggestingPrompt"
                   :disabled="isBusy"
-                  @click="applySamplePrompt"
+                  @click="suggestPromptFromAi"
                 >
                   Gợi ý prompt
                 </VBtn>
@@ -1242,7 +1318,7 @@ onBeforeUnmount(() => {
                   :prepend-icon="generatedResults.length === 0 && !isGenerating ? 'tabler-sparkles' : 'tabler-refresh'"
                   class="ai-toolbar-action-btn"
                   :loading="isGenerating"
-                  :disabled="isSaving || hasNoAvailableModel || modelsLoading"
+                  :disabled="isSuggestingPrompt || isSaving || hasNoAvailableModel || modelsLoading"
                   @click="generateImages"
                 >
                   {{ generatedResults.length === 0 && !isGenerating ? 'Tạo ảnh' : 'Tạo lại' }}
@@ -1296,7 +1372,7 @@ onBeforeUnmount(() => {
                 color="primary"
                 variant="flat"
                 prepend-icon="tabler-sparkles"
-                :disabled="hasNoAvailableModel || modelsLoading || isSaving"
+                :disabled="isSuggestingPrompt || hasNoAvailableModel || modelsLoading || isSaving"
                 @click="generateImages"
               >
                 Tạo ảnh

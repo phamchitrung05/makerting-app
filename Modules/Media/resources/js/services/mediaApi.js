@@ -16,7 +16,8 @@
  * - POST   /v1/admin/media/usages          -> attach() gán media
  * - DELETE /v1/admin/media/usages          -> detach() gỡ media
  * - GET    /v1/admin/media/ai-image/models -> aiImageModels() danh sách model AI tạo ảnh
- * - POST   /v1/admin/media/ai-image/generate -> generateAiImages() dispatch job tạo ảnh
+ * - POST   /v1/admin/media/ai-image/suggest-prompt -> suggestAiImagePrompt() AI gợi ý prompt (Step 1)
+ * - POST   /v1/admin/media/ai-image/generate -> generateAiImages() dispatch job tạo ảnh (Step 2)
  * - GET    /v1/admin/media/ai-image/jobs/{jobId} -> aiImageJobStatus() polling tiến độ
  * - POST   /v1/admin/media/ai-image/save   -> saveAiImage() lưu preview vào thư viện
  *
@@ -133,7 +134,12 @@ export const mediaApi = {
     return $api(`${BASE}/ai-image/models`)
   },
 
-  /* Khởi tạo job nền tạo ảnh preview AI (HTTP 202 Accepted) -> tracker job. */
+  /* Bước 1: Gửi mô tả + ảnh tham chiếu cho AI văn bản/vision gợi ý prompt tối ưu. */
+  suggestAiImagePrompt(payload) {
+    return $api(`${BASE}/ai-image/suggest-prompt`, { method: 'POST', body: payload })
+  },
+
+  /* Bước 2: Khởi tạo job nền tạo ảnh preview AI (HTTP 202 Accepted) -> tracker job. */
   generateAiImages(payload) {
     return $api(`${BASE}/ai-image/generate`, { method: 'POST', body: payload })
   },

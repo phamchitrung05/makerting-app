@@ -52,6 +52,8 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/media')->name('media.')->g
     // Sinh ảnh preview AI cho dialog & lưu chọn lọc vào Media Library.
     Route::get('ai-image/models', [MediaAiImageController::class, 'models'])
         ->middleware('permission:media.manage')->name('ai-image.models');
+    Route::post('ai-image/suggest-prompt', [MediaAiImageController::class, 'suggestPrompt'])
+        ->middleware('permission:media.manage')->name('ai-image.suggest-prompt');
     Route::post('ai-image/generate', [MediaAiImageController::class, 'generate'])
         ->middleware('permission:media.manage')->name('ai-image.generate');
     Route::get('ai-image/jobs/{jobId}', [MediaAiImageController::class, 'status'])

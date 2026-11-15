@@ -48,9 +48,20 @@ class GenerateAiImageRequest extends FormRequest
             $merged['prompt'] = trim($this->input('prompt'));
         }
 
-        if ($this->has('description') && is_string($this->input('description'))) {
-            $trimmed = trim($this->input('description'));
-            $merged['description'] = $trimmed === '' ? null : $trimmed;
+        if ($this->has('description')) {
+            $desc = $this->input('description');
+            if ($desc === null || (is_string($desc) && (trim($desc) === '' || strtolower(trim($desc)) === 'null'))) {
+                $merged['description'] = null;
+            } elseif (is_string($desc)) {
+                $merged['description'] = trim($desc);
+            }
+        }
+
+        if ($this->has('ai_model_id')) {
+            $modelId = $this->input('ai_model_id');
+            if ($modelId === '' || (is_string($modelId) && strtolower(trim($modelId)) === 'null')) {
+                $merged['ai_model_id'] = null;
+            }
         }
 
         if ($merged !== []) {
@@ -71,6 +82,13 @@ class GenerateAiImageRequest extends FormRequest
             'aspect_ratio' => ['required', 'string', Rule::in(self::ASPECT_RATIOS)],
             'ai_model_id' => ['nullable', 'integer', 'exists:ai_models,id'],
             'count' => ['required', 'integer', Rule::in(self::COUNTS)],
+            'reference_image' => [
+                'nullable',
+                'file',
+                'image',
+                'mimes:jpg,jpeg,png,webp,avif,gif,bmp',
+                'max:10240',
+            ],
         ];
     }
 
@@ -90,6 +108,10 @@ class GenerateAiImageRequest extends FormRequest
             'ai_model_id.exists' => 'Model AI được chọn không tồn tại trong hệ thống.',
             'count.required' => 'Vui lòng chọn số lượng ảnh cần tạo.',
             'count.in' => 'Số lượng ảnh chỉ hỗ trợ 1, 2 hoặc 4.',
+            'reference_image.file' => 'Ảnh tham chiếu tải lên không hợp lệ.',
+            'reference_image.image' => 'Tệp ảnh tham chiếu phải là hình ảnh hợp lệ.',
+            'reference_image.mimes' => 'Ảnh tham chiếu chỉ hỗ trợ JPG, PNG, WEBP, AVIF, GIF hoặc BMP.',
+            'reference_image.max' => 'Ảnh tham chiếu không được vượt quá 10 MB.',
         ];
     }
 }

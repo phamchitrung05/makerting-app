@@ -304,12 +304,14 @@ class GeminiDriver extends AbstractAiDriver
 
         foreach ($attachments as $att) {
             if (isset($att['data'])) {
+                $norm = $this->normalizeAttachment($att);
+                if ($norm['base64'] === '') {
+                    continue;
+                }
                 $parts[] = [
                     'inlineData' => [
-                        'mimeType' => $att['mime'] ?? 'image/png',
-                        'data' => is_string($att['data']) && str_starts_with($att['data'], 'data:')
-                            ? substr($att['data'], strpos($att['data'], ',') + 1)
-                            : base64_encode($att['data']),
+                        'mimeType' => $norm['mime'],
+                        'data' => $norm['base64'],
                     ],
                 ];
             }

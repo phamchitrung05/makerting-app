@@ -329,7 +329,10 @@ class MediaAiImageTest extends TestCase
     public function test_generate_dispatches_job_on_configured_queue_and_returns_202(): void
     {
         Queue::fake();
-        config(['media.ai_image_queue' => 'ai-images']);
+        config([
+            'media.ai_image_queue' => 'ai-images',
+            'media.ai_image_timeout' => 480,
+        ]);
 
         $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
 
@@ -351,8 +354,13 @@ class MediaAiImageTest extends TestCase
         Queue::assertPushedOn('ai-images', function (GenerateAiImageJob $job) use ($jobId, $manager): bool {
             return $job->jobId === $jobId
                 && $job->userId === $manager->id
+                && $job->timeout === 480
                 && ($job->payload['count'] ?? null) === 2;
         });
+
+        config(['media.ai_image_timeout' => 0]);
+        $fallbackJob = new GenerateAiImageJob($jobId, $manager->id, ['count' => 1]);
+        $this->assertSame(360, $fallbackJob->timeout);
     }
 
     public function test_async_flow_generates_multiple_previews_streams_signed_urls_and_isolates_owner(): void
@@ -708,5 +716,267 @@ class MediaAiImageTest extends TestCase
         $this->assertSame($aiRun->id, $prov->ai_run_id);
         $this->assertSame($manager->id, (int) $prov->applied_by);
         $this->assertSame(AiProvenance::hashValue($asset->checksum_sha256), $prov->value_hash);
+    }
+
+    public function test_suggest_prompt_requires_media_manage_permission(): void
+    {
+        $viewer = $this->createUserWithPermissions(['media.view']);
+
+        $this->withHeaders($this->bearerHeader($viewer))
+            ->postJson('/api/v1/admin/media/ai-image/suggest-prompt', [
+                'description' => 'Cốc trà sen phong cách vẽ tay',
+            ])
+            ->assertStatus(403);
+    }
+
+    public function test_suggest_prompt_requires_description_or_reference_image(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.manage']);
+
+        $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/suggest-prompt', [
+                'description' => '   ',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['description']);
+    }
+
+    public function test_suggest_prompt_with_description_and_reference_image_calls_structured_gateway(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.manage']);
+        $capturedRequest = null;
+
+        $fakeGateway = new class($capturedRequest) implements CoreAiGatewayContract
+        {
+            public function __construct(private mixed &$capturedRef) {}
+
+            public function executeStructured(AiStructuredRequest $req): AiStructuredResponse
+            {
+                $this->capturedRef = $req;
+
+                return new AiStructuredResponse(
+                    text: '{"prompt":"Warm artisanal ceramic cup of lotus tea matching the pastel palette, watercolor editorial illustration"}',
+                    data: [
+                        'prompt' => 'Warm artisanal ceramic cup of lotus tea matching the pastel palette, watercolor editorial illustration',
+                    ],
+                    remoteModelId: 'gpt-6.1-sol',
+                    providerKey: 'apikey-fan',
+                );
+            }
+
+            public function generateImage(AiImageRequest $req): AiImageResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function synthesizeSpeech(AiSpeechRequest $req): AiSpeechResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function transcribeAudio(AiTranscribeRequest $req): AiTranscribeResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+        };
+
+        $this->app->instance(CoreAiGatewayContract::class, $fakeGateway);
+
+        $refPng = $this->pngBinary(120, 80, 210, 150, 90);
+        $uploadedRef = UploadedFile::fake()->createWithContent('reference.png', $refPng);
+
+        $res = $this->withHeaders($this->bearerHeader($manager))
+            ->post('/api/v1/admin/media/ai-image/suggest-prompt', [
+                'description' => 'Giữ dáng cốc trong ảnh mẫu, đổi sang nền kem ấm',
+                'reference_image' => $uploadedRef,
+                'style' => 'watercolor',
+                'aspect_ratio' => '4:3',
+            ], ['Accept' => 'application/json'])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotNull($capturedRequest);
+        $this->assertInstanceOf(AiStructuredRequest::class, $capturedRequest);
+        $this->assertSame('vision', $capturedRequest->requiredCapability());
+        $this->assertCount(1, $capturedRequest->attachments);
+        $this->assertSame('image/png', $capturedRequest->attachments[0]['mime']);
+        $this->assertSame(base64_encode($refPng), $capturedRequest->attachments[0]['data']);
+        $this->assertStringContainsString('has_reference_image', $capturedRequest->messages[0]['content']);
+        $decodedUser = json_decode((string) $capturedRequest->messages[1]['content'], true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame([
+            'task' => 'suggest_image_generation_prompt',
+            'has_reference_image' => true,
+            'description' => 'Giữ dáng cốc trong ảnh mẫu, đổi sang nền kem ấm',
+            'style' => 'watercolor',
+            'style_guidance' => config('media.prompt.ai_image_suggest.styles.watercolor'),
+            'aspect_ratio' => '4:3',
+        ], $decodedUser);
+        $this->assertSame('gpt-6.1-sol', $res['model']);
+        $this->assertSame('apikey-fan', $res['provider']);
+        $this->assertTrue($res['has_reference_image']);
+        $this->assertStringContainsString('ceramic cup of lotus tea', $res['prompt']);
+    }
+
+    public function test_suggest_prompt_with_description_only_works_without_attachment(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.manage']);
+        $capturedRequest = null;
+
+        $fakeGateway = new class($capturedRequest) implements CoreAiGatewayContract
+        {
+            public function __construct(private mixed &$capturedRef) {}
+
+            public function executeStructured(AiStructuredRequest $req): AiStructuredResponse
+            {
+                $this->capturedRef = $req;
+
+                return new AiStructuredResponse(
+                    text: '{"prompt":"Minimalist matcha drink poster with crisp studio daylight"}',
+                    data: ['prompt' => 'Minimalist matcha drink poster with crisp studio daylight'],
+                    remoteModelId: 'gpt-6.1-sol',
+                    providerKey: 'apikey-fan',
+                );
+            }
+
+            public function generateImage(AiImageRequest $req): AiImageResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function synthesizeSpeech(AiSpeechRequest $req): AiSpeechResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function transcribeAudio(AiTranscribeRequest $req): AiTranscribeResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+        };
+
+        $this->app->instance(CoreAiGatewayContract::class, $fakeGateway);
+
+        $res = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/suggest-prompt', [
+                'description' => 'Poster trà matcha tối giản',
+                'style' => 'minimal',
+                'aspect_ratio' => '1:1',
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertInstanceOf(AiStructuredRequest::class, $capturedRequest);
+        $this->assertSame('structured_output', $capturedRequest->requiredCapability());
+        $this->assertSame([], $capturedRequest->attachments);
+        $this->assertFalse($res['has_reference_image']);
+        $this->assertSame('Minimalist matcha drink poster with crisp studio daylight', $res['prompt']);
+    }
+
+    public function test_suggest_prompt_reads_base_prompts_and_styles_from_media_prompt_config(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.manage']);
+        $capturedRequest = null;
+
+        config()->set('media.prompt.ai_image_suggest.system', <<<'PROMPT'
+CUSTOM_SYSTEM_NOWDOC_FOR_TEST
+Chỉ trả JSON đúng schema.
+PROMPT);
+        config()->set('media.prompt.ai_image_suggest.styles.watercolor', 'Custom Watercolor Style');
+
+        $fakeGateway = new class($capturedRequest) implements CoreAiGatewayContract
+        {
+            public function __construct(private mixed &$capturedRef) {}
+
+            public function executeStructured(AiStructuredRequest $req): AiStructuredResponse
+            {
+                $this->capturedRef = $req;
+
+                return new AiStructuredResponse(
+                    text: '{"prompt":"Custom configured editorial watercolor drink scene"}',
+                    data: ['prompt' => 'Custom configured editorial watercolor drink scene'],
+                    remoteModelId: 'gpt-6.1-sol',
+                    providerKey: 'apikey-fan',
+                );
+            }
+
+            public function generateImage(AiImageRequest $req): AiImageResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function synthesizeSpeech(AiSpeechRequest $req): AiSpeechResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function transcribeAudio(AiTranscribeRequest $req): AiTranscribeResponse
+            {
+                throw new RuntimeException('Not implemented');
+            }
+        };
+
+        $this->app->instance(CoreAiGatewayContract::class, $fakeGateway);
+
+        $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/suggest-prompt', [
+                'description' => 'Trà vải hoa hồng',
+                'style' => 'watercolor',
+                'aspect_ratio' => '4:3',
+            ])
+            ->assertOk();
+
+        $this->assertInstanceOf(AiStructuredRequest::class, $capturedRequest);
+        $this->assertSame("CUSTOM_SYSTEM_NOWDOC_FOR_TEST\nChỉ trả JSON đúng schema.", $capturedRequest->messages[0]['content']);
+        $decodedUser = json_decode((string) $capturedRequest->messages[1]['content'], true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame([
+            'task' => 'suggest_image_generation_prompt',
+            'has_reference_image' => false,
+            'description' => 'Trà vải hoa hồng',
+            'style' => 'watercolor',
+            'style_guidance' => 'Custom Watercolor Style',
+            'aspect_ratio' => '4:3',
+        ], $decodedUser);
+    }
+
+    public function test_generate_with_reference_image_forwards_reference_to_gateway_and_cleans_up_temp_file(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.manage']);
+        $capturedImageRequest = null;
+        $refPng = $this->pngBinary(64, 64, 180, 90, 60);
+        $outPng = $this->pngBinary(64, 64, 40, 120, 200);
+
+        $this->bindFakeImageGateway(function (AiImageRequest $req) use (&$capturedImageRequest, $outPng): AiImageResponse {
+            $capturedImageRequest = $req;
+
+            return new AiImageResponse(
+                images: [['mime' => 'image/png', 'data' => $outPng]],
+                remoteModelId: 'gpt-image-2',
+                providerKey: 'apikey-image',
+            );
+        });
+
+        $uploadedRef = UploadedFile::fake()->createWithContent('ref-subject.png', $refPng);
+
+        $job = $this->withHeaders($this->bearerHeader($manager))
+            ->post('/api/v1/admin/media/ai-image/generate', [
+                'prompt' => 'Keep the cup design on a sunlit wooden table',
+                'aspect_ratio' => '16:9',
+                'count' => 1,
+                'reference_image' => $uploadedRef,
+            ], ['Accept' => 'application/json'])
+            ->assertStatus(202)
+            ->json('data');
+
+        $this->assertInstanceOf(AiImageRequest::class, $capturedImageRequest);
+        $this->assertTrue($capturedImageRequest->hasReferences());
+        $this->assertCount(1, $capturedImageRequest->referenceImages);
+        $this->assertSame('image/png', $capturedImageRequest->referenceImages[0]['mime']);
+        $this->assertSame($refPng, $capturedImageRequest->referenceImages[0]['data']);
+        $this->assertSame([], Storage::disk('temp_processing')->files('ai-references'));
+
+        $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/ai-image/jobs/' . $job['job_id'])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'ready');
     }
 }

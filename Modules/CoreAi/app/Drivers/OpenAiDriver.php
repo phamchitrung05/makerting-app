@@ -201,49 +201,55 @@ class OpenAiDriver extends AbstractAiDriver
     public function image(AiResolvedModelDto $resolved, AiImageRequest $request): AiImageResponse
     {
         return $this->withKeyRotation($resolved, function (AiResolvedModelDto $r) use ($request) {
-            $payload = [
-                'model' => $r->model->remote_model_id,
-                'prompt' => $request->prompt,
-                'n' => 1,
-                'size' => $this->sizeFor($request->aspectRatio),
-                'response_format' => 'b64_json',
-            ];
-
+            $prompt = $request->prompt;
             if ($request->negativePrompt !== null && $request->negativePrompt !== '') {
                 // OpenAI không có negative_prompt riêng — nhét vào prompt với
                 // chỉ dẫn loại trừ để model tự tránh.
-                $payload['prompt'] .= "\n\nAvoid: {$request->negativePrompt}";
-            }
-            foreach ($request->options as $k => $v) {
-                if (! array_key_exists($k, $payload)) {
-                    $payload[$k] = $v;
-                }
+                $prompt .= "\n\nAvoid: {$request->negativePrompt}";
             }
 
-            $data = $this->client()->requestJson(
-                $r->provider,
-                $this->url($r->provider, 'images/generations'),
-                $payload,
-                $this->headers($r->apiKey),
-                ['keyIndex' => $r->keyIndex, 'maxBytes' => 64 * 1024 * 1024]
-            );
+            $size = $this->sizeFor($request->aspectRatio, (string) $r->model->remote_model_id);
+
+            $data = $request->hasReferences()
+                ? $this->requestImageEdits($r, $prompt, $size, $request)
+                : $this->requestImageGenerations($r, $prompt, $size, $request);
 
             $images = [];
             foreach ((array) ($data['data'] ?? []) as $item) {
                 $b64 = $item['b64_json'] ?? null;
-                if ($b64 === null) {
+                if (is_string($b64) && $b64 !== '') {
+                    $bin = base64_decode($b64, true);
+                    if ($bin !== false) {
+                        $images[] = [
+                            'mime' => 'image/png',
+                            'data' => $bin,
+                            'width' => null,
+                            'height' => null,
+                        ];
+                    }
+
                     continue;
                 }
-                $bin = base64_decode($b64, true);
-                if ($bin === false) {
-                    continue;
+
+                $url = $item['url'] ?? null;
+                if (is_string($url) && $url !== '') {
+                    $dl = $this->client()->request(
+                        $r->provider,
+                        'GET',
+                        $url,
+                        [],
+                        null,
+                        ['maxBytes' => 64 * 1024 * 1024]
+                    );
+                    if ($dl->body !== '') {
+                        $images[] = [
+                            'mime' => $dl->contentType !== '' ? trim(explode(';', $dl->contentType)[0]) : 'image/png',
+                            'data' => $dl->body,
+                            'width' => null,
+                            'height' => null,
+                        ];
+                    }
                 }
-                $images[] = [
-                    'mime' => 'image/png',
-                    'data' => $bin,
-                    'width' => null,
-                    'height' => null,
-                ];
             }
 
             if ($images === []) {
@@ -259,6 +265,114 @@ class OpenAiDriver extends AbstractAiDriver
                 providerKey: $r->provider->key,
             );
         });
+    }
+
+    /**
+     * CHỨC NĂNG: Gọi POST /images/generations cho sinh ảnh từ văn bản thuần.
+     * INPUT: resolved, prompt, size, request. OUTPUT: array JSON decoded.
+     */
+    protected function requestImageGenerations(
+        AiResolvedModelDto $r,
+        string $prompt,
+        string $size,
+        AiImageRequest $request,
+    ): array {
+        $payload = [
+            'model' => $r->model->remote_model_id,
+            'prompt' => $prompt,
+            'n' => 1,
+            'size' => $size,
+            'response_format' => 'b64_json',
+        ];
+
+        foreach ($request->options as $k => $v) {
+            if (! array_key_exists($k, $payload)) {
+                $payload[$k] = $v;
+            }
+        }
+
+        return $this->client()->requestJson(
+            $r->provider,
+            $this->url($r->provider, 'images/generations'),
+            $payload,
+            $this->headers($r->apiKey),
+            ['keyIndex' => $r->keyIndex, 'maxBytes' => 64 * 1024 * 1024]
+        );
+    }
+
+    /**
+     * CHỨC NĂNG: Gọi multipart POST /images/edits khi có ảnh tham chiếu.
+     * INPUT: resolved, prompt, size, request. OUTPUT: array JSON decoded.
+     */
+    protected function requestImageEdits(
+        AiResolvedModelDto $r,
+        string $prompt,
+        string $size,
+        AiImageRequest $request,
+    ): array {
+        $ref = $request->referenceImages[0] ?? [];
+        $norm = $this->normalizeAttachment(is_array($ref) ? $ref : []);
+        $binary = $norm['binary'];
+
+        if ($binary === '' && $norm['url'] !== null) {
+            $dl = $this->client()->request(
+                $r->provider,
+                'GET',
+                $norm['url'],
+                [],
+                null,
+                ['maxBytes' => 25 * 1024 * 1024]
+            );
+            $binary = $dl->body;
+            if ($dl->contentType !== '') {
+                $norm['mime'] = trim(explode(';', $dl->contentType)[0]);
+            }
+        }
+
+        if ($binary === '') {
+            throw AiGatewayException::validation('Không đọc được dữ liệu ảnh tham chiếu để gửi cho model tạo ảnh.', [
+                'provider' => $r->provider->key,
+                'model' => $r->model->remote_model_id,
+            ]);
+        }
+
+        $ext = $this->mimeExtension($norm['mime']);
+        $body = [
+            'model' => $r->model->remote_model_id,
+            'prompt' => $prompt,
+            'n' => '1',
+            'size' => $size,
+            'image' => [
+                'contents' => $binary,
+                'filename' => "reference.{$ext}",
+                'mime' => $norm['mime'],
+            ],
+        ];
+
+        foreach ($request->options as $k => $v) {
+            if (! array_key_exists($k, $body) && (is_scalar($v) || is_null($v))) {
+                $body[$k] = (string) $v;
+            }
+        }
+
+        $res = $this->client()->request(
+            $r->provider,
+            'POST',
+            $this->url($r->provider, 'images/edits'),
+            $this->headers($r->apiKey),
+            $body,
+            ['keyIndex' => $r->keyIndex, 'maxBytes' => 64 * 1024 * 1024]
+        );
+
+        $decoded = json_decode($res->body, true);
+        if (! is_array($decoded)) {
+            throw AiGatewayException::providerError(
+                'provider không trả JSON hợp lệ cho images/edits',
+                ['provider' => $r->provider->key]
+            );
+        }
+
+        return $decoded;
     }
     /**
      * =====================================================================
@@ -421,14 +535,13 @@ class OpenAiDriver extends AbstractAiDriver
     {
         $parts = [];
         foreach ($attachments as $att) {
-            $mime = $att['mime'] ?? 'image/png';
             if (isset($att['url'])) {
                 $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $att['url']]];
             } elseif (isset($att['data'])) {
-                $b64 = is_string($att['data']) && str_starts_with($att['data'], 'data:')
-                    ? $att['data']
-                    : 'data:' . $mime . ';base64,' . base64_encode($att['data']);
-                $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $b64]];
+                $norm = $this->normalizeAttachment($att);
+                if ($norm['data_uri'] !== '') {
+                    $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $norm['data_uri']]];
+                }
             }
         }
 
@@ -475,12 +588,21 @@ class OpenAiDriver extends AbstractAiDriver
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: aspectRatio → size API OpenAI (DALL-E 3).
-     * INPUT: 'W:H'. OUTPUT: 'WxH' hợp lệ; fallback '1024x1024'.
+     * CHỨC NĂNG: aspectRatio → size API OpenAI (DALL-E / gpt-image-*).
+     * INPUT: 'W:H', optional remote model id. OUTPUT: 'WxH' hợp lệ.
      * =====================================================================
      */
-    protected function sizeFor(string $aspectRatio): string
+    protected function sizeFor(string $aspectRatio, string $modelId = ''): string
     {
+        if (str_starts_with(strtolower($modelId), 'gpt-image')) {
+            return match ($aspectRatio) {
+                '16:9', '4:3' => '1536x1024',
+                '9:16', '3:4' => '1024x1536',
+                '1:1' => '1024x1024',
+                default => '1024x1024',
+            };
+        }
+
         return match ($aspectRatio) {
             '16:9' => '1792x1024',
             '9:16' => '1024x1792',

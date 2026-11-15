@@ -104,11 +104,11 @@ final readonly class AiStructuredRequest
      */
     public function requiredCapability(): string
     {
-        if ($this->requiresStructuredOutput()) {
-            return \Modules\CoreAi\Models\AiModel::CAP_STRUCTURED_OUTPUT;
-        }
         if ($this->hasAttachments()) {
             return \Modules\CoreAi\Models\AiModel::CAP_VISION;
+        }
+        if ($this->requiresStructuredOutput()) {
+            return \Modules\CoreAi\Models\AiModel::CAP_STRUCTURED_OUTPUT;
         }
 
         return \Modules\CoreAi\Models\AiModel::CAP_TEXT_GENERATION;

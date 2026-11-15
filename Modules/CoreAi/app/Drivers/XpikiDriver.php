@@ -49,6 +49,25 @@ class XpikiDriver extends AbstractAiDriver
             $payload = ['model'=>$r->model->remote_model_id, 'prompt'=>$request->prompt];
             if ($request->aspectRatio !== '' && $request->aspectRatio !== '1:1')
                 $payload['aspect_ratio'] = $request->aspectRatio;
+            if ($request->hasReferences()) {
+                $references = [];
+                foreach ($request->referenceImages as $att) {
+                    if (! is_array($att)) {
+                        continue;
+                    }
+                    if (! empty($att['url']) && is_string($att['url'])) {
+                        $references[] = $att['url'];
+                        continue;
+                    }
+                    $norm = $this->normalizeAttachment($att);
+                    if ($norm['data_uri'] !== '') {
+                        $references[] = $norm['data_uri'];
+                    }
+                }
+                if ($references !== []) {
+                    $payload['references'] = $references;
+                }
+            }
             $task = $this->submitTask($r, 'images/generations', $payload);
             $done = $this->waitTask($r, $task);
             $images = $this->downloadOutputs($r, $done, 'image/');
@@ -80,9 +99,25 @@ class XpikiDriver extends AbstractAiDriver
             $cur = json_decode($res->body, true) ?: [];
             $status = $cur['status'] ?? 'unknown';
             if ($status === 'succeeded') return $cur;
-            if (in_array($status, ['failed','error','cancelled','canceled'], true))
-                throw AiGatewayException::providerError(
-                    'xpiki task that bai: '.($cur['error']??$cur['message']??$status), ['task'=>$id]);
+            if (in_array($status, ['failed','error','cancelled','canceled'], true)) {
+                $errCode = strtoupper((string) ($cur['error_code'] ?? ''));
+                $errMsg = $cur['error_message'] ?? $cur['error'] ?? $cur['message'] ?? $status;
+                if (is_array($errMsg)) {
+                    $errMsg = $errMsg['message'] ?? json_encode($errMsg);
+                }
+                $msg = 'xpiki task that bai: ' . $errMsg;
+                $ctx = ['task' => $id];
+                if ($errCode !== '') {
+                    $ctx['error_code'] = $errCode;
+                }
+                if (str_contains($errCode, 'RATE_LIMIT') || str_contains($errCode, '429')) {
+                    throw AiGatewayException::rateLimit($msg, $ctx);
+                }
+                if (str_contains($errCode, 'AUTH') || str_contains($errCode, 'UNAUTHORIZED') || str_contains($errCode, 'INVALID_KEY')) {
+                    throw AiGatewayException::auth($msg, $ctx);
+                }
+                throw AiGatewayException::providerError($msg, $ctx);
+            }
             usleep(1000000);
         }
         throw AiGatewayException::providerError('xpiki task qua thoi gian cho', ['task'=>$id]);

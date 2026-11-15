@@ -14,7 +14,8 @@ use Modules\Media\Actions\GenerateAiPreviewImagesAction;
  * CHỨC NĂNG FILE: Job nền gọi CoreAi tạo bộ ảnh preview tạm cho dialog Media.
  * =====================================================================
  *
- * Chạy trên queue cấu hình tại `media.ai_image_queue` (mặc định `'default'`).
+ * Chạy trên queue cấu hình tại `media.ai_image_queue` (mặc định `'default'`)
+ * với thời gian tối đa đọc từ `media.ai_image_timeout` (mặc định `360` giây).
  * Ủy quyền toàn bộ việc gọi CoreAi, lưu disk tạm và cập nhật Cache tracker
  * cho GenerateAiPreviewImagesAction.
  *
@@ -32,10 +33,10 @@ class GenerateAiImageJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 180;
+    public int $timeout = 360;
 
     /**
-     * CHỨC NĂNG: Khởi tạo job và gắn queue cấu hình từ `media.ai_image_queue`.
+     * CHỨC NĂNG: Khởi tạo job và gắn queue + timeout cấu hình từ `Modules/Media/config/config.php`.
      * INPUT: string $jobId, int $userId, array $payload.
      * OUTPUT: instance job sẵn sàng dispatch.
      */
@@ -44,6 +45,8 @@ class GenerateAiImageJob implements ShouldQueue
         public int $userId,
         public array $payload,
     ) {
+        $configuredTimeout = (int) config('media.ai_image_timeout', 360);
+        $this->timeout = $configuredTimeout > 0 ? $configuredTimeout : 360;
         $this->onQueue((string) config('media.ai_image_queue', 'default'));
     }
 

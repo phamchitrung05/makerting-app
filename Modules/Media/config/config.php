@@ -28,6 +28,9 @@ return [
     /* Queue xử lý tác vụ gọi AI tạo ảnh chạy nền (default để Dev dùng chung queue:listen). */
     'ai_image_queue' => env('MEDIA_AI_IMAGE_QUEUE', 'default'),
 
+    /* Thời gian tối đa (giây) cho mỗi GenerateAiImageJob (đồng bộ --timeout ở worker & UI polling). */
+    'ai_image_timeout' => max(1, (int) (env('MEDIA_AI_IMAGE_TIMEOUT') ?: 360)),
+
     /* Thời gian sống (phút) của file ảnh preview AI tạm trên temp_processing + Cache. */
     'ai_preview_ttl_minutes' => (int) env('MEDIA_AI_PREVIEW_TTL_MINUTES', 60),
 

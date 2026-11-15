@@ -8,12 +8,16 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Modules\Core\Http\Responses\BaseResponse;
+use Modules\CoreAi\Exceptions\AiGatewayException;
 use Modules\CoreAi\Models\AiModel;
 use Modules\CoreAi\Settings\AiSettings;
 use Modules\Media\Actions\GenerateAiPreviewImagesAction;
+use Modules\Media\Actions\PrepareAiReferenceImageAction;
 use Modules\Media\Actions\SaveAiPreviewToMediaAction;
+use Modules\Media\Actions\SuggestAiImagePromptAction;
 use Modules\Media\Http\Requests\GenerateAiImageRequest;
 use Modules\Media\Http\Requests\SaveGeneratedImageRequest;
+use Modules\Media\Http\Requests\SuggestAiImagePromptRequest;
 use Modules\Media\Http\Resources\MediaAssetResource;
 use Modules\Media\Jobs\GenerateAiImageJob;
 use Modules\Media\Services\AiImagePreviewStore;
@@ -98,12 +102,46 @@ class MediaAiImageController extends Controller
 
     /**
      * =====================================================================
+     * POST /api/v1/admin/media/ai-image/suggest-prompt
+     * =====================================================================
+     * CHỨC NĂNG: Bước 1 — Gửi mô tả + ảnh tham chiếu cho AI văn bản/vision gợi ý prompt.
+     * INPUT: SuggestAiImagePromptRequest, SuggestAiImagePromptAction.
+     * OUTPUT: BaseResponse::success {prompt, model, provider, has_reference_image}.
+     * =====================================================================
+     */
+    public function suggestPrompt(
+        SuggestAiImagePromptRequest $request,
+        SuggestAiImagePromptAction $action,
+    ): JsonResponse {
+        $data = $request->validated();
+
+        try {
+            $result = $action->execute(
+                $data['description'] ?? null,
+                $request->file('reference_image'),
+                $data['style'] ?? null,
+                $data['aspect_ratio'] ?? null,
+            );
+        } catch (InvalidArgumentException $e) {
+            return BaseResponse::error($e->getMessage(), 422);
+        } catch (AiGatewayException $e) {
+            $status = in_array($e->errorCode(), ['validation', 'unsupported'], true) ? 422 : 502;
+
+            return BaseResponse::error($e->getMessage(), $status);
+        }
+
+        return BaseResponse::success($result, 'Đã gợi ý prompt từ AI thành công.');
+    }
+
+    /**
+     * =====================================================================
      * POST /api/v1/admin/media/ai-image/generate
      * =====================================================================
      * CHỨC NĂNG: Khởi tạo job nền tạo ảnh preview AI (HTTP 202 Accepted)
-     * INPUT: GenerateAiImageRequest (prompt, description?, aspect_ratio, ai_model_id?, count).
+     * INPUT: GenerateAiImageRequest (prompt, description?, reference_image?, aspect_ratio, ai_model_id?, count).
      * OUTPUT: BaseResponse::accepted tracker job ban đầu {job_id, status, total, completed, results}.
      * SIDE EFFECT:
+     * - lưu ảnh tham chiếu tạm (nếu có) lên `temp_processing`
      * - ghi Cache tracker `ai_image_job:{jobId}`
      * - dispatch GenerateAiImageJob vào queue `media.ai_image_queue`
      * =====================================================================
@@ -111,6 +149,7 @@ class MediaAiImageController extends Controller
     public function generate(
         GenerateAiImageRequest $request,
         GenerateAiPreviewImagesAction $action,
+        PrepareAiReferenceImageAction $prepareReference,
     ): JsonResponse {
         $data = $request->validated();
 
@@ -126,6 +165,24 @@ class MediaAiImageController extends Controller
         $userId = (int) $request->user()->id;
         $count = (int) $data['count'];
 
+        $refPath = null;
+        $refMime = null;
+        if ($request->hasFile('reference_image')) {
+            try {
+                $prepared = $prepareReference->scanAndRead(
+                    $request->file('reference_image'),
+                    maxInputBytes: 10 * 1024 * 1024,
+                    maxDimension: null,
+                    maxOutputBytes: 8 * 1024 * 1024,
+                    allowedOutputMimes: ['image/jpeg', 'image/png', 'image/webp'],
+                );
+                $refMime = $prepared['mime'];
+                $refPath = $this->store->storeTempReference($jobId, $prepared['binary'], $refMime);
+            } catch (InvalidArgumentException $e) {
+                return BaseResponse::error($e->getMessage(), 422);
+            }
+        }
+
         $payload = [
             'prompt' => $data['prompt'],
             'description' => $data['description'] ?? null,
@@ -134,14 +191,23 @@ class MediaAiImageController extends Controller
             'provider_key' => $selectedModel?->provider?->key,
             'remote_model_id' => $selectedModel?->remote_model_id,
             'count' => $count,
+            'reference_image_path' => $refPath,
+            'reference_image_mime' => $refMime,
         ];
 
-        $initialJob = $this->store->initJob($jobId, $userId, $count, [
-            'aspect_ratio' => $data['aspect_ratio'],
-            'ai_model_id' => $selectedModel?->id,
-        ]);
+        try {
+            $initialJob = $this->store->initJob($jobId, $userId, $count, [
+                'aspect_ratio' => $data['aspect_ratio'],
+                'ai_model_id' => $selectedModel?->id,
+                'has_reference_image' => $refPath !== null,
+            ]);
 
-        GenerateAiImageJob::dispatch($jobId, $userId, $payload);
+            GenerateAiImageJob::dispatch($jobId, $userId, $payload);
+        } catch (Throwable $e) {
+            $this->store->deleteTempReference($refPath);
+
+            throw $e;
+        }
 
         return BaseResponse::accepted(
             $this->store->toPublicJobPayload($initialJob),

@@ -318,6 +318,59 @@ class AiImagePreviewStore
     }
 
     /**
+     * =====================================================================
+     * CHỨC NĂNG: Lưu tạm ảnh tham chiếu trên disk `temp_processing` cho Queue Job.
+     * INPUT: string $jobId, string $binary, string $mime.
+     * OUTPUT: string đường dẫn tương đối `ai-references/{jobId}.{ext}`.
+     * =====================================================================
+     */
+    public function storeTempReference(string $jobId, string $binary, string $mime): string
+    {
+        $path = 'ai-references/' . $jobId . '.' . $this->extensionForMime($mime);
+        $this->disk()->put($path, $binary);
+
+        return $path;
+    }
+
+    /**
+     * CHỨC NĂNG: Đọc nhị phân ảnh tham chiếu tạm nếu vẫn còn trên disk.
+     * INPUT: ?string $path.
+     * OUTPUT: ?string binary.
+     */
+    public function readTempReference(?string $path): ?string
+    {
+        if (! is_string($path) || $path === '' || ! str_starts_with($path, 'ai-references/')) {
+            return null;
+        }
+
+        $disk = $this->disk();
+        if (! $disk->exists($path)) {
+            return null;
+        }
+
+        $content = $disk->get($path);
+
+        return is_string($content) && $content !== '' ? $content : null;
+    }
+
+    /**
+     * CHỨC NĂNG: Xóa tệp ảnh tham chiếu tạm sau khi Queue Job xử lý xong.
+     * INPUT: ?string $path.
+     * OUTPUT: void.
+     */
+    public function deleteTempReference(?string $path): void
+    {
+        if (! is_string($path) || $path === '' || ! str_starts_with($path, 'ai-references/')) {
+            return;
+        }
+
+        $disk = $this->disk();
+        if ($disk->exists($path)) {
+            $disk->delete($path);
+        }
+    }
+
+    /**
      * CHỨC NĂNG: Lọc Content-Type an toàn khi stream ảnh preview inline tránh XSS SVG/HTML.
      * INPUT: string $mime.
      * OUTPUT: string MIME an toàn (`image/png`... hoặc `application/octet-stream`).

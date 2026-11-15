@@ -234,10 +234,16 @@ abstract class AbstractAiDriver implements AiProviderDriverContract
         $modelId = (string) $resolved->model->remote_model_id;
 
         // Gộp text/structured/vision (hoặc rỗng) -> structured().
+        // Model chuyên image_generation có thể gắn thêm 'vision' (VD gpt-image-2
+        // nhận ảnh tham chiếu) — không ép ping sang chat/structured nếu không có
+        // capability text_generation/structured_output.
         $texty = $caps === []
             || in_array('text_generation', $caps, true)
             || in_array('structured_output', $caps, true)
-            || in_array('vision', $caps, true);
+            || (in_array('vision', $caps, true)
+                && ! in_array('image_generation', $caps, true)
+                && ! in_array('tts', $caps, true)
+                && ! in_array('stt', $caps, true));
 
         if ($texty && $this->supports('structured')) {
             return $this->structured($resolved, \Modules\CoreAi\Services\AiModelProbeFixtures::textRequest($caps, $modelId));
@@ -308,6 +314,111 @@ abstract class AbstractAiDriver implements AiProviderDriverContract
             || str_starts_with(strtolower($actual), strtolower($requested) . '.');
     }
 
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Chuẩn hóa attachment ảnh (data URI / bare base64 / raw binary).
+     * =====================================================================
+     * Caller có thể truyền `data` dưới dạng base64 thuần, data URI
+     * (`data:image/png;base64,...`) hoặc binary thô. Tránh double-encode.
+     *
+     * INPUT: array{mime?:string, data?:string, url?:string}.
+     * OUTPUT: array{mime:string, base64:string, binary:string, data_uri:string, url:?string}.
+     * =====================================================================
+     */
+    protected function normalizeAttachment(array $att): array
+    {
+        $mime = is_string($att['mime'] ?? null) && $att['mime'] !== ''
+            ? trim(explode(';', $att['mime'])[0])
+            : 'image/png';
+        $url = is_string($att['url'] ?? null) && $att['url'] !== '' ? $att['url'] : null;
+        $rawData = $att['data'] ?? null;
+
+        if (! is_string($rawData) || $rawData === '') {
+            return [
+                'mime' => $mime,
+                'base64' => '',
+                'binary' => '',
+                'data_uri' => '',
+                'url' => $url,
+            ];
+        }
+
+        if (str_starts_with($rawData, 'data:')) {
+            $commaPos = strpos($rawData, ',');
+            if ($commaPos !== false) {
+                $header = substr($rawData, 5, $commaPos - 5);
+                if (str_contains($header, ';')) {
+                    $headerMime = trim(explode(';', $header)[0]);
+                    if ($headerMime !== '') {
+                        $mime = $headerMime;
+                    }
+                }
+                $b64 = preg_replace('/\s+/', '', substr($rawData, $commaPos + 1)) ?? '';
+                $decoded = base64_decode($b64, true);
+
+                return [
+                    'mime' => $mime,
+                    'base64' => $b64,
+                    'binary' => $decoded !== false ? $decoded : '',
+                    'data_uri' => 'data:' . $mime . ';base64,' . $b64,
+                    'url' => $url,
+                ];
+            }
+        }
+
+        $compact = preg_replace('/\s+/', '', $rawData) ?? '';
+        $isAlreadyBase64 = strlen($compact) >= 16
+            && strlen($compact) % 4 === 0
+            && preg_match('/^[A-Za-z0-9+\/]+=*$/', $compact) === 1;
+
+        if ($isAlreadyBase64) {
+            $decoded = base64_decode($compact, true);
+            if (
+                $decoded !== false
+                && base64_encode($decoded) === $compact
+                && (
+                    @getimagesizefromstring($decoded) !== false
+                    || preg_match('/[0-9+\/=]/', $compact) === 1
+                    || (preg_match('/[A-Z]/', $compact) === 1 && preg_match('/[a-z]/', $compact) === 1)
+                )
+            ) {
+                return [
+                    'mime' => $mime,
+                    'base64' => $compact,
+                    'binary' => $decoded,
+                    'data_uri' => 'data:' . $mime . ';base64,' . $compact,
+                    'url' => $url,
+                ];
+            }
+        }
+
+        $b64 = base64_encode($rawData);
+
+        return [
+            'mime' => $mime,
+            'base64' => $b64,
+            'binary' => $rawData,
+            'data_uri' => 'data:' . $mime . ';base64,' . $b64,
+            'url' => $url,
+        ];
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Map MIME ảnh sang phần mở rộng an toàn cho upload multipart.
+     * INPUT: string $mime. OUTPUT: string ext (png|jpg|webp|gif).
+     * =====================================================================
+     */
+    protected function mimeExtension(string $mime): string
+    {
+        return match (strtolower(trim(explode(';', $mime)[0]))) {
+            'image/jpeg', 'image/jpg' => 'jpg',
+            'image/webp' => 'webp',
+            'image/gif' => 'gif',
+            default => 'png',
+        };
+    }
 
     /**
      * =====================================================================
