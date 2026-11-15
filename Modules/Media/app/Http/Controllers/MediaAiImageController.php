@@ -186,8 +186,10 @@ class MediaAiImageController extends Controller
         $payload = [
             'prompt' => $data['prompt'],
             'description' => $data['description'] ?? null,
+            'style' => $data['style'] ?? null,
             'aspect_ratio' => $data['aspect_ratio'],
             'ai_model_id' => $selectedModel?->id,
+            'model_label' => $selectedModel?->label ?: ($data['model_label'] ?? null),
             'provider_key' => $selectedModel?->provider?->key,
             'remote_model_id' => $selectedModel?->remote_model_id,
             'count' => $count,

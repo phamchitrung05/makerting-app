@@ -95,8 +95,10 @@ class SaveAiPreviewToMediaAction
         $meta = array_filter([
             'prompt' => $preview['prompt'] ?? null,
             'description' => $preview['description'] ?? null,
+            'style' => $input['style'] ?? ($preview['style'] ?? null),
             'aspect_ratio' => $preview['aspect_ratio'] ?? null,
             'ai_model_id' => $preview['ai_model_id'] ?? null,
+            'model_label' => $input['model_label'] ?? ($preview['model_label'] ?? ($preview['model'] ?? null)),
             'provider' => $preview['provider'] ?? null,
             'model' => $preview['model'] ?? null,
             'ai_run_id' => $preview['ai_run_id'] ?? null,
@@ -112,6 +114,10 @@ class SaveAiPreviewToMediaAction
         $altText = isset($input['alt_text']) && trim((string) $input['alt_text']) !== ''
             ? trim((string) $input['alt_text'])
             : $title;
+        $description = \Modules\Media\Support\MediaMetadataHelper::normalizeDescription(
+            $input['description'] ?? ($preview['description'] ?? null),
+        );
+        $tags = \Modules\Media\Support\MediaMetadataHelper::normalizeTags($input['tags'] ?? []);
 
         $dto = new StoreGeneratedMediaDto(
             tmpPath: $path,
@@ -127,6 +133,8 @@ class SaveAiPreviewToMediaAction
             fileName: $fileName,
             mime: $mime,
             checksumSha256: null,
+            description: $description,
+            tags: $tags,
         );
 
         $asset = $this->storeGeneratedMedia->executeContent($binary, $dto);

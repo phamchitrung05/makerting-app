@@ -113,6 +113,8 @@ class UploadMediaAssetAction
                 'kind' => $scan['kind'],
                 'title' => $title,
                 'alt_text' => $options['alt_text'] ?? null,
+                'description' => \Modules\Media\Support\MediaMetadataHelper::normalizeDescription($options['description'] ?? null),
+                'tags' => \Modules\Media\Support\MediaMetadataHelper::normalizeTags($options['tags'] ?? []),
                 'visibility' => $visibility,
                 'checksum_sha256' => $checksum,
                 'created_by' => $createdBy,

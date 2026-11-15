@@ -63,27 +63,19 @@ const emit = defineEmits(['close', 'prev', 'next', 'updated', 'deleted'])
 
 const store = useMediaAssetStore()
 
-/* Dữ liệu tĩnh giữ lại cho những field API/DB chưa hỗ trợ. */
-const STATIC_INFO_DEFAULTS = {
-  description: 'Ảnh sản phẩm chả ram tôm Xứ Nẫu, trình bày trên mẹt tre, kèm rau sống và nước chấm, chụp thực tế.',
-  tags: ['sản phẩm', 'chả ram', 'tôm', 'đặc sản', 'bình định'],
+const STYLE_CODE_LABELS = {
+  watercolor: 'Mực nước / Vẽ tay',
+  cute: 'Dễ thương / Cute',
+  minimal: 'Tối giản / Minimal',
+  realistic: 'Thực tế / Realistic',
+  poster: 'Poster / Quảng bá',
 }
 
 const STATIC_PROMPT_DEFAULTS = {
-  aiModel: 'Leonardo AI',
-  stylePreset: 'Ảnh chụp thực tế',
   prompt: 'Vietnamese crispy shrimp spring rolls served on a woven bamboo tray with fresh herbs and dipping sauce, warm studio lighting, editorial food photography, 8k, shallow depth of field.',
   negativePrompt: 'blurry, oversaturated, plastic texture, watermark, low resolution',
   aspectRatio: '3:2',
-  steps: '30',
-  cfgScale: '7.5',
-  seed: '48291044',
-  sampler: 'DPM++ 2M Karras',
   qualityTags: ['studio lighting', '8k uhd', 'editorial food', 'shallow dof'],
-  provider: 'Leonardo Phoenix v2',
-  dimensions: '1920 × 1280',
-  generatedDuration: '4.2 giây',
-  generatedAt: '28/10/2026 14:30',
 }
 
 const AI_MODEL_OPTIONS = [
@@ -166,6 +158,8 @@ const formErrors = reactive({
   folder: '',
   visibility: '',
   altText: '',
+  description: '',
+  tags: '',
 })
 
 const detailForm = reactive({
@@ -173,19 +167,16 @@ const detailForm = reactive({
   folder: 'root',
   visibility: 'public',
   altText: '',
-  description: STATIC_INFO_DEFAULTS.description,
-  tags: [...STATIC_INFO_DEFAULTS.tags],
-  aiModel: STATIC_PROMPT_DEFAULTS.aiModel,
+  description: '',
+  tags: [],
 })
 
 const promptForm = reactive({
-  stylePreset: STATIC_PROMPT_DEFAULTS.stylePreset,
+  aiModel: '',
+  stylePreset: '',
   prompt: STATIC_PROMPT_DEFAULTS.prompt,
   negativePrompt: STATIC_PROMPT_DEFAULTS.negativePrompt,
   aspectRatio: STATIC_PROMPT_DEFAULTS.aspectRatio,
-  steps: STATIC_PROMPT_DEFAULTS.steps,
-  cfgScale: STATIC_PROMPT_DEFAULTS.cfgScale,
-  seed: STATIC_PROMPT_DEFAULTS.seed,
   qualityTags: [...STATIC_PROMPT_DEFAULTS.qualityTags],
 })
 
@@ -200,9 +191,14 @@ const hasAiMetadata = computed(() => Boolean(
     aiMeta.value.prompt
     || aiMeta.value.prompt_used
     || aiMeta.value.model
+    || aiMeta.value.model_label
     || aiMeta.value.ai_model
     || aiMeta.value.source
   ),
+))
+
+const isAiGeneratedImage = computed(() => Boolean(
+  liveAsset.value?.kind === 'image' && hasAiMetadata.value,
 ))
 
 const folderSuggestions = computed(() => {
@@ -216,8 +212,8 @@ const folderSuggestions = computed(() => {
 const modelOptions = computed(() => {
   const set = new Set(AI_MODEL_OPTIONS)
 
-  if (detailForm.aiModel)
-    set.add(detailForm.aiModel)
+  if (promptForm.aiModel)
+    set.add(promptForm.aiModel)
 
   return [...set]
 })
@@ -296,16 +292,27 @@ const shareLink = computed(() => {
 
 const normalizedFolder = computed(() => String(folderSearch.value ?? '').trim() || 'root')
 
+function normalizeTagList(tags) {
+  return Array.isArray(tags)
+    ? tags.map(item => String(item ?? '').trim()).filter(Boolean)
+    : []
+}
+
 const isMetadataDirty = computed(() => {
   const asset = liveAsset.value
   if (!asset)
     return false
+
+  const currentTags = normalizeTagList(detailForm.tags)
+  const savedTags = normalizeTagList(asset.tags)
 
   return (
     detailForm.title.trim() !== (asset.title || '').trim()
     || (detailForm.altText || '') !== (asset.alt_text || '')
     || normalizedFolder.value !== (asset.folder || 'root')
     || detailForm.visibility !== (asset.visibility || 'public')
+    || (detailForm.description || '').trim() !== (asset.description || '').trim()
+    || JSON.stringify(currentTags) !== JSON.stringify(savedTags)
   )
 })
 
@@ -330,26 +337,6 @@ const sizeDetailText = computed(() => {
   return `${fmtSize(asset.size)} (${Number(asset.size).toLocaleString('vi-VN')} bytes)`
 })
 
-const promptInfo = computed(() => {
-  const ai = aiMeta.value
-  const asset = liveAsset.value
-
-  const durationText = ai?.generated_duration
-    || (ai?.duration_ms ? `${(Number(ai.duration_ms) / 1000).toFixed(1)} giây` : STATIC_PROMPT_DEFAULTS.generatedDuration)
-
-  const dimText = (asset?.width && asset?.height)
-    ? `${asset.width} × ${asset.height}`
-    : STATIC_PROMPT_DEFAULTS.dimensions
-
-  return {
-    provider: ai?.provider || ai?.source || STATIC_PROMPT_DEFAULTS.provider,
-    sampler: ai?.sampler || STATIC_PROMPT_DEFAULTS.sampler,
-    dimensions: dimText,
-    generatedDuration: durationText,
-    generatedAt: fmtDateTime(ai?.generated_at || asset?.created_at) || STATIC_PROMPT_DEFAULTS.generatedAt,
-  }
-})
-
 /*
  * CHỨC NĂNG: Hiển thị thông báo snackbar góc trên phải màn hình.
  */
@@ -367,6 +354,8 @@ function clearFormErrors() {
   formErrors.folder = ''
   formErrors.visibility = ''
   formErrors.altText = ''
+  formErrors.description = ''
+  formErrors.tags = ''
 }
 
 /*
@@ -409,29 +398,25 @@ function syncTabScroll() {
 }
 
 /*
- * CHỨC NĂNG: Nạp thông số AI từ asset.ai_generation (fallback dữ liệu tĩnh nếu thiếu).
+ * CHỨC NĂNG: Nạp thông số AI từ asset.ai_generation vào tab Prompt.
  */
 function resetPromptForm() {
   const ai = aiMeta.value
   const asset = liveAsset.value
+  const rawStyle = ai?.style || ai?.style_preset || ai?.stylePreset || ai?.style_name || ai?.purpose || ''
 
-  detailForm.aiModel = ai?.model || ai?.ai_model || STATIC_PROMPT_DEFAULTS.aiModel
-  promptForm.stylePreset = ai?.style_preset || ai?.stylePreset || ai?.style_name || ai?.purpose || STATIC_PROMPT_DEFAULTS.stylePreset
+  promptForm.aiModel = ai?.model_label || ai?.model || ai?.ai_model || ai?.provider || ''
+  promptForm.stylePreset = rawStyle ? (STYLE_CODE_LABELS[rawStyle] || rawStyle) : ''
   promptForm.prompt = ai?.prompt || ai?.prompt_used || STATIC_PROMPT_DEFAULTS.prompt
   promptForm.negativePrompt = ai?.negative_prompt || ai?.negativePrompt || STATIC_PROMPT_DEFAULTS.negativePrompt
   promptForm.aspectRatio = ai?.aspect_ratio || ai?.aspectRatio || deriveAspectRatio(asset?.width, asset?.height) || STATIC_PROMPT_DEFAULTS.aspectRatio
-  promptForm.steps = ai?.steps !== undefined && ai?.steps !== null ? String(ai.steps) : STATIC_PROMPT_DEFAULTS.steps
-  promptForm.cfgScale = (ai?.cfg_scale ?? ai?.cfgScale) !== undefined && (ai?.cfg_scale ?? ai?.cfgScale) !== null
-    ? String(ai?.cfg_scale ?? ai?.cfgScale)
-    : STATIC_PROMPT_DEFAULTS.cfgScale
-  promptForm.seed = ai?.seed !== undefined && ai?.seed !== null ? String(ai.seed) : STATIC_PROMPT_DEFAULTS.seed
   promptForm.qualityTags = Array.isArray(ai?.quality_tags) && ai.quality_tags.length
     ? [...ai.quality_tags]
     : [...STATIC_PROMPT_DEFAULTS.qualityTags]
 }
 
 /*
- * CHỨC NĂNG: Đổ dữ liệu MediaAsset vào form (field nào API không có giữ nguyên tĩnh).
+ * CHỨC NĂNG: Đổ dữ liệu MediaAsset thật vào form thông tin và form Prompt.
  */
 function hydrateFromAsset(asset) {
   liveAsset.value = asset || null
@@ -444,6 +429,11 @@ function hydrateFromAsset(asset) {
     folderSearch.value = 'root'
     detailForm.visibility = 'public'
     detailForm.altText = ''
+    detailForm.description = ''
+    detailForm.tags = []
+    isAddingTag.value = false
+    newTagText.value = ''
+    previewTab.value = 'info'
 
     return
   }
@@ -453,9 +443,14 @@ function hydrateFromAsset(asset) {
   folderSearch.value = detailForm.folder
   detailForm.visibility = asset.visibility || 'public'
   detailForm.altText = asset.alt_text || ''
+  detailForm.description = asset.description || ''
+  detailForm.tags = normalizeTagList(asset.tags)
   isAddingTag.value = false
   newTagText.value = ''
   resetPromptForm()
+
+  if (!isAiGeneratedImage.value && previewTab.value === 'prompt')
+    previewTab.value = 'info'
 }
 
 /*
@@ -542,6 +537,8 @@ async function saveMetadata() {
       title: detailForm.title.trim(),
       folder: normalizedFolder.value,
       visibility: detailForm.visibility,
+      description: detailForm.description?.trim() || null,
+      tags: normalizeTagList(detailForm.tags),
     }
 
     payload['alt_text'] = detailForm.altText?.trim() || null
@@ -559,6 +556,8 @@ async function saveMetadata() {
       formErrors.folder = errs.folder || ''
       formErrors.visibility = errs.visibility || ''
       formErrors.altText = errs.alt_text || errs.altText || ''
+      formErrors.description = errs.description || ''
+      formErrors.tags = errs.tags || Object.entries(errs).find(([k]) => k.startsWith('tags.'))?.[1] || ''
     }
 
     notify(firstErrorMessage(err), 'error')
@@ -653,19 +652,28 @@ async function copyFieldValue(key, text) {
 }
 
 /*
- * CHỨC NĂNG: Xóa 1 nhãn tĩnh khỏi danh sách tags đang hiển thị.
+ * CHỨC NĂNG: Xóa 1 nhãn khỏi danh sách tags đang chỉnh sửa.
  */
 function removeTag(tag) {
+  if (props.trashed)
+    return
+
   detailForm.tags = detailForm.tags.filter(item => item !== tag)
+  formErrors.tags = ''
 }
 
 /*
- * CHỨC NĂNG: Thêm nhãn tĩnh mới vào danh sách tags cục bộ nếu chưa tồn tại.
+ * CHỨC NĂNG: Thêm nhãn mới vào danh sách tags cục bộ nếu chưa tồn tại.
  */
 function addTag() {
+  if (props.trashed)
+    return
+
   const normalized = newTagText.value.trim().toLowerCase()
-  if (normalized && !detailForm.tags.includes(normalized))
+  if (normalized && !detailForm.tags.some(item => item.toLowerCase() === normalized)) {
     detailForm.tags.push(normalized)
+    formErrors.tags = ''
+  }
 
   newTagText.value = ''
   isAddingTag.value = false
@@ -692,6 +700,11 @@ watch(
   },
   { immediate: true },
 )
+
+watch(isAiGeneratedImage, enabled => {
+  if (!enabled && previewTab.value === 'prompt')
+    previewTab.value = 'info'
+})
 
 watch(previewTab, () => {
   nextTick(() => {
@@ -1018,7 +1031,10 @@ onBeforeUnmount(() => {
             />
             Thông tin
           </VTab>
-          <VTab value="prompt">
+          <VTab
+            value="prompt"
+            :disabled="!isAiGeneratedImage"
+          >
             <VIcon
               icon="tabler-wand"
               size="16"
@@ -1189,30 +1205,20 @@ onBeforeUnmount(() => {
               @update:model-value="formErrors.altText = ''"
             />
 
-            <VBtn
-              v-if="!trashed"
-              color="primary"
-              variant="tonal"
-              size="small"
-              block
-              prepend-icon="tabler-device-floppy"
-              :loading="saving"
-              :disabled="!isMetadataDirty"
-              @click="saveMetadata"
-            >
-              Lưu thay đổi
-            </VBtn>
-
-            <!-- Các field API chưa hỗ trợ -> giữ ở chế độ tĩnh -->
             <AppTextarea
               v-model="detailForm.description"
               label="Mô tả"
+              placeholder="Nhập mô tả chi tiết cho tệp..."
+              persistent-placeholder
               rows="3"
               auto-grow
-              counter="500"
+              counter="1000"
+              :readonly="trashed"
+              :error-messages="formErrors.description"
+              @update:model-value="formErrors.description = ''"
             />
 
-            <!-- Nhãn (Tags — tĩnh) -->
+            <!-- Nhãn (Tags) -->
             <div>
               <VLabel class="mb-2 text-body-2 font-weight-medium text-high-emphasis">
                 Nhãn (Tags)
@@ -1224,14 +1230,21 @@ onBeforeUnmount(() => {
                   size="small"
                   color="primary"
                   variant="tonal"
-                  closable
+                  :closable="!trashed"
                   @click:close="removeTag(tag)"
                 >
                   {{ tag }}
                 </VChip>
 
+                <span
+                  v-if="trashed && !detailForm.tags.length"
+                  class="text-caption text-medium-emphasis"
+                >
+                  Chưa có nhãn
+                </span>
+
                 <VChip
-                  v-if="!isAddingTag"
+                  v-if="!trashed && !isAddingTag"
                   size="small"
                   variant="outlined"
                   color="secondary"
@@ -1244,12 +1257,21 @@ onBeforeUnmount(() => {
               </div>
 
               <div
-                v-if="isAddingTag"
+                v-if="formErrors.tags"
+                class="text-caption text-error mt-1"
+              >
+                {{ formErrors.tags }}
+              </div>
+
+              <div
+                v-if="!trashed && isAddingTag"
                 class="d-flex align-center gap-2 mt-2"
               >
                 <AppTextField
                   v-model="newTagText"
                   placeholder="Nhập thẻ mới..."
+                  persistent-placeholder
+                  maxlength="50"
                   class="flex-grow-1"
                   @keyup.enter="addTag"
                   @keyup.esc="isAddingTag = false"
@@ -1264,50 +1286,19 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <!-- Mô hình AI (lấy từ ai_generation.model nếu có, ngược lại dùng tĩnh) -->
-            <div>
-              <div class="d-flex align-center gap-1 mb-1">
-                <VLabel class="text-body-2 font-weight-medium text-high-emphasis">
-                  Mô hình AI
-                </VLabel>
-                <VIcon
-                  icon="tabler-info-circle"
-                  size="15"
-                  color="medium-emphasis"
-                />
-                <VTooltip
-                  activator="parent"
-                  location="top"
-                >
-                  {{ hasAiMetadata ? 'Lấy từ metadata AI trên hệ thống' : 'Dữ liệu mặc định tĩnh (tệp chưa có metadata AI)' }}
-                </VTooltip>
-              </div>
-
-              <AppSelect
-                v-model="detailForm.aiModel"
-                :items="modelOptions"
-                clearable
-              >
-                <template #selection="{ item }">
-                  <div class="d-flex align-center">
-                    <VAvatar
-                      color="primary"
-                      variant="tonal"
-                      size="20"
-                      class="me-2"
-                    >
-                      <VIcon
-                        icon="tabler-wand"
-                        size="12"
-                      />
-                    </VAvatar>
-                    <span class="text-body-2 font-weight-medium text-high-emphasis">
-                      {{ item.title }}
-                    </span>
-                  </div>
-                </template>
-              </AppSelect>
-            </div>
+            <VBtn
+              v-if="!trashed"
+              color="primary"
+              variant="tonal"
+              size="small"
+              block
+              prepend-icon="tabler-device-floppy"
+              :loading="saving"
+              :disabled="!isMetadataDirty"
+              @click="saveMetadata"
+            >
+              Lưu thay đổi
+            </VBtn>
           </div>
 
           <VDivider class="mb-4" />
@@ -1422,10 +1413,12 @@ onBeforeUnmount(() => {
           <!-- Form cấu hình Prompt -->
           <div class="d-flex flex-column gap-4 mb-5">
             <AppSelect
-              v-model="detailForm.aiModel"
+              v-model="promptForm.aiModel"
               :items="modelOptions"
               label="Mô hình AI"
-              clearable
+              placeholder="Mặc định hệ thống"
+              persistent-placeholder
+              disabled
             >
               <template #selection="{ item }">
                 <div class="d-flex align-center">
@@ -1451,6 +1444,9 @@ onBeforeUnmount(() => {
               v-model="promptForm.stylePreset"
               :items="stylePresetOptions"
               label="Phong cách"
+              placeholder="Không chọn phong cách"
+              persistent-placeholder
+              disabled
             />
 
             <AppTextarea
@@ -1473,28 +1469,7 @@ onBeforeUnmount(() => {
               v-model="promptForm.aspectRatio"
               :items="aspectRatioOptions"
               label="Tỷ lệ khung"
-            />
-
-            <VRow dense>
-              <VCol cols="6">
-                <AppTextField
-                  v-model="promptForm.steps"
-                  label="Số bước"
-                />
-              </VCol>
-              <VCol cols="6">
-                <AppTextField
-                  v-model="promptForm.cfgScale"
-                  label="CFG Scale"
-                />
-              </VCol>
-            </VRow>
-
-            <AppTextField
-              v-model="promptForm.seed"
-              label="Seed"
-              :append-inner-icon="copiedKey === 'seed' ? 'tabler-check' : 'tabler-copy'"
-              @click:append-inner="copyFieldValue('seed', promptForm.seed)"
+              disabled
             />
 
             <!-- Từ khóa bổ sung -->
@@ -1512,42 +1487,6 @@ onBeforeUnmount(() => {
                 >
                   {{ keyword }}
                 </VChip>
-              </div>
-            </div>
-          </div>
-
-          <VDivider class="mb-4" />
-
-          <!-- Thông số sinh ảnh -->
-          <div>
-            <div class="text-subtitle-1 font-weight-medium text-high-emphasis mb-3">
-              Thông số sinh ảnh
-            </div>
-
-            <div class="d-flex flex-column gap-2 text-body-2">
-              <div class="d-flex justify-space-between gap-2">
-                <span class="text-medium-emphasis">Nhà cung cấp</span>
-                <span class="text-high-emphasis font-weight-medium text-end">{{ promptInfo.provider }}</span>
-              </div>
-
-              <div class="d-flex justify-space-between gap-2">
-                <span class="text-medium-emphasis">Sampler</span>
-                <span class="text-high-emphasis font-weight-medium text-end">{{ promptInfo.sampler }}</span>
-              </div>
-
-              <div class="d-flex justify-space-between gap-2">
-                <span class="text-medium-emphasis">Độ phân giải</span>
-                <span class="text-high-emphasis font-weight-medium text-end">{{ promptInfo.dimensions }}</span>
-              </div>
-
-              <div class="d-flex justify-space-between gap-2">
-                <span class="text-medium-emphasis">Thời gian tạo</span>
-                <span class="text-high-emphasis font-weight-medium text-end">{{ promptInfo.generatedDuration }}</span>
-              </div>
-
-              <div class="d-flex justify-space-between gap-2">
-                <span class="text-medium-emphasis">Thời điểm</span>
-                <span class="text-high-emphasis font-weight-medium text-end">{{ promptInfo.generatedAt }}</span>
               </div>
             </div>
           </div>

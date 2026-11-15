@@ -64,6 +64,17 @@ class GenerateAiImageRequest extends FormRequest
             }
         }
 
+        foreach (['style', 'model_label'] as $optionalField) {
+            if ($this->has($optionalField)) {
+                $val = $this->input($optionalField);
+                if ($val === null || (is_string($val) && (trim($val) === '' || strtolower(trim($val)) === 'null'))) {
+                    $merged[$optionalField] = null;
+                } elseif (is_string($val)) {
+                    $merged[$optionalField] = trim($val);
+                }
+            }
+        }
+
         if ($merged !== []) {
             $this->merge($merged);
         }
@@ -79,8 +90,10 @@ class GenerateAiImageRequest extends FormRequest
         return [
             'prompt' => ['required', 'string', 'max:2000'],
             'description' => ['nullable', 'string', 'max:1000'],
+            'style' => ['nullable', 'string', 'max:100'],
             'aspect_ratio' => ['required', 'string', Rule::in(self::ASPECT_RATIOS)],
             'ai_model_id' => ['nullable', 'integer', 'exists:ai_models,id'],
+            'model_label' => ['nullable', 'string', 'max:120'],
             'count' => ['required', 'integer', Rule::in(self::COUNTS)],
             'reference_image' => [
                 'nullable',

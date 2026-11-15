@@ -71,6 +71,8 @@ class StoreGeneratedMediaAction
                 'kind' => $scan['kind'],
                 'title' => $dto->title,
                 'alt_text' => $dto->altText,
+                'description' => \Modules\Media\Support\MediaMetadataHelper::normalizeDescription($dto->description),
+                'tags' => \Modules\Media\Support\MediaMetadataHelper::normalizeTags($dto->tags),
                 'visibility' => $dto->visibility,
                 'checksum_sha256' => $checksum,
                 'created_by' => $dto->createdBy,
@@ -145,6 +147,8 @@ class StoreGeneratedMediaAction
                 fileName: $dto->fileName,
                 mime: $dto->mime,
                 checksumSha256: $dto->checksumSha256 ?? hash('sha256', $content),
+                description: $dto->description,
+                tags: $dto->tags,
             );
 
             return $this->execute($newDto);

@@ -39,5 +39,7 @@ final readonly class StoreGeneratedMediaDto
         public ?string $fileName = null,
         public ?string $mime = null,
         public ?string $checksumSha256 = null,
+        public ?string $description = null,
+        public array $tags = [],
     ) {}
 }

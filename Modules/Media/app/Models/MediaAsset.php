@@ -77,17 +77,28 @@ class MediaAsset extends Model implements HasMedia
 
     protected $fillable = [
         'channel_group_id', 'folder', 'kind', 'title', 'alt_text',
+        'description', 'tags',
         'visibility', 'width', 'height', 'duration_ms', 'checksum_sha256',
         'created_by',
     ];
 
     protected $casts = [
         'channel_group_id' => 'integer',
+        'tags' => 'array',
         'width' => 'integer',
         'height' => 'integer',
         'duration_ms' => 'integer',
         'created_by' => 'integer',
     ];
+
+    /**
+     * Giữ nguyên ký tự Unicode (tiếng Việt có dấu) khi serialize JSON xuống DB
+     * để query tìm kiếm LIKE theo tags hoạt động chính xác.
+     */
+    protected function asJson($value, $flags = 0)
+    {
+        return parent::asJson($value, $flags | JSON_UNESCAPED_UNICODE);
+    }
 
     /* =====================================================================
      * Quan hệ

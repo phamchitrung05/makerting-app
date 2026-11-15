@@ -43,6 +43,8 @@ final readonly class MediaItemDto
         public ?string $checksumSha256 = null,
         public ?string $createdAt = null,
         public ?string $updatedAt = null,
+        public ?string $description = null,
+        public array $tags = [],
     ) {}
 
     /**
@@ -90,6 +92,8 @@ final readonly class MediaItemDto
             checksumSha256: $asset->checksum_sha256,
             createdAt: $asset->created_at?->toIso8601String(),
             updatedAt: $asset->updated_at?->toIso8601String(),
+            description: $asset->description,
+            tags: is_array($asset->tags) ? array_values($asset->tags) : [],
         );
     }
 
@@ -110,6 +114,8 @@ final readonly class MediaItemDto
             'folder' => $this->folder,
             'title' => $this->title,
             'altText' => $this->altText,
+            'description' => $this->description,
+            'tags' => $this->tags,
             'url' => $this->url,
             'mime' => $this->mime,
             'size' => $this->size,

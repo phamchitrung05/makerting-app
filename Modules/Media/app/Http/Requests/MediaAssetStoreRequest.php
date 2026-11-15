@@ -37,11 +37,13 @@ class MediaAssetStoreRequest extends FormRequest
         if ($this->hasFile('files')) {
             $this->merge(['files' => $this->file('files')]);
         }
+
+        \Modules\Media\Support\MediaMetadataHelper::prepareRequestMetadata($this);
     }
 
     public function rules(): array
     {
-        return [
+        return array_merge([
             'file' => ['required_without:files', 'file', 'max:' . $this->maxKb()],
             'files' => ['required_without:file', 'array', 'min:1', 'max:20'],
             'files.*' => ['file', 'max:' . $this->maxKb()],
@@ -53,7 +55,7 @@ class MediaAssetStoreRequest extends FormRequest
             'allowed_kinds' => ['nullable', 'array'],
             'allowed_kinds.*' => [Rule::in(MediaAsset::KINDS)],
             'dedupe' => ['nullable', 'boolean'],
-        ];
+        ], \Modules\Media\Support\MediaMetadataHelper::validationRules());
     }
 
     /**

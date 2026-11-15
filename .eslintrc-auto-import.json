@@ -381,6 +381,8 @@
     "fmtDuration": true,
     "fmtSize": true,
     "previewOf": true,
-    "thumbOf": true
+    "thumbOf": true,
+    "appSnackbar": true,
+    "useSnackbar": true
   }
 }

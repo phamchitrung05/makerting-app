@@ -216,6 +216,115 @@ class MediaHttpTest extends TestCase
             ->assertUnauthorized()
             ->assertJsonPath('success', false);
     }
+
+    public function test_store_and_update_description_and_tags_persist_and_normalize(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Banner Hero',
+                'description' => '  Mô tả ảnh ban đầu  ',
+                'tags' => [' hero ', 'Hero', '  ', 'Khuyến Mãi'],
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->assertJsonPath('data.description', 'Mô tả ảnh ban đầu')
+            ->assertJsonPath('data.tags', ['hero', 'Khuyến Mãi'])
+            ->json('data');
+
+        $assetId = $created['id'];
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$assetId}", [
+                'description' => '  Mô tả đã cập nhật  ',
+                'tags' => [' banner ', 'Sale', 'BANNER'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.description', 'Mô tả đã cập nhật')
+            ->assertJsonPath('data.tags', ['banner', 'Sale']);
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$assetId}", [
+                'description' => '   ',
+                'tags' => [],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.description', null)
+            ->assertJsonPath('data.tags', []);
+
+        $fresh = MediaAsset::findOrFail($assetId);
+        $this->assertNull($fresh->description);
+        $this->assertSame([], $fresh->tags);
+    }
+
+    public function test_update_description_and_tags_validation_and_search(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $asset = MediaAsset::create([
+            'kind' => 'image',
+            'title' => 'Food Shot',
+            'description' => 'Ảnh món ăn đặc sản miền Trung',
+            'tags' => ['Chả Ram', 'Bình Định'],
+            'visibility' => 'public',
+            'folder' => 'food',
+            'checksum_sha256' => str_repeat('b', 64),
+        ]);
+
+        MediaAsset::create([
+            'kind' => 'image',
+            'title' => 'Unrelated Shot',
+            'description' => 'Nội thất văn phòng',
+            'tags' => ['office'],
+            'visibility' => 'public',
+            'folder' => 'office',
+            'checksum_sha256' => str_repeat('c', 64),
+        ]);
+
+        // Tìm theo mô tả
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets?search=' . urlencode('đặc sản'))
+            ->assertOk()
+            ->assertJsonCount(1, 'data.items')
+            ->assertJsonPath('data.items.0.id', $asset->id);
+
+        // Tìm theo tag tiếng Việt có dấu
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets?search=' . urlencode('chả ram'))
+            ->assertOk()
+            ->assertJsonCount(1, 'data.items')
+            ->assertJsonPath('data.items.0.id', $asset->id);
+
+        // Validate độ dài description & số lượng/độ dài/kiểu tag
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$asset->id}", [
+                'description' => str_repeat('a', 1001),
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['description']);
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$asset->id}", [
+                'tags' => array_map(fn ($i) => "tag-{$i}", range(1, 31)),
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['tags']);
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$asset->id}", [
+                'tags' => [str_repeat('x', 51)],
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['tags.0']);
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$asset->id}", [
+                'tags' => [12345],
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['tags.0']);
+    }
 }
 
 class TestPostModel extends Model

@@ -32,6 +32,11 @@ class SaveGeneratedImageRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        \Modules\Media\Support\MediaMetadataHelper::prepareRequestMetadata($this);
+    }
+
     /**
      * CHỨC NĂNG: Định nghĩa rule validate đầu vào khi lưu ảnh AI vào thư viện.
      * INPUT: không.
@@ -39,14 +44,16 @@ class SaveGeneratedImageRequest extends FormRequest
      */
     public function rules(): array
     {
-        return [
+        return array_merge([
             'preview_id' => ['required', 'uuid'],
             'folder' => ['nullable', 'string', 'max:60'],
             'title' => ['nullable', 'string', 'max:255'],
             'alt_text' => ['nullable', 'string', 'max:255'],
             'visibility' => ['nullable', 'string', Rule::in(MediaAsset::VISIBILITIES)],
             'channel_group_id' => ['nullable', 'integer', 'exists:channel_groups,id'],
-        ];
+            'style' => ['nullable', 'string', 'max:100'],
+            'model_label' => ['nullable', 'string', 'max:120'],
+        ], \Modules\Media\Support\MediaMetadataHelper::validationRules());
     }
 
     /**
@@ -64,6 +71,11 @@ class SaveGeneratedImageRequest extends FormRequest
             'alt_text.max' => 'Alt text không được vượt quá 255 ký tự.',
             'visibility.in' => 'Chế độ hiển thị phải là public hoặc private.',
             'channel_group_id.exists' => 'Nhóm kênh được chọn không tồn tại.',
+            'description.max' => 'Mô tả không được vượt quá 1000 ký tự.',
+            'tags.array' => 'Danh sách nhãn không hợp lệ.',
+            'tags.max' => 'Chỉ có thể gắn tối đa 30 nhãn.',
+            'tags.*.string' => 'Mỗi nhãn phải là chuỗi ký tự hợp lệ.',
+            'tags.*.max' => 'Mỗi nhãn không được vượt quá 50 ký tự.',
         ];
     }
 }

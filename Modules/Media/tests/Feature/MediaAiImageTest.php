@@ -980,4 +980,64 @@ PROMPT);
             ->assertOk()
             ->assertJsonPath('data.status', 'ready');
     }
+
+    public function test_generate_and_save_persist_style_model_label_description_and_tags(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
+        $provider = $this->createProvider(['key' => 'gemini-main', 'name' => 'Gemini Chính']);
+        $model = AiModel::create([
+            'ai_provider_id' => $provider->id,
+            'remote_model_id' => 'imagen-3.0',
+            'label' => 'Imagen 3 Studio',
+            'capabilities_json' => [AiModel::CAP_IMAGE_GENERATION],
+            'is_enabled' => true,
+            'is_available' => true,
+        ]);
+
+        $outPng = $this->pngBinary(64, 64, 40, 120, 200);
+        $this->bindFakeImageGateway(fn (): AiImageResponse => new AiImageResponse(
+            images: [['mime' => 'image/png', 'data' => $outPng]],
+            remoteModelId: 'imagen-3.0',
+            providerKey: 'gemini-main',
+        ));
+
+        $job = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/generate', [
+                'prompt' => 'Minimal studio ceramic vase in warm daylight',
+                'description' => '  Ảnh banner mùa hè tối giản  ',
+                'style' => 'minimal',
+                'aspect_ratio' => '16:9',
+                'ai_model_id' => $model->id,
+                'count' => 1,
+            ])
+            ->assertStatus(202)
+            ->json('data');
+
+        $previewId = $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/ai-image/jobs/' . $job['job_id'])
+            ->assertOk()
+            ->json('data.results.0.preview_id');
+
+        $saved = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/save', [
+                'preview_id' => $previewId,
+                'title' => 'Ceramic Vase Minimal',
+                'tags' => [' mùa hè ', 'Banner', 'banner'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.description', 'Ảnh banner mùa hè tối giản')
+            ->assertJsonPath('data.tags', ['mùa hè', 'Banner'])
+            ->assertJsonPath('data.ai_generation.style', 'minimal')
+            ->assertJsonPath('data.ai_generation.model_label', 'Imagen 3 Studio')
+            ->assertJsonPath('data.ai_generation.model', 'imagen-3.0')
+            ->json('data');
+
+        $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/assets/' . $saved['id'])
+            ->assertOk()
+            ->assertJsonPath('data.description', 'Ảnh banner mùa hè tối giản')
+            ->assertJsonPath('data.tags', ['mùa hè', 'Banner'])
+            ->assertJsonPath('data.ai_generation.style', 'minimal')
+            ->assertJsonPath('data.ai_generation.model_label', 'Imagen 3 Studio');
+    }
 }

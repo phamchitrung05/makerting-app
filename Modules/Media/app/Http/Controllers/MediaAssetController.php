@@ -100,7 +100,9 @@ class MediaAssetController extends Controller
             ->when($request->filled('search'), fn ($q) => $q->where(function ($qq) use ($request) {
                 $s = (string) $request->query('search');
                 $qq->where('title', 'like', "%{$s}%")
-                   ->orWhere('alt_text', 'like', "%{$s}%");
+                   ->orWhere('alt_text', 'like', "%{$s}%")
+                   ->orWhere('description', 'like', "%{$s}%")
+                   ->orWhereRaw('LOWER(CAST(tags AS CHAR)) LIKE ?', ['%' . mb_strtolower($s, 'UTF-8') . '%']);
             }));
 
         // Sort: whitelist cột được phép
@@ -209,6 +211,8 @@ class MediaAssetController extends Controller
             'channel_group_id' => $request->input('channel_group_id'),
             'title' => $request->input('title'),
             'alt_text' => $request->input('alt_text'),
+            'description' => $request->input('description'),
+            'tags' => $request->input('tags'),
             'allowed_kinds' => $request->input('allowed_kinds'),
             'dedupe' => $request->boolean('dedupe', true),
             'created_by' => $request->user()?->id,

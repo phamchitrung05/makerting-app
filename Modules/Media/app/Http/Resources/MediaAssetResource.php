@@ -38,6 +38,8 @@ class MediaAssetResource extends JsonResource
             'folder' => $dto->folder,
             'title' => $dto->title,
             'alt_text' => $dto->altText,
+            'description' => $dto->description,
+            'tags' => $dto->tags,
             'url' => $dto->url,
             'mime' => $dto->mime,
             'size' => $dto->size,
