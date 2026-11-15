@@ -801,7 +801,8 @@ class MediaAiImageTest extends TestCase
         $this->assertCount(1, $capturedRequest->attachments);
         $this->assertSame('image/png', $capturedRequest->attachments[0]['mime']);
         $this->assertSame(base64_encode($refPng), $capturedRequest->attachments[0]['data']);
-        $this->assertStringContainsString('has_reference_image', $capturedRequest->messages[0]['content']);
+        $this->assertSame('system', $capturedRequest->messages[0]['role']);
+        $this->assertSame(trim(str_replace(["\r\n", "\r"], "\n", (string) config('media.prompt.ai_image_suggest.system'))), $capturedRequest->messages[0]['content']);
         $decodedUser = json_decode((string) $capturedRequest->messages[1]['content'], true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame([
             'task' => 'suggest_image_generation_prompt',

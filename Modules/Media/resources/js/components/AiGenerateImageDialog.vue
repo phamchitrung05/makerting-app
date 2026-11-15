@@ -17,7 +17,7 @@
   saveToLibrary(), downloadSelected(), downloadItem(), selectResult(), toggleLike(),
   clearReferenceImage(), setReferenceImage(), onPickReferenceImage(),
   onReferenceFileChange(), onReferenceDragOver(), onReferenceDragLeave(),
-  onReferenceDrop(), clearActionAlert(), closeDialog(), resetAfterLeave().
+  onReferenceDrop(), showSnackbar(), hideSnackbar(), closeDialog(), resetAfterLeave().
   INPUT: v-model (isOpen: boolean), props.folder (string, mặc định 'root').
   OUTPUT: emit('update:modelValue', bool), emit('saved', MediaAssetResource).
   SIDE EFFECT: Gọi API Media AI Image và dọn polling timer khi đóng/unmount.
@@ -120,12 +120,34 @@ const isGenerating = ref(false)
 const isSaving = ref(false)
 const jobTotal = ref(0)
 const jobCompleted = ref(0)
-const actionAlert = ref(null)
 const generatedResults = ref([])
+
+const snackbarRegionRef = ref(null)
+const isSnackbarFocused = ref(false)
+
+const snackbar = ref({
+  show: false,
+  color: 'info',
+  text: '',
+  timeout: 4500,
+})
 
 let pollTimer = null
 let generationSeq = 0
 let suggestSeq = 0
+let snackbarSeq = 0
+let lastFocusedBeforeSnackbar = null
+
+const snackbarIcon = computed(() => {
+  const icons = {
+    success: 'tabler-circle-check',
+    error: 'tabler-alert-circle',
+    warning: 'tabler-alert-triangle',
+    info: 'tabler-info-circle',
+  }
+
+  return icons[snackbar.value.color] || 'tabler-info-circle'
+})
 
 const modelSelectOptions = computed(() => aiModels.value.map(model => ({
   title: model.provider_name
@@ -391,16 +413,13 @@ async function suggestPromptFromAi() {
   if (isBusy.value)
     return
 
-  actionAlert.value = null
+  hideSnackbar()
 
   const cleanDescription = promptText.value.trim()
   const refImage = referenceImage.value
 
   if (!cleanDescription && !refImage?.file) {
-    actionAlert.value = {
-      type: 'warning',
-      text: 'Vui lòng nhập mô tả hình ảnh hoặc tải lên ảnh tham chiếu trước khi bấm Gợi ý prompt.',
-    }
+    showSnackbar('warning', 'Vui lòng nhập mô tả hình ảnh hoặc tải lên ảnh tham chiếu trước khi bấm Gợi ý prompt.')
 
     return
   }
@@ -424,23 +443,20 @@ async function suggestPromptFromAi() {
     if (result?.prompt) {
       aiPromptText.value = result.prompt
       promptError.value = ''
-      actionAlert.value = {
-        type: 'success',
-        text: refImage?.file
-          ? 'AI đã phân tích mô tả và ảnh tham chiếu để tạo prompt gợi ý.'
-          : 'AI đã gợi ý prompt chi tiết từ mô tả của bạn.',
-      }
       await nextTick()
       promptInputRef.value?.$el?.querySelector('textarea')?.focus()
+      showSnackbar(
+        'success',
+        refImage?.file
+          ? 'AI đã phân tích mô tả và ảnh tham chiếu để tạo prompt gợi ý.'
+          : 'AI đã gợi ý prompt chi tiết từ mô tả của bạn.',
+      )
     }
   } catch (err) {
     if (reqSeq !== suggestSeq)
       return
 
-    actionAlert.value = {
-      type: 'error',
-      text: firstErrorMessage(err) || 'Không thể gợi ý prompt từ AI.',
-    }
+    showSnackbar('error', firstErrorMessage(err) || 'Không thể gợi ý prompt từ AI.')
   } finally {
     if (reqSeq === suggestSeq)
       isSuggestingPrompt.value = false
@@ -472,8 +488,80 @@ function toggleLike(item) {
   item.liked = !item.liked
 }
 
-function clearActionAlert() {
-  actionAlert.value = null
+/**
+ * Hiển thị thông báo snackbar ngắn gọn (tránh chồng chéo timer giữa các thông báo liên tiếp).
+ */
+async function showSnackbar(type, message) {
+  const cleanText = String(message ?? '').trim()
+  if (!cleanText)
+    return
+
+  const seq = ++snackbarSeq
+  const duration = type === 'error' ? 7000 : 4500
+
+  if (snackbar.value.show) {
+    snackbar.value.show = false
+    await nextTick()
+  }
+
+  if (seq !== snackbarSeq || !isOpen.value)
+    return
+
+  snackbar.value = {
+    show: true,
+    color: type || 'info',
+    text: cleanText,
+    timeout: duration,
+  }
+}
+
+/**
+ * Ẩn snackbar hiện tại; nếu người dùng đang focus nút đóng thì trả focus về control trước đó trong dialog.
+ */
+function hideSnackbar({ restoreFocus = false } = {}) {
+  snackbarSeq += 1
+
+  const wasFocusedInside = Boolean(
+    typeof document !== 'undefined'
+    && snackbarRegionRef.value?.contains(document.activeElement),
+  )
+
+  const focusTarget = restoreFocus && wasFocusedInside ? lastFocusedBeforeSnackbar : null
+
+  isSnackbarFocused.value = false
+  lastFocusedBeforeSnackbar = null
+  snackbar.value = {
+    ...snackbar.value,
+    show: false,
+  }
+
+  if (focusTarget?.isConnected && typeof focusTarget.focus === 'function') {
+    nextTick(() => {
+      focusTarget.focus({ preventScroll: true })
+    })
+  }
+}
+
+function onSnackbarModelUpdate(visible) {
+  if (!visible)
+    hideSnackbar()
+}
+
+function onSnackbarFocusIn(event) {
+  if (!snackbar.value.show)
+    return
+
+  const prev = event?.relatedTarget
+  if (prev && typeof prev.focus === 'function' && !snackbarRegionRef.value?.contains(prev))
+    lastFocusedBeforeSnackbar = prev
+
+  isSnackbarFocused.value = true
+}
+
+function onSnackbarFocusOut(event) {
+  const next = event?.relatedTarget
+  if (!event?.currentTarget?.contains(next))
+    isSnackbarFocused.value = false
 }
 
 /**
@@ -528,10 +616,7 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
     if (job.status === 'ready') {
       isGenerating.value = false
       stopPolling()
-      actionAlert.value = {
-        type: 'success',
-        text: `Đã tạo xong ${generatedResults.value.length} ảnh preview.`,
-      }
+      showSnackbar('success', `Đã tạo xong ${generatedResults.value.length} ảnh preview.`)
 
       return
     }
@@ -539,10 +624,7 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
     if (job.status === 'failed') {
       isGenerating.value = false
       stopPolling()
-      actionAlert.value = {
-        type: 'error',
-        text: job.error || 'Quá trình tạo ảnh AI thất bại. Vui lòng thử lại.',
-      }
+      showSnackbar('error', job.error || 'Quá trình tạo ảnh AI thất bại. Vui lòng thử lại.')
 
       return
     }
@@ -550,10 +632,7 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
     if (attempt >= MAX_POLL_ATTEMPTS) {
       isGenerating.value = false
       stopPolling()
-      actionAlert.value = {
-        type: 'error',
-        text: 'Hết thời gian chờ AI xử lý. Vui lòng kiểm tra queue worker hoặc thử tạo lại.',
-      }
+      showSnackbar('error', 'Hết thời gian chờ AI xử lý. Vui lòng kiểm tra queue worker hoặc thử tạo lại.')
 
       return
     }
@@ -567,10 +646,7 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
 
     isGenerating.value = false
     stopPolling()
-    actionAlert.value = {
-      type: 'error',
-      text: firstErrorMessage(err) || 'Không thể kiểm tra tiến độ tạo ảnh AI.',
-    }
+    showSnackbar('error', firstErrorMessage(err) || 'Không thể kiểm tra tiến độ tạo ảnh AI.')
   }
 }
 
@@ -585,7 +661,7 @@ async function generateImages() {
   if (isBusy.value)
     return
 
-  actionAlert.value = null
+  hideSnackbar()
 
   const cleanPrompt = aiPromptText.value.trim()
 
@@ -600,10 +676,7 @@ async function generateImages() {
   promptError.value = ''
 
   if (hasNoAvailableModel.value) {
-    actionAlert.value = {
-      type: 'warning',
-      text: 'Chưa có model AI tạo ảnh nào đang bật trong CoreAi.',
-    }
+    showSnackbar('warning', 'Chưa có model AI tạo ảnh nào đang bật trong CoreAi.')
 
     return
   }
@@ -638,20 +711,14 @@ async function generateImages() {
 
     if (job.status === 'ready') {
       isGenerating.value = false
-      actionAlert.value = {
-        type: 'success',
-        text: `Đã tạo xong ${generatedResults.value.length} ảnh preview.`,
-      }
+      showSnackbar('success', `Đã tạo xong ${generatedResults.value.length} ảnh preview.`)
 
       return
     }
 
     if (job.status === 'failed') {
       isGenerating.value = false
-      actionAlert.value = {
-        type: 'error',
-        text: job.error || 'Quá trình tạo ảnh AI thất bại.',
-      }
+      showSnackbar('error', job.error || 'Quá trình tạo ảnh AI thất bại.')
 
       return
     }
@@ -664,10 +731,7 @@ async function generateImages() {
       return
 
     isGenerating.value = false
-    actionAlert.value = {
-      type: 'error',
-      text: firstErrorMessage(err) || 'Không thể gửi yêu cầu tạo ảnh AI.',
-    }
+    showSnackbar('error', firstErrorMessage(err) || 'Không thể gửi yêu cầu tạo ảnh AI.')
   }
 }
 
@@ -692,16 +756,13 @@ async function saveToLibrary() {
     return
 
   if (target.savedAssetId) {
-    actionAlert.value = {
-      type: 'info',
-      text: 'Ảnh này đã được lưu vào thư viện trước đó.',
-    }
+    showSnackbar('info', 'Ảnh này đã được lưu vào thư viện trước đó.')
 
     return
   }
 
   isSaving.value = true
-  actionAlert.value = null
+  hideSnackbar()
 
   try {
     const title = buildSaveTitle()
@@ -714,16 +775,10 @@ async function saveToLibrary() {
     })
 
     target.savedAssetId = asset.id
-    actionAlert.value = {
-      type: 'success',
-      text: `Đã lưu "${asset.title}" vào thư viện Media.`,
-    }
+    showSnackbar('success', `Đã lưu "${asset.title}" vào thư viện Media.`)
     emit('saved', asset)
   } catch (err) {
-    actionAlert.value = {
-      type: 'error',
-      text: firstErrorMessage(err) || 'Lưu ảnh vào thư viện thất bại.',
-    }
+    showSnackbar('error', firstErrorMessage(err) || 'Lưu ảnh vào thư viện thất bại.')
   } finally {
     isSaving.value = false
   }
@@ -789,7 +844,7 @@ function resetAfterLeave() {
   batchCount.value = 4
   resultViewMode.value = 'grid'
   selectedResultId.value = null
-  actionAlert.value = null
+  hideSnackbar()
   generatedResults.value = []
 }
 
@@ -801,12 +856,14 @@ watch(isOpen, open => {
     suggestSeq += 1
     isSuggestingPrompt.value = false
     stopPolling()
+    hideSnackbar()
   }
 })
 
 onBeforeUnmount(() => {
   generationSeq += 1
   suggestSeq += 1
+  snackbarSeq += 1
   stopPolling()
   revokeReferencePreviewUrl()
 })
@@ -1325,19 +1382,6 @@ onBeforeUnmount(() => {
                 </VBtn>
               </div>
             </div>
-
-            <VAlert
-              v-if="actionAlert"
-              variant="tonal"
-              :color="actionAlert.type"
-              :role="actionAlert.type === 'error' ? 'alert' : 'status'"
-              aria-live="polite"
-              closable
-              class="mt-4 mb-0"
-              @click:close="clearActionAlert"
-            >
-              {{ actionAlert.text }}
-            </VAlert>
           </div>
 
           <VDivider class="flex-shrink-0" />
@@ -1586,6 +1630,52 @@ onBeforeUnmount(() => {
         </VCardActions>
       </template>
     </AppDialogLayout>
+
+    <div
+      ref="snackbarRegionRef"
+      role="region"
+      aria-label="Thông báo tạo ảnh AI"
+      class="ai-dialog-snackbar-region"
+    >
+      <VSnackbar
+        attach
+        :model-value="snackbar.show"
+        :color="snackbar.color"
+        :timeout="isSnackbarFocused ? -1 : snackbar.timeout"
+        location="top center"
+        variant="flat"
+        class="ai-dialog-snackbar"
+        @update:model-value="onSnackbarModelUpdate"
+        @focusin="onSnackbarFocusIn"
+        @focusout="onSnackbarFocusOut"
+      >
+        <div class="d-flex align-center ga-2">
+          <VIcon
+            :icon="snackbarIcon"
+            size="18"
+            class="flex-shrink-0"
+            aria-hidden="true"
+          />
+          <span class="ai-dialog-snackbar__text">{{ snackbar.text }}</span>
+        </div>
+
+        <template #actions>
+          <VBtn
+            variant="text"
+            color=""
+            size="small"
+            icon
+            aria-label="Đóng thông báo"
+            @click="hideSnackbar({ restoreFocus: true })"
+          >
+            <VIcon
+              icon="tabler-x"
+              size="18"
+            />
+          </VBtn>
+        </template>
+      </VSnackbar>
+    </div>
   </VDialog>
 </template>
 
@@ -2070,5 +2160,37 @@ onBeforeUnmount(() => {
   inline-size: 30px;
   min-inline-size: 30px;
   padding: 0;
+}
+
+.ai-dialog-snackbar-region {
+  flex: 0 0 0px;
+  overflow: visible;
+  block-size: 0;
+  inline-size: 0;
+}
+
+.ai-dialog-snackbar {
+  padding-block-start: 12px;
+
+  :deep(.v-snackbar__wrapper) {
+    max-inline-size: min(560px, calc(100% - 16px));
+    min-inline-size: min(280px, calc(100% - 16px));
+  }
+
+  :deep(.v-snackbar__content) {
+    min-inline-size: 0;
+  }
+}
+
+.ai-dialog-snackbar__text {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-dialog-snackbar :deep(.v-snackbar__wrapper),
+  .ai-dialog-snackbar :deep(.v-snackbar-transition-enter-active),
+  .ai-dialog-snackbar :deep(.v-snackbar-transition-leave-active) {
+    transition: none !important;
+  }
 }
 </style>
