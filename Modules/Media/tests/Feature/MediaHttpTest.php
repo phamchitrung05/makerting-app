@@ -325,6 +325,84 @@ class MediaHttpTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors(['tags.0']);
     }
+
+    public function test_update_to_private_returns_502_when_move_fails(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Public Original',
+                'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        $assetId = $created['id'];
+        $asset = MediaAsset::findOrFail($assetId);
+        $this->assertSame('media_public', $asset->mediaFile()?->disk);
+
+        // Giả lập lỗi copy file sang disk private.
+        $this->mock(\Spatie\MediaLibrary\MediaCollections\Filesystem::class, function ($mock) {
+            $mock->shouldReceive('copyFromMediaLibrary')
+                ->once()
+                ->andThrow(new \RuntimeException('Simulated disk move failure'));
+        });
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$assetId}", [
+                'title' => 'Should Rollback Title',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ])
+            ->assertStatus(502)
+            ->assertJsonPath('success', false);
+
+        $fresh = $asset->fresh();
+        $this->assertSame(MediaAsset::VISIBILITY_PUBLIC, $fresh->visibility);
+        $this->assertSame('Public Original', $fresh->title);
+        $this->assertSame('media_public', $fresh->mediaFile()?->disk);
+    }
+
+    public function test_update_visibility_moves_file_between_public_and_private_disks(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Toggle Visibility',
+                'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        $assetId = $created['id'];
+
+        $toPrivate = $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$assetId}", [
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.visibility', MediaAsset::VISIBILITY_PRIVATE)
+            ->assertJsonPath('data.url', null);
+
+        $asset = MediaAsset::findOrFail($assetId);
+        $this->assertSame('media_private', $asset->mediaFile()?->disk);
+        $this->assertSame([], Storage::disk('media_public')->allFiles());
+        $this->assertNotEmpty(Storage::disk('media_private')->allFiles());
+
+        $this->withHeaders($headers)
+            ->putJson("/api/v1/admin/media/assets/{$assetId}", [
+                'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.visibility', MediaAsset::VISIBILITY_PUBLIC);
+
+        $asset = $asset->fresh();
+        $this->assertSame('media_public', $asset->mediaFile()?->disk);
+        $this->assertNotEmpty(Storage::disk('media_public')->allFiles());
+    }
 }
 
 class TestPostModel extends Model

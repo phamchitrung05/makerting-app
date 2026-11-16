@@ -72,18 +72,23 @@ class UploadMediaAssetAction
         $allowedKinds = $options['allowed_kinds'] ?? null;
         $dedupe = $options['dedupe'] ?? true;
         $visibility = $options['visibility'] ?? MediaAsset::VISIBILITY_PUBLIC;
-        $disk = $options['disk']
-            ?? ($visibility === MediaAsset::VISIBILITY_PRIVATE
-                ? 'media_private'
-                : 'media_public');
+        $channelGroupId = isset($options['channel_group_id']) && $options['channel_group_id'] !== ''
+            ? (int) $options['channel_group_id']
+            : null;
+        $disk = $options['disk'] ?? MediaAsset::diskForVisibility($visibility);
         $createdBy = $options['created_by'] ?? auth()->id();
 
-        // 1. Checksum — dedupe trước khi scan/ghi, NHƯNG vẫn phải kiểm
-        // allowed_kinds: asset cũ cùng checksum nhưng sai kind (video thay
-        // image) không được phép trả về cho slot yêu cầu image.
+        // 1. Checksum — chỉ dedupe với asset khớp visibility + channel_group_id
+        // và vẫn kiểm allowed_kinds (tránh trả nhầm asset public khi upload private
+        // hoặc trả nhầm asset của channel_group khác).
         $checksum = $this->checksum->fromUploadedFile($file);
         if ($dedupe) {
-            $existing = $this->dedupeByChecksum($checksum);
+            $existing = $this->dedupeByChecksum(
+                checksum: $checksum,
+                visibility: $visibility,
+                channelGroupId: $channelGroupId,
+                matchChannelGroup: true,
+            );
             if ($existing) {
                 if ($allowedKinds !== null && $allowedKinds !== []
                     && ! in_array($existing->kind, $allowedKinds, true)) {
@@ -106,9 +111,9 @@ class UploadMediaAssetAction
             ?: 'media-' . substr($checksum, 0, 8);
 
         /** @var MediaAsset $asset */
-        $asset = DB::transaction(function () use ($file, $options, $checksum, $scan, $title, $disk, $createdBy, $visibility) {
+        $asset = DB::transaction(function () use ($file, $options, $checksum, $scan, $title, $disk, $createdBy, $visibility, $channelGroupId) {
             $asset = MediaAsset::create([
-                'channel_group_id' => $options['channel_group_id'] ?? null,
+                'channel_group_id' => $channelGroupId,
                 'folder' => $options['folder'] ?? 'root',
                 'kind' => $scan['kind'],
                 'title' => $title,
@@ -164,16 +169,25 @@ class UploadMediaAssetAction
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: Tìm asset trùng checksum sha256
+     * CHỨC NĂNG: Tìm asset trùng checksum sha256 (tùy chọn lọc visibility/nhóm kênh)
      * =====================================================================
-     * INPUT: sha256 hex. OUTPUT: ?MediaAsset.
-     * SIDE EFFECT: SELECT media_assets WHERE checksum_sha256.
+     * INPUT: sha256 hex, ?visibility, ?channelGroupId, matchChannelGroup.
+     * OUTPUT: ?MediaAsset.
+     * SIDE EFFECT: SELECT media_assets WHERE checksum_sha256 (+ phạm vi).
      * =====================================================================
      */
-    public function dedupeByChecksum(string $checksum): ?MediaAsset
-    {
+    public function dedupeByChecksum(
+        string $checksum,
+        ?string $visibility = null,
+        ?int $channelGroupId = null,
+        bool $matchChannelGroup = false,
+    ): ?MediaAsset {
         return MediaAsset::query()
             ->where('checksum_sha256', $checksum)
+            ->when($visibility !== null, fn ($q) => $q->where('visibility', $visibility))
+            ->when($matchChannelGroup, fn ($q) => $channelGroupId === null
+                ? $q->whereNull('channel_group_id')
+                : $q->where('channel_group_id', $channelGroupId))
             ->first();
     }
 

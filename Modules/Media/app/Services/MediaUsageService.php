@@ -440,29 +440,17 @@ class MediaUsageService implements MediaUsageServiceContract
             return;
         }
 
-        $oldVisibility = $asset->visibility;
         $newVisibility = $rule->visibility;
-        $oldDisk = $oldVisibility === MediaAsset::VISIBILITY_PRIVATE ? 'media_private' : 'media_public';
-        $newDisk = $newVisibility === MediaAsset::VISIBILITY_PRIVATE ? 'media_private' : 'media_public';
+        $newDisk = MediaAsset::diskForVisibility($newVisibility);
+        $moved = $asset->moveMediaFileToDisk($newDisk);
 
-        // Cập nhật cột visibility trước (transaction cùng caller).
-        $asset->update(['visibility' => $newVisibility]);
-
-        // Di chuyển file Spatie + conversions giữa hai disk.
-        $media = $asset->mediaFile();
-        if (! $media || $oldDisk === $newDisk) {
-            return;
-        }
-
-        try {
-            $media->move($asset, MediaAsset::COLLECTION_LIBRARY, $newDisk);
-        } catch (\Throwable $e) {
-            // Không rollback visibility — file vẫn ở disk cũ nhưng cờ đã đúng;
-            // endpoint stream sẽ kiểm quyền trước khi đọc.
-            \Illuminate\Support\Facades\Log::warning(
-                "Không chuyển được file media {$media->id} sang {$newDisk}: {$e->getMessage()}",
+        if (! $moved && $newVisibility === MediaAsset::VISIBILITY_PRIVATE) {
+            throw new RuntimeException(
+                "Không chuyển được file media [{$asset->id}] sang disk riêng tư [{$newDisk}].",
             );
         }
+
+        $asset->update(['visibility' => $newVisibility]);
     }
 
     /**

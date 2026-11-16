@@ -267,50 +267,22 @@ class MediaAssetController extends Controller
         $oldVisibility = $asset->visibility;
         $newVisibility = $data['visibility'] ?? $oldVisibility;
 
+        // Đổi visibility -> di chuyển file vật lý giữa media_public <-> media_private
+        // trước khi lưu DB; nếu chuyển sang private thất bại thì trả 502 để giữ
+        // nhất quán (không đánh dấu private trong DB trong khi file vẫn nằm public).
+        if ($newVisibility !== $oldVisibility) {
+            $moved = $asset->moveMediaFileToDisk(MediaAsset::diskForVisibility($newVisibility));
+            if (! $moved && $newVisibility === MediaAsset::VISIBILITY_PRIVATE) {
+                return BaseResponse::error('Không chuyển được file sang disk riêng tư.', 502);
+            }
+        }
+
         $asset->update($data);
 
-        // Đổi visibility -> phải di chuyển file vật lý giữa hai disk
-        // media_public <-> media_private để đồng bộ quyền truy cập trên disk.
-        if ($newVisibility !== $oldVisibility) {
-            $this->moveFileBetweenDisks($asset, $newVisibility);
-        }
-
         return BaseResponse::success(
-            new MediaAssetResource($asset->fresh(['creator', 'channelGroup'])->loadCount('usages')),
+            new MediaAssetResource($asset->fresh(['creator', 'channelGroup', 'media'])->loadCount('usages')),
             'Cập nhật media thành công',
         );
-    }
-
-    /**
-     * =====================================================================
-     * CHỨC NĂNG: Di chuyển file Spatie + conversions giữa media_public và
-     * media_private khi visibility đổi (đồng bộ cờ DB với vị trí file thật).
-     * =====================================================================
-     * INPUT: $asset, $newVisibility.
-     * OUTPUT: void — file đã move (hoặc log warning khi lỗi).
-     * SIDE EFFECT: Spatie move() file gốc + conversions sang disk đích.
-     * =====================================================================
-     */
-    private function moveFileBetweenDisks(MediaAsset $asset, string $newVisibility): void
-    {
-        $newDisk = $newVisibility === MediaAsset::VISIBILITY_PRIVATE
-            ? 'media_private'
-            : 'media_public';
-
-        $media = $asset->mediaFile();
-        if (! $media || $media->disk === $newDisk) {
-            return;
-        }
-
-        try {
-            $media->move($asset, MediaAsset::COLLECTION_LIBRARY, $newDisk);
-        } catch (\Throwable $e) {
-            // File vẫn ở disk cũ nhưng cờ đã đúng — endpoint stream vẫn an toàn
-            // (kiểm quyền trước khi đọc). Chỉ log để debug.
-            \Illuminate\Support\Facades\Log::warning(
-                "Không chuyển được file media {$media->id} sang {$newDisk}: {$e->getMessage()}",
-            );
-        }
     }
 
     /**

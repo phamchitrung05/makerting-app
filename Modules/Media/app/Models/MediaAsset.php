@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Log;
 use Modules\Core\Traits\HasSlug;
 use Modules\CoreAi\Traits\HasAiProvenance;
 use Modules\Identity\Models\ChannelGroup;
@@ -205,10 +206,55 @@ class MediaAsset extends Model implements HasMedia
         return $this->kind === self::KIND_ARCHIVE;
     }
 
+    /**
+     * CHỨC NĂNG: Trả về tên disk Spatie tương ứng với visibility.
+     * INPUT: string $visibility ('public'|'private'). OUTPUT: string.
+     */
+    public static function diskForVisibility(string $visibility): string
+    {
+        return $visibility === self::VISIBILITY_PRIVATE
+            ? 'media_private'
+            : 'media_public';
+    }
+
     /** CHỨC NĂNG: Lấy file media gốc Spatie (collection 'library'). */
     public function mediaFile(): ?Media
     {
         return $this->getFirstMedia(self::COLLECTION_LIBRARY);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Di chuyển file Spatie + conversions sang disk đích.
+     * =====================================================================
+     * Dùng chung cho MediaAssetController::update() và MediaUsageService::applyVisibility().
+     * Spatie Media::move() tạo bản ghi Media mới và xóa bản ghi cũ, nên cần
+     * xóa relation cache để các lần đọc mediaFile() tiếp theo thấy bản ghi mới.
+     *
+     * INPUT: string $newDisk ('media_public' | 'media_private').
+     * OUTPUT: bool (true nếu đã đúng disk hoặc move thành công; false khi lỗi).
+     * SIDE EFFECT: Di chuyển file vật lý + conversions hoặc ghi Log::warning.
+     * =====================================================================
+     */
+    public function moveMediaFileToDisk(string $newDisk): bool
+    {
+        $media = $this->mediaFile();
+        if (! $media || $media->disk === $newDisk) {
+            return true;
+        }
+
+        try {
+            $newMedia = $media->move($this, self::COLLECTION_LIBRARY, $newDisk);
+            $this->unsetRelation('media');
+
+            return $newMedia->disk === $newDisk;
+        } catch (\Throwable $e) {
+            Log::warning(
+                "Không chuyển được file media {$media->id} sang {$newDisk}: {$e->getMessage()}",
+            );
+
+            return false;
+        }
     }
 
     /* =====================================================================

@@ -469,6 +469,119 @@ class MediaFeatureTest extends TestCase
             @unlink($tmp);
         }
     }
+
+    public function test_upload_same_file_with_private_visibility_creates_new_asset(): void
+    {
+        $action = new UploadMediaAssetAction(new CalculateMediaChecksumAction(), new ScanMediaSecurityAction());
+
+        // Cùng 1 nội dung PNG nhưng tạo 2 UploadedFile riêng vì UploadedFile đầu sẽ bị Spatie di chuyển.
+        $filePublic = $this->pngFile();
+        $tmpPrivate = tempnam(sys_get_temp_dir(), 'priv_') . '.png';
+        copy($filePublic->getRealPath(), $tmpPrivate);
+        $filePrivate = new UploadedFile($tmpPrivate, 'x-private.png', 'image/png', null, true);
+
+        $tmpPrivate2 = tempnam(sys_get_temp_dir(), 'priv2_') . '.png';
+        copy($tmpPrivate, $tmpPrivate2);
+        $filePrivateAgain = new UploadedFile($tmpPrivate2, 'x-private-2.png', 'image/png', null, true);
+
+        try {
+            $publicAsset = $action->execute($filePublic, [
+                'folder' => 'pub',
+                'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            ]);
+            $privateAsset = $action->execute($filePrivate, [
+                'folder' => 'priv',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ]);
+            $privateDeduped = $action->execute($filePrivateAgain, [
+                'folder' => 'priv',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ]);
+
+            $this->assertNotSame($publicAsset->id, $privateAsset->id);
+            $this->assertSame($publicAsset->checksum_sha256, $privateAsset->checksum_sha256);
+            $this->assertSame(MediaAsset::VISIBILITY_PUBLIC, $publicAsset->visibility);
+            $this->assertSame('media_public', $publicAsset->mediaFile()?->disk);
+            $this->assertSame(MediaAsset::VISIBILITY_PRIVATE, $privateAsset->visibility);
+            $this->assertSame('media_private', $privateAsset->mediaFile()?->disk);
+
+            // Upload lần 2 với cùng visibility private + cùng checksum -> dedupe đúng về asset private.
+            $this->assertSame($privateAsset->id, $privateDeduped->id);
+            $this->assertSame(2, MediaAsset::query()->count());
+        } finally {
+            @unlink($tmpPrivate);
+            @unlink($tmpPrivate2);
+        }
+    }
+
+    public function test_upload_same_file_with_different_channel_group_creates_new_asset(): void
+    {
+        $action = new UploadMediaAssetAction(new CalculateMediaChecksumAction(), new ScanMediaSecurityAction());
+        $groupA = \Modules\Identity\Models\ChannelGroup::create(['name' => 'Group A', 'code' => 'group-a']);
+        $groupB = \Modules\Identity\Models\ChannelGroup::create(['name' => 'Group B', 'code' => 'group-b']);
+
+        $fileA = $this->pngFile();
+        $tmpB = tempnam(sys_get_temp_dir(), 'grp_b_') . '.png';
+        copy($fileA->getRealPath(), $tmpB);
+        $fileB = new UploadedFile($tmpB, 'group-b.png', 'image/png', null, true);
+
+        $tmpB2 = tempnam(sys_get_temp_dir(), 'grp_b2_') . '.png';
+        copy($tmpB, $tmpB2);
+        $fileB2 = new UploadedFile($tmpB2, 'group-b-2.png', 'image/png', null, true);
+
+        try {
+            $assetA = $action->execute($fileA, ['channel_group_id' => $groupA->id]);
+            $assetB = $action->execute($fileB, ['channel_group_id' => $groupB->id]);
+            $assetBDeduped = $action->execute($fileB2, ['channel_group_id' => $groupB->id]);
+
+            $this->assertNotSame($assetA->id, $assetB->id);
+            $this->assertSame($groupA->id, $assetA->channel_group_id);
+            $this->assertSame($groupB->id, $assetB->channel_group_id);
+            $this->assertSame($assetB->id, $assetBDeduped->id);
+            $this->assertSame(2, MediaAsset::query()->count());
+        } finally {
+            @unlink($tmpB);
+            @unlink($tmpB2);
+        }
+    }
+
+    public function test_attach_to_private_slot_rolls_back_when_disk_move_fails(): void
+    {
+        $action = new UploadMediaAssetAction(new CalculateMediaChecksumAction(), new ScanMediaSecurityAction());
+        $asset = $action->execute($this->pngFile(), [
+            'folder' => 'pub',
+            'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+        ]);
+        $post = MediaTestPost::create(['title' => 'Private Slot Post']);
+
+        app(\Modules\Media\Registries\MediaSlotRegistry::class)->register('post.secret_image', [
+            'allowedKinds' => [MediaAsset::KIND_IMAGE],
+            'maxItems' => 1,
+            'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            'label' => 'Ảnh riêng tư',
+        ]);
+
+        $this->mock(\Spatie\MediaLibrary\MediaCollections\Filesystem::class, function ($mock) {
+            $mock->shouldReceive('copyFromMediaLibrary')
+                ->once()
+                ->andThrow(new \RuntimeException('Simulated private disk failure'));
+        });
+
+        $svc = app(MediaUsageServiceContract::class);
+
+        $caught = false;
+        try {
+            $svc->attach($post, $asset, 'post.secret_image');
+        } catch (\RuntimeException $e) {
+            $caught = true;
+        }
+
+        $this->assertTrue($caught);
+        $fresh = $asset->fresh();
+        $this->assertSame(MediaAsset::VISIBILITY_PUBLIC, $fresh->visibility);
+        $this->assertSame('media_public', $fresh->mediaFile()?->disk);
+        $this->assertSame(0, $svc->count($post, 'post.secret_image'));
+    }
 }
 
 class MediaTestPost extends Model
