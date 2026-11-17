@@ -12,23 +12,24 @@
 
 ## Danh sách lỗi (tóm tắt 15 findings)
 
-| # | Mức | File | Lỗi |
-|---|-----|------|-----|
-| 1 | Cao | `MediaAssetController.php:302` | move visibility nuốt lỗi → file private nằm public disk |
-| 2 | Cao | `StoreGeneratedMediaAction.php:57` | dedupe trả asset cũ, mất `ai_generation` meta |
-| 3 | Trung | `GenerateAiPreviewImagesAction.php:172` | job báo `ready` khi thiếu ảnh |
-| 4 | Trung | `MediaAssetController.php:394` | stream gắn `Accept-Ranges` nhưng không xử lý Range |
-| 5 | Trung | `UploadMediaAssetAction.php:96` | dedupe bỏ qua visibility yêu cầu |
-| 6 | Trung | `AiGenerateImageDialog.vue:643` | lỗi poll tạm thời làm UI mất kết quả job |
-| 7 | Trung | `MediaUsageService.php:138` | attachMany đếm id trùng trước khi lọc → 422 sai |
-| 8 | Trung | `SaveAiPreviewToMediaAction.php:66` | save song song tạo 2 asset trùng checksum |
-| 9 | Trung | `AiImagePreviewStore.php:399` | race read-modify-write trên Cache job tracker |
-| 10 | Thấp | `MediaDetailSidebar.vue:290` | share link asset private không dùng được |
-| 11 | Thấp | `MediaAssetController.php:72` | N+1 query ở index/options |
-| 12 | Thấp | `GenerateAiPreviewImagesAction.php:239` | file preview AI không bao giờ dọn |
-| 13 | Thấp | `MediaAssetController.php:294` | logic move disk trùng lặp 2 nơi |
-| 14 | Thấp | `StoreGeneratedMediaAction.php:147` | `hash()` inline bỏ qua checksum action |
-| 15 | Thấp | `MediaAsset.php:46` | `HasSlug` không cần thiết trên MediaAsset |
+| # | Mức | File | Lỗi | Trạng thái |
+|---|---|---|---|---|
+| 1 | Cao | `MediaAssetController.php:302` | move visibility nuốt lỗi → file private nằm public disk | ✅ Lô 1 (`4e0809b`) |
+| 2 | Cao | `StoreGeneratedMediaAction.php:57` | dedupe trả asset cũ, mất `ai_generation` meta | ✅ Lô 2 |
+| 3 | Trung | `GenerateAiPreviewImagesAction.php:172` | job báo `ready` khi thiếu ảnh | ✅ Lô 2 |
+| 4 | Trung | `MediaAssetController.php:394` | stream gắn `Accept-Ranges` nhưng không xử lý Range | ✅ Lô 3 |
+| 5 | Trung | `UploadMediaAssetAction.php:96` | dedupe bỏ qua visibility yêu cầu | ✅ Lô 1 (`4e0809b`) |
+| 6 | Trung | `AiGenerateImageDialog.vue:643` | lỗi poll tạm thời làm UI mất kết quả job | ✅ Lô 2 |
+| 7 | Trung | `MediaUsageService.php:138` | attachMany đếm id trùng trước khi lọc → 422 sai | ✅ Lô 3 |
+| 8 | Trung | `SaveAiPreviewToMediaAction.php:66` | save song song tạo 2 asset trùng checksum | ✅ Lô 2 |
+| 9 | Trung | `AiImagePreviewStore.php:399` | race read-modify-write trên Cache job tracker | ✅ Lô 2 |
+| 10 | Thấp | `MediaDetailSidebar.vue:290` | share link asset private không dùng được | ✅ Lô 4 |
+| 11 | Thấp | `MediaAssetController.php:72` | N+1 query ở index/options | ✅ Lô 3 |
+| 12 | Thấp | `GenerateAiPreviewImagesAction.php:239` | file preview AI không bao giờ dọn | ✅ Lô 2 |
+| 13 | Thấp | `MediaAssetController.php:294` | logic move disk trùng lặp 2 nơi | ✅ Lô 1 (`4e0809b`) |
+| 14 | Thấp | `StoreGeneratedMediaAction.php:147` | `hash()` inline bỏ qua checksum action | ✅ Lô 2 |
+| 15 | Thấp | `MediaAsset.php:46` | `HasSlug` không cần thiết trên MediaAsset | ✅ Lô 3 |
+| D2 | UX | `mediaAsset.js` + `folders()` | cây thư mục thiếu node cha ảo / đa cấp | ✅ Lô 4 |
 
 **Quyết định từ người dùng (đã xác nhận):**
 - Lỗi 10 (share link): **thêm signed share URL** có TTL 60' (không ẩn nút).
@@ -151,8 +152,8 @@
 
 ## Definition of Done
 
-- [ ] 15 lỗi được sửa theo đúng hướng đã chọn (A–D trên).
-- [ ] `php artisan test Modules/Media` xanh (bao gồm 5 test mới).
-- [ ] `php artisan migrate` chạy thành công 2 migration.
-- [ ] `docs/error/LOG-media-fix.md` ghi lại từng lỗi: file sửa, test đã thêm, trạng thái.
-- [ ] Code-review lại: `git diff` không chứa code comment out / TODO thừa.
+- [x] 15 lỗi (+ D2 `folderTree`) được sửa theo đúng hướng đã chọn (A–D trên).
+- [x] `php artisan test Modules/Media/tests` xanh (**64 passed / 427 assertions**).
+- [x] `php artisan migrate` chạy thành công (`2026_11_17_000001_remove_media_asset_slugs`; bỏ qua unique checksum index theo quyết định #2/#8).
+- [x] `docs/error/LOG-media-fix.md` ghi lại từng lỗi: file sửa, test đã thêm, trạng thái.
+- [x] Code-review lại: `git diff` không chứa code comment out / TODO thừa; ESLint & `npm run build` xanh.

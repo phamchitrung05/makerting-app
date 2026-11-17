@@ -5,6 +5,7 @@ namespace Modules\Media\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Modules\Core\Http\Responses\BaseResponse;
@@ -20,6 +21,7 @@ use Modules\Media\Http\Requests\SaveGeneratedImageRequest;
 use Modules\Media\Http\Requests\SuggestAiImagePromptRequest;
 use Modules\Media\Http\Resources\MediaAssetResource;
 use Modules\Media\Jobs\GenerateAiImageJob;
+use Modules\Media\Models\MediaAsset;
 use Modules\Media\Services\AiImagePreviewStore;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -269,16 +271,29 @@ class MediaAiImageController extends Controller
 
         $path = (string) ($preview['path'] ?? '');
         $disk = $this->store->disk();
-        if ($path === '' || ! $disk->exists($path)) {
+        $stream = null;
+        $sourceMime = (string) ($preview['mime'] ?? 'image/png');
+        $sourceSize = $preview['size'] ?? null;
+
+        if ($path !== '' && $disk->exists($path)) {
+            $stream = $disk->readStream($path);
+        } elseif (! empty($preview['saved_asset_id'])) {
+            // File tạm đã được dọn ngay khi lưu — fallback sang file chính thức
+            // để nút Tải về hoặc hiển thị ảnh trên dialog đang mở không bị 404.
+            $savedAsset = MediaAsset::query()->find($preview['saved_asset_id']);
+            $savedMedia = $savedAsset?->mediaFile();
+            if ($savedMedia) {
+                $stream = Storage::disk($savedMedia->disk)->readStream($savedMedia->getPathRelativeToRoot());
+                $sourceMime = $savedMedia->mime_type ?: $sourceMime;
+                $sourceSize = $savedMedia->size ?? $sourceSize;
+            }
+        }
+
+        if (! is_resource($stream)) {
             return BaseResponse::error('File ảnh preview tạm không còn trên hệ thống.', 404);
         }
 
-        $stream = $disk->readStream($path);
-        if (! is_resource($stream)) {
-            return BaseResponse::error('Không mở được luồng đọc ảnh preview tạm.', 404);
-        }
-
-        $safeMime = $this->store->safeStreamMime((string) ($preview['mime'] ?? 'image/png'));
+        $safeMime = $this->store->safeStreamMime($sourceMime);
         $ext = $this->store->extensionForMime($safeMime);
         $download = $request->boolean('download');
         $filename = 'ai-preview-' . substr($previewId, 0, 8) . '.' . $ext;
@@ -291,8 +306,8 @@ class MediaAiImageController extends Controller
             'Content-Security-Policy' => "default-src 'none'; img-src 'self'",
         ];
 
-        if (isset($preview['size'])) {
-            $headers['Content-Length'] = (string) $preview['size'];
+        if ($sourceSize !== null) {
+            $headers['Content-Length'] = (string) $sourceSize;
         }
 
         return new StreamedResponse(function () use ($stream): void {

@@ -582,6 +582,22 @@ class MediaFeatureTest extends TestCase
         $this->assertSame('media_public', $fresh->mediaFile()?->disk);
         $this->assertSame(0, $svc->count($post, 'post.secret_image'));
     }
+
+    public function test_creating_and_updating_media_asset_does_not_create_slug_records(): void
+    {
+        $action = new UploadMediaAssetAction(new CalculateMediaChecksumAction(), new ScanMediaSecurityAction());
+        $asset = $action->execute($this->pngFile(), [
+            'folder' => 'noslug',
+            'title' => 'Banner Không Cần Slug',
+        ]);
+
+        $asset->update(['title' => 'Banner Đã Đổi Tên']);
+
+        $this->assertSame(0, \Modules\Core\Models\Slug::query()
+            ->whereIn('sluggable_type', [MediaAsset::class, $asset->getMorphClass()])
+            ->count());
+        $this->assertFalse(method_exists($asset, 'slugs'));
+    }
 }
 
 class MediaTestPost extends Model

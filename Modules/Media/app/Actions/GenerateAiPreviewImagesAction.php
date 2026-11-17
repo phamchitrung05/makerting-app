@@ -169,6 +169,14 @@ class GenerateAiPreviewImagesAction
                 throw new RuntimeException('Model AI không trả về dữ liệu ảnh hợp lệ.');
             }
 
+            if ($collectedCount < $count) {
+                return $this->store->markJobFailed(
+                    $jobId,
+                    "Chỉ tạo được {$collectedCount}/{$count} ảnh do nhà cung cấp trả về thiếu dữ liệu.",
+                    'partial_generation',
+                ) ?? [];
+            }
+
             return $this->store->markJobReady($jobId) ?? [];
         } catch (AiGatewayException $e) {
             Log::warning('AI image preview generation failed via CoreAi', [

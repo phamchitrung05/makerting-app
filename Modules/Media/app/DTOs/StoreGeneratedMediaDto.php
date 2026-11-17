@@ -41,5 +41,6 @@ final readonly class StoreGeneratedMediaDto
         public ?string $checksumSha256 = null,
         public ?string $description = null,
         public array $tags = [],
+        public bool $dedupe = true,
     ) {}
 }

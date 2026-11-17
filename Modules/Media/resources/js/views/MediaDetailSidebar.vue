@@ -21,6 +21,7 @@
   - refreshPreviewStream()  : Tải blob qua Bearer auth cho asset private (/stream).
   - saveMetadata()          : Gửi PUT /assets/{id} cập nhật title/folder/visibility/alt_text.
   - downloadCurrentAsset()  : Tải tệp qua /stream?download=1 (hoặc URL public fallback).
+  - shareCurrentAsset()     : Copy URL public trực tiếp hoặc xin signed URL tạm (TTL 60 phút) cho asset private.
   - deleteCurrentAsset()    : Xóa mềm asset qua store.deleteAsset() & báo trang cha.
   - resetPromptForm()       : Khôi phục tab Prompt về dữ liệu AI/mặc định của asset.
   - copyFieldValue()        : Sao chép nhanh giá trị vào clipboard.
@@ -130,6 +131,7 @@ const newTagText = ref('')
 const saving = ref(false)
 const deleting = ref(false)
 const downloading = ref(false)
+const sharing = ref(false)
 const previewFailed = ref(false)
 const privateObjectUrl = ref('')
 const folderSearch = ref('root')
@@ -144,6 +146,7 @@ let tabScrollObserver = null
 let detailSeq = 0
 let streamSeq = 0
 let lightboxPressedBackdrop = false
+let copyResetTimer = null
 let supportsDisplayTransitionCache
 let preloadedUrl = ''
 
@@ -273,21 +276,6 @@ const resolvedPathText = computed(() => {
     return ''
 
   return asset.url || mediaApi.streamUrl(asset.id)
-})
-
-const shareLink = computed(() => {
-  const asset = liveAsset.value
-  if (!asset)
-    return ''
-
-  if (asset.url)
-    return asset.url
-
-  const streamPath = mediaApi.streamUrl(asset.id)
-  if (typeof window === 'undefined')
-    return streamPath
-
-  return `${window.location.origin}${streamPath}`
 })
 
 const normalizedFolder = computed(() => String(folderSearch.value ?? '').trim() || 'root')
@@ -632,23 +620,112 @@ async function deleteCurrentAsset() {
 }
 
 /*
- * CHỨC NĂNG: Sao chép nhanh chuỗi thuộc tính vào clipboard và hiển thị trạng thái đã chép.
+ * CHỨC NĂNG: Fallback sao chép đồng bộ khi môi trường không có navigator.clipboard (HTTP LAN) hoặc quyền bị từ chối sau async.
+ */
+function legacyCopy(text) {
+  if (typeof document === 'undefined')
+    return false
+
+  const field = document.createElement('textarea')
+
+  field.value = text
+  field.setAttribute('readonly', '')
+  field.style.cssText = 'position:fixed;inset-block-start:0;opacity:0'
+  document.body.append(field)
+  field.select()
+
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    field.remove()
+  }
+}
+
+/*
+ * CHỨC NĂNG: Sao chép nhanh chuỗi thuộc tính vào clipboard và hiển thị trạng thái đã chép (hoặc báo lỗi nếu thất bại).
  */
 async function copyFieldValue(key, text) {
   if (!text)
-    return
+    return false
 
+  let ok = false
   try {
-    await navigator?.clipboard?.writeText(text)
+    if (!navigator?.clipboard?.writeText)
+      throw new Error('Clipboard API unavailable')
+
+    await navigator.clipboard.writeText(text)
+    ok = true
   } catch {
-    // Bỏ qua lỗi quyền clipboard trong môi trường không có HTTPS.
+    ok = legacyCopy(text)
   }
 
+  if (!ok) {
+    notify('Không thể sao chép vào clipboard', 'error')
+
+    return false
+  }
+
+  clearTimeout(copyResetTimer)
   copiedKey.value = key
-  setTimeout(() => {
+  copyResetTimer = setTimeout(() => {
     if (copiedKey.value === key)
       copiedKey.value = ''
   }, 1500)
+
+  return true
+}
+
+/*
+ * CHỨC NĂNG: Chuyển URL tương đối (/api/...) sang URL tuyệt đối theo origin hiện tại để chia sẻ.
+ */
+function toAbsoluteUrl(url) {
+  if (!url)
+    return ''
+
+  if (typeof window === 'undefined')
+    return url
+
+  try {
+    return new URL(url, window.location.origin).href
+  } catch {
+    return url
+  }
+}
+
+/*
+ * CHỨC NĂNG: Chia sẻ liên kết asset — dùng URL công khai nếu public, hoặc xin signed URL tạm (TTL 60 phút) nếu private.
+ */
+async function shareCurrentAsset() {
+  const asset = liveAsset.value
+  if (!asset || props.trashed || sharing.value)
+    return
+
+  if (asset.visibility !== 'private' && asset.url) {
+    await copyFieldValue('share', toAbsoluteUrl(asset.url))
+
+    return
+  }
+
+  sharing.value = true
+  try {
+    const res = await mediaApi.shareLink(asset.id)
+    const signedUrl = toAbsoluteUrl(res?.url)
+    if (!signedUrl) {
+      notify('Không tạo được liên kết chia sẻ', 'error')
+
+      return
+    }
+
+    const copied = await copyFieldValue('share', signedUrl)
+    if (copied)
+      notify(`Đã sao chép liên kết chia sẻ (hiệu lực ${res?.ttl_minutes || 60} phút)`)
+  } catch (err) {
+    notify(firstErrorMessage(err), 'error')
+  } finally {
+    sharing.value = false
+  }
 }
 
 /*
@@ -875,6 +952,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(copyResetTimer)
   lightboxRef.value?.removeAttribute('data-closing')
   if (lightboxRef.value?.open)
     lightboxRef.value.close()
@@ -1104,7 +1182,9 @@ onBeforeUnmount(() => {
               size="small"
               icon
               aria-label="Chia sẻ"
-              @click="copyFieldValue('share', shareLink)"
+              :loading="sharing"
+              :disabled="trashed"
+              @click="shareCurrentAsset"
             >
               <VIcon :icon="copiedKey === 'share' ? 'tabler-check' : 'tabler-share'" />
               <VTooltip

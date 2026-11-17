@@ -129,29 +129,42 @@ class MediaUsageService implements MediaUsageServiceContract
         $this->assertModelHasMediaSlots($model);
         $rule = $this->resolveRule($slot);
 
-        return DB::transaction(function () use ($model, $assets, $slot, $replaceExisting, $rule) {
+        // Resolve & khử trùng theo thứ tự xuất hiện trước khi kiểm maxItems.
+        $uniqueAssets = [];
+        foreach ($assets as $assetInput) {
+            $resolved = $this->resolveAsset($assetInput);
+            if (! isset($uniqueAssets[$resolved->id])) {
+                $uniqueAssets[$resolved->id] = $resolved;
+            }
+        }
+        $uniqueAssets = array_values($uniqueAssets);
+
+        return DB::transaction(function () use ($model, $uniqueAssets, $slot, $replaceExisting, $rule) {
             if ($replaceExisting) {
                 $this->usagesQuery($model, $slot)->delete();
+                $existingIds = [];
+                $existing = 0;
+            } else {
+                $existingIds = array_flip(
+                    $this->usagesQuery($model, $slot)->lockForUpdate()->pluck('media_asset_id')->all(),
+                );
+                $existing = count($existingIds);
             }
 
-            $existing = $this->usagesQuery($model, $slot)->count();
-            $this->assertAttachable($model, null, $rule, $existing, count($assets));
+            $newIncoming = 0;
+            foreach ($uniqueAssets as $asset) {
+                if (! isset($existingIds[$asset->id])) {
+                    $newIncoming++;
+                }
+            }
+
+            $this->assertAttachable($model, null, $rule, $existing, $newIncoming);
 
             $out = new Collection();
-            $seen = [];
 
-            foreach (array_values($assets) as $index => $asset) {
-                $asset = $this->resolveAsset($asset);
-
-                // Bỏ qua id trùng trong cùng request — unique index trên
-                // (media_asset_id, linkable_type, linkable_id, slot) sẽ nổ
-                // Duplicate entry 500 nếu create() lặp.
-                if (isset($seen[$asset->id])) {
-                    continue;
-                }
-                $seen[$asset->id] = true;
-
-                $this->assertAttachable($model, $asset, $rule, $existing, 1);
+            foreach ($uniqueAssets as $index => $asset) {
+                $alreadyAttached = isset($existingIds[$asset->id]);
+                $this->assertAttachable($model, $asset, $rule, $existing, $alreadyAttached ? 0 : 1);
                 $this->applyVisibility($asset, $rule);
 
                 // updateOrCreate thay create: khi replaceExisting=false
@@ -165,7 +178,11 @@ class MediaUsageService implements MediaUsageServiceContract
                     ],
                     ['sort_order' => $index],
                 ));
-                $existing++;
+
+                if (! $alreadyAttached) {
+                    $existingIds[$asset->id] = true;
+                    $existing++;
+                }
             }
 
             return $out;
@@ -252,7 +269,9 @@ class MediaUsageService implements MediaUsageServiceContract
     public function usages(Model $model, string $slot): Collection
     {
         return $this->usagesQuery($model, $slot)
-            ->with('mediaAsset')
+            ->with([
+                'mediaAsset.media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+            ])
             ->orderBy('sort_order')
             ->get();
     }

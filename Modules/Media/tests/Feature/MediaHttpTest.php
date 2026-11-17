@@ -4,6 +4,7 @@ namespace Modules\Media\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\Eloquent\Model;
@@ -402,6 +403,269 @@ class MediaHttpTest extends TestCase
         $asset = $asset->fresh();
         $this->assertSame('media_public', $asset->mediaFile()?->disk);
         $this->assertNotEmpty(Storage::disk('media_public')->allFiles());
+    }
+
+    public function test_stream_returns_206_with_range_header_and_416_on_out_of_range(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Streamable Private PNG',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        $asset = MediaAsset::findOrFail($created['id']);
+        $media = $asset->mediaFile();
+        $rawBytes = Storage::disk($media->disk)->get($media->getPathRelativeToRoot());
+        $totalSize = strlen($rawBytes);
+        $this->assertGreaterThan(20, $totalSize);
+
+        // Full response (200)
+        $fullRes = $this->withHeaders($headers)
+            ->get("/api/v1/admin/media/assets/{$asset->id}/stream")
+            ->assertOk()
+            ->assertHeader('Accept-Ranges', 'bytes')
+            ->assertHeader('Content-Length', (string) $totalSize)
+            ->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->assertSame($rawBytes, $fullRes->streamedContent());
+
+        // Partial range bytes=5-19 -> 206 Partial Content
+        $partialRes = $this->withHeaders(array_merge($headers, ['Range' => 'bytes=5-19']))
+            ->get("/api/v1/admin/media/assets/{$asset->id}/stream")
+            ->assertStatus(206)
+            ->assertHeader('Accept-Ranges', 'bytes')
+            ->assertHeader('Content-Range', "bytes 5-19/{$totalSize}")
+            ->assertHeader('Content-Length', '15');
+        $this->assertSame(substr($rawBytes, 5, 15), $partialRes->streamedContent());
+
+        // Suffix range bytes=-8 -> 8 byte cuối cùng
+        $suffixStart = $totalSize - 8;
+        $suffixEnd = $totalSize - 1;
+        $suffixRes = $this->withHeaders(array_merge($headers, ['Range' => 'bytes=-8']))
+            ->get("/api/v1/admin/media/assets/{$asset->id}/stream")
+            ->assertStatus(206)
+            ->assertHeader('Content-Range', "bytes {$suffixStart}-{$suffixEnd}/{$totalSize}")
+            ->assertHeader('Content-Length', '8');
+        $this->assertSame(substr($rawBytes, -8), $suffixRes->streamedContent());
+
+        // Out of range -> 416 Range Not Satisfiable
+        $tooFar = $totalSize + 50;
+        $this->withHeaders(array_merge($headers, ['Range' => "bytes={$tooFar}-"]))
+            ->get("/api/v1/admin/media/assets/{$asset->id}/stream")
+            ->assertStatus(416)
+            ->assertHeader('Content-Range', "bytes */{$totalSize}");
+    }
+
+    public function test_index_and_options_do_not_trigger_n_plus_one_media_queries(): void
+    {
+        $headers = $this->token($this->admin());
+
+        for ($i = 0; $i < 10; $i++) {
+            $img = imagecreatetruecolor(10 + $i, 10);
+            imagefill($img, 0, 0, imagecolorallocate($img, ($i * 25) % 255, 100, 150));
+            $tmp = tempnam(sys_get_temp_dir(), 'n1_') . '.png';
+            imagepng($img, $tmp);
+            imagedestroy($img);
+
+            $file = new UploadedFile($tmp, "img-{$i}.png", 'image/png', null, true);
+            $this->withHeaders($headers)
+                ->post('/api/v1/admin/media/assets', ['file' => $file, 'title' => "Img {$i}"], ['Accept' => 'application/json'])
+                ->assertCreated();
+        }
+
+        // Gọi query count trên index (10 items) và options (10 items): số query phải nhỏ và cố định (không >= 10 query media riêng lẻ).
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets?itemsPerPage=24')
+            ->assertOk()
+            ->assertJsonCount(10, 'data.items');
+        $indexMediaQueries = array_filter(
+            DB::getQueryLog(),
+            fn (array $q) => str_contains($q['query'], 'from "media"') || str_contains($q['query'], 'from `media`'),
+        );
+        DB::disableQueryLog();
+        $this->assertLessThanOrEqual(2, count($indexMediaQueries), 'index() không được bắn N+1 query tới bảng media.');
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets/options')
+            ->assertOk()
+            ->assertJsonCount(10, 'data');
+        $optionsMediaQueries = array_filter(
+            DB::getQueryLog(),
+            fn (array $q) => str_contains($q['query'], 'from "media"') || str_contains($q['query'], 'from `media`'),
+        );
+        DB::disableQueryLog();
+        $this->assertLessThanOrEqual(1, count($optionsMediaQueries), 'options() không được bắn N+1 query tới bảng media.');
+    }
+
+    public function test_attach_many_allows_duplicate_ids_and_reordering_existing_within_limit(): void
+    {
+        app(\Modules\Media\Registries\MediaSlotRegistry::class)->register('post.two_photos', [
+            'allowedKinds' => [MediaAsset::KIND_IMAGE],
+            'maxItems' => 2,
+            'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            'label' => 'Tối đa 2 ảnh',
+        ]);
+
+        $headers = $this->token($this->admin());
+        $a1 = MediaAsset::create(['kind' => 'image', 'title' => 'A1', 'visibility' => 'public', 'folder' => 'x', 'checksum_sha256' => str_repeat('1', 64)]);
+        $a2 = MediaAsset::create(['kind' => 'image', 'title' => 'A2', 'visibility' => 'public', 'folder' => 'x', 'checksum_sha256' => str_repeat('2', 64)]);
+        $a3 = MediaAsset::create(['kind' => 'image', 'title' => 'A3', 'visibility' => 'public', 'folder' => 'x', 'checksum_sha256' => str_repeat('3', 64)]);
+        $post = TestPostModel::create(['title' => 'Slot Limit Post']);
+
+        // Gửi [a1, a1, a2] (3 phần tử nhưng chỉ 2 ID duy nhất <= maxItems 2) -> phải 200 OK.
+        $this->withHeaders($headers)
+            ->postJson('/api/v1/admin/media/usages', [
+                'linkable_type' => TestPostModel::class,
+                'linkable_id' => $post->id,
+                'slot' => 'post.two_photos',
+                'media_asset_ids' => [$a1->id, $a1->id, $a2->id],
+                'mode' => 'attach',
+            ])
+            ->assertOk()
+            ->assertJsonCount(2, 'data');
+
+        // replaceExisting=false với slot đang giữ [a1]: gửi [a1, a2] -> không bị tính trùng a1 thành 3.
+        $svc = app(\Modules\Media\Contracts\MediaUsageServiceContract::class);
+        $svc->detachAll($post, 'post.two_photos');
+        $svc->attach($post, $a1, 'post.two_photos');
+        $attached = $svc->attachMany($post, [$a1->id, $a2->id], 'post.two_photos', replaceExisting: false);
+        $this->assertCount(2, $attached);
+        $this->assertSame(2, $svc->count($post, 'post.two_photos'));
+
+        // Vượt giới hạn thật (3 ID duy nhất cho maxItems=2) -> phải chặn 422.
+        $this->withHeaders($headers)
+            ->postJson('/api/v1/admin/media/usages', [
+                'linkable_type' => TestPostModel::class,
+                'linkable_id' => $post->id,
+                'slot' => 'post.two_photos',
+                'media_asset_ids' => [$a1->id, $a2->id, $a3->id],
+                'mode' => 'attach',
+            ])
+            ->assertStatus(422);
+    }
+
+    public function test_private_asset_share_link_and_share_stream_enforce_auth_signature_and_ttl(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Private Shared PNG',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        $asset = MediaAsset::findOrFail($created['id']);
+        $media = $asset->mediaFile();
+        $rawBytes = Storage::disk($media->disk)->get($media->getPathRelativeToRoot());
+
+        // Chưa đăng nhập hoặc thiếu quyền media.view không được phép xin share link.
+        $this->flushHeaders();
+        app('auth')->forgetGuards();
+        $this->getJson("/api/v1/admin/media/assets/{$asset->id}/share-link")
+            ->assertStatus(401);
+
+        $noPermUser = User::create([
+            'name' => 'No Perm',
+            'email' => 'noperm-share@test.local',
+            'password' => \Illuminate\Support\Facades\Hash::make('secret'),
+        ]);
+        app('auth')->forgetGuards();
+        $this->withHeaders($this->token($noPermUser))
+            ->getJson("/api/v1/admin/media/assets/{$asset->id}/share-link")
+            ->assertStatus(403);
+
+        // User có media.view lấy được relative signed URL TTL 60 phút.
+        app('auth')->forgetGuards();
+        $shareRes = $this->withHeaders($headers)
+            ->getJson("/api/v1/admin/media/assets/{$asset->id}/share-link")
+            ->assertOk()
+            ->assertJsonPath('data.ttl_minutes', 60);
+
+        $signedUrl = (string) $shareRes->json('data.url');
+        $this->assertStringStartsWith("/api/v1/admin/media/assets/{$asset->id}/share-stream?", $signedUrl);
+        $this->assertNotEmpty($shareRes->json('data.expires_at'));
+
+        // Người nhận không cần Bearer token vẫn stream được file & hỗ trợ Range 206.
+        $this->flushHeaders();
+        app('auth')->forgetGuards();
+        $streamRes = $this->get($signedUrl)
+            ->assertOk()
+            ->assertHeader('X-Content-Type-Options', 'nosniff')
+            ->assertHeader('Accept-Ranges', 'bytes');
+        $this->assertSame($rawBytes, $streamRes->streamedContent());
+
+        $rangeRes = $this->withHeaders(['Range' => 'bytes=2-9'])
+            ->get($signedUrl)
+            ->assertStatus(206)
+            ->assertHeader('Content-Range', 'bytes 2-9/' . strlen($rawBytes));
+        $this->assertSame(substr($rawBytes, 2, 8), $rangeRes->streamedContent());
+
+        // Chữ ký sai hoặc link quá hạn (>60 phút) bị từ chối 403.
+        $this->get("/api/v1/admin/media/assets/{$asset->id}/share-stream?expires=9999999999&signature=invalid")
+            ->assertStatus(403);
+
+        $this->travel(61)->minutes();
+        try {
+            $this->get($signedUrl)->assertStatus(403);
+        } finally {
+            $this->travelBack();
+        }
+    }
+
+    public function test_folders_expands_nested_parent_prefixes_and_filters_descendants(): void
+    {
+        $headers = $this->token($this->admin());
+
+        MediaAsset::create(['kind' => 'image', 'title' => 'S1', 'visibility' => 'public', 'folder' => 'products/shoes', 'checksum_sha256' => str_repeat('a', 64)]);
+        MediaAsset::create(['kind' => 'image', 'title' => 'S2', 'visibility' => 'public', 'folder' => 'products/shoes', 'checksum_sha256' => str_repeat('b', 64)]);
+        MediaAsset::create(['kind' => 'image', 'title' => 'B1', 'visibility' => 'public', 'folder' => 'products/bags', 'checksum_sha256' => str_repeat('c', 64)]);
+        MediaAsset::create(['kind' => 'image', 'title' => 'C1', 'visibility' => 'public', 'folder' => 'campaign/2026/summer', 'checksum_sha256' => str_repeat('d', 64)]);
+        MediaAsset::create(['kind' => 'image', 'title' => 'P1', 'visibility' => 'public', 'folder' => 'products', 'checksum_sha256' => str_repeat('e', 64)]);
+        MediaAsset::create(['kind' => 'image', 'title' => 'PA', 'visibility' => 'public', 'folder' => 'products-archive', 'checksum_sha256' => str_repeat('f', 64)]);
+
+        $folders = $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets/folders')
+            ->assertOk()
+            ->json('data');
+
+        $byName = collect($folders)->pluck('count', 'name')->all();
+
+        $this->assertSame([
+            'campaign' => 1,
+            'campaign/2026' => 1,
+            'campaign/2026/summer' => 1,
+            'products' => 4,
+            'products-archive' => 1,
+            'products/bags' => 1,
+            'products/shoes' => 2,
+        ], $byName);
+
+        // Lọc theo prefix cha `products` phải trả đúng 4 asset (không dính `products-archive`).
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets?folder=products')
+            ->assertOk()
+            ->assertJsonPath('data.itemsLength', 4);
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets/options?folder=products')
+            ->assertOk()
+            ->assertJsonCount(4, 'data');
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets?folder=products/shoes')
+            ->assertOk()
+            ->assertJsonPath('data.itemsLength', 2);
     }
 }
 

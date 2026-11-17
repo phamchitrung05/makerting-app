@@ -53,16 +53,20 @@ class StoreGeneratedMediaAction
         }
 
         $checksum = $dto->checksumSha256 ?? $this->checksum->fromPath($dto->tmpPath);
-        $existing = MediaAsset::query()->where('checksum_sha256', $checksum)->first();
-        if ($existing) {
-            return $existing;
+
+        // Chỉ dedupe theo checksum khi caller yêu cầu ($dto->dedupe = true).
+        // Cột checksum_sha256 dùng index thường (không unique) để ảnh AI luôn
+        // giữ được metadata ai_generation, folder, title và visibility riêng.
+        if ($dto->dedupe) {
+            $existing = MediaAsset::query()->where('checksum_sha256', $checksum)->first();
+            if ($existing) {
+                return $existing;
+            }
         }
 
         // Scan file — chỉ giới hạn theo kind khai báo.
         $scan = $this->scan->scanPath($dto->tmpPath, [$dto->kind]);
-        $disk = $dto->visibility === MediaAsset::VISIBILITY_PRIVATE
-            ? 'media_private'
-            : 'media_public';
+        $disk = MediaAsset::diskForVisibility($dto->visibility);
 
         return DB::transaction(function () use ($dto, $checksum, $scan, $disk) {
             $asset = MediaAsset::create([
@@ -146,9 +150,10 @@ class StoreGeneratedMediaAction
                 altText: $dto->altText,
                 fileName: $dto->fileName,
                 mime: $dto->mime,
-                checksumSha256: $dto->checksumSha256 ?? hash('sha256', $content),
+                checksumSha256: $dto->checksumSha256 ?? $this->checksum->fromContent($content),
                 description: $dto->description,
                 tags: $dto->tags,
+                dedupe: $dto->dedupe,
             );
 
             return $this->execute($newDto);

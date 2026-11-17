@@ -37,9 +37,11 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/media')->name('media.')->g
         ->middlewareFor('destroy', 'permission:media.manage')
         ->parameters(['assets' => 'asset']);
 
-    // Stream file vật lý (video private / preview).
+    // Stream file vật lý (video private / preview) & cấp signed share URL tạm thời.
     Route::get('assets/{asset}/stream', [MediaAssetController::class, 'stream'])
         ->middleware('permission:media.view')->name('assets.stream');
+    Route::get('assets/{asset}/share-link', [MediaAssetController::class, 'shareLink'])
+        ->middleware('permission:media.view')->name('assets.share-link');
 
     // Gán/gỡ media vào Domain Model theo slot.
     Route::get('usages', [MediaAssetController::class, 'usages'])
@@ -66,3 +68,8 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin/media')->name('media.')->g
 Route::get('v1/admin/media/ai-image/previews/{previewId}', [MediaAiImageController::class, 'preview'])
     ->middleware('signed:relative')
     ->name('media.ai-image.preview');
+
+// Stream asset chia sẻ tạm qua relative signed URL có TTL (dùng cho asset private, không cần Bearer token).
+Route::get('v1/admin/media/assets/{asset}/share-stream', [MediaAssetController::class, 'shareStream'])
+    ->middleware('signed:relative')
+    ->name('media.assets.share-stream');

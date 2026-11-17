@@ -559,72 +559,16 @@ async function onDeleteSelected() {
                 </VBtn>
               </div>
 
-              <div class="d-flex flex-column gap-2">
-                <div
+              <div class="d-flex flex-column gap-2 media-folder-tree">
+                <MediaFolderTreeItem
                   v-for="folder in folderTree"
                   :key="folder.id"
-                  class="d-flex flex-column"
-                >
-                  <div
-                    class="nav-item rounded px-2 py-1 d-flex align-center justify-space-between gap-2 cursor-pointer"
-                    :class="{ 'nav-item--parent': activeFolder === folder.id }"
-                    @click="selectFolder(folder)"
-                  >
-                    <div class="d-flex align-center flex-grow-1 media-truncate-wrap">
-                      <VIcon
-                        v-if="folder.children"
-                        :icon="expandedFolders[folder.id] ? 'tabler-chevron-down' : 'tabler-chevron-right'"
-                        size="15"
-                        class="me-1 flex-shrink-0"
-                        @click.stop="toggleFolderExpand(folder)"
-                      />
-                      <VIcon
-                        :icon="activeFolder === folder.id ? 'tabler-folder-open' : 'tabler-folder'"
-                        size="17"
-                        color="primary"
-                        class="me-2 flex-shrink-0"
-                      />
-                      <span class="text-body-1 text-high-emphasis font-weight-medium text-truncate">
-                        {{ folder.name }}
-                      </span>
-                    </div>
-                    <span class="text-caption text-medium-emphasis flex-shrink-0">
-                      {{ folder.count }}
-                    </span>
-                  </div>
-
-                  <!-- Thư mục con -->
-                  <div
-                    v-if="folder.children && expandedFolders[folder.id]"
-                    class="d-flex flex-column ms-5 gap-2 my-1"
-                  >
-                    <div
-                      v-for="sub in folder.children"
-                      :key="sub.id"
-                      class="nav-item rounded px-2 py-1 d-flex align-center justify-space-between gap-2 cursor-pointer"
-                      :class="{ 'nav-item--sub': activeFolder === sub.id }"
-                      @click="selectFolder(sub)"
-                    >
-                      <div class="d-flex align-center flex-grow-1 media-truncate-wrap">
-                        <VIcon
-                          icon="tabler-folder"
-                          size="15"
-                          color="primary"
-                          class="me-2 flex-shrink-0"
-                        />
-                        <span
-                          class="text-body-1 text-truncate"
-                          :class="activeFolder === sub.id ? 'text-primary font-weight-medium' : 'text-medium-emphasis'"
-                        >
-                          {{ sub.name }}
-                        </span>
-                      </div>
-                      <span class="text-caption text-medium-emphasis flex-shrink-0">
-                        {{ sub.count }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+                  :node="folder"
+                  :active-folder="activeFolder"
+                  :expanded-folders="expandedFolders"
+                  @select="selectFolder"
+                  @toggle="toggleFolderExpand"
+                />
                 <p
                   v-if="!folderTree.length"
                   class="text-caption text-medium-emphasis px-2 py-1"
@@ -1200,13 +1144,15 @@ async function onDeleteSelected() {
   .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Điều hướng trái */
-.nav-item {
+/* Điều hướng trái (dùng chung cho quick-filter và MediaFolderTreeItem đệ quy). */
+.nav-item,
+.media-folder-tree :deep(.nav-item) {
   transition: background 0.15s ease;
 }
 
 /* Hover chỉ áp cho item CHƯA active — item đang active giữ nguyên màu primary. */
-.nav-item:hover:not(.nav-item--active):not(.nav-item--parent):not(.nav-item--sub) {
+.nav-item:hover:not(.nav-item--active):not(.nav-item--parent):not(.nav-item--sub),
+.media-folder-tree :deep(.nav-item:hover:not(.nav-item--active):not(.nav-item--parent):not(.nav-item--sub)) {
   background: rgba(var(--v-theme-primary), 0.06);
 }
 .nav-item--active {
@@ -1216,16 +1162,20 @@ async function onDeleteSelected() {
 .nav-item--active:hover {
   background: rgba(var(--v-theme-primary), 0.85);
 }
-.nav-item--parent:hover {
+.nav-item--parent:hover,
+.media-folder-tree :deep(.nav-item--parent:hover) {
   background: rgba(var(--v-theme-primary), 0.16);
 }
-.nav-item--sub:hover {
+.nav-item--sub:hover,
+.media-folder-tree :deep(.nav-item--sub:hover) {
   background: rgba(var(--v-theme-primary), 0.2);
 }
-.nav-item--parent {
+.nav-item--parent,
+.media-folder-tree :deep(.nav-item--parent) {
   background: rgba(var(--v-theme-primary), 0.08);
 }
-.nav-item--sub {
+.nav-item--sub,
+.media-folder-tree :deep(.nav-item--sub) {
   background: rgba(var(--v-theme-primary), 0.12);
 }
 

@@ -48,6 +48,7 @@ const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const ALLOWED_REFERENCE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp']
 const POLL_INTERVAL_MS = 1500
 const MAX_POLL_ATTEMPTS = 240
+const MAX_POLL_ERRORS = 3
 
 const aspectRatios = [
   { value: '1:1', label: 'Vuông', res: '1024 x 1024 px', boxWidth: 16, boxHeight: 16 },
@@ -504,7 +505,23 @@ function applyJobSnapshot(job, modelTitleSnapshot, resolutionSnapshot) {
  * CHỨC NĂNG: Polling trạng thái job tạo ảnh AI mỗi 1.5s đến khi ready/failed.
  * =====================================================================
  */
-async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapshot, attempt = 0) {
+/**
+ * Thông báo kết quả khi job AI kết thúc với trạng thái `failed` (phân biệt thiếu ảnh với lỗi hẳn).
+ */
+function notifyJobFailed(job) {
+  if (!isOpen.value)
+    return
+
+  if (generatedResults.value.length > 0 && job?.error_code === 'partial_generation') {
+    snackbar.warning(job.error || 'AI chỉ tạo được một phần số ảnh yêu cầu.')
+
+    return
+  }
+
+  snackbar.error(job?.error || 'Quá trình tạo ảnh AI thất bại. Vui lòng thử lại.')
+}
+
+async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapshot, attempt = 0, consecutiveErrors = 0) {
   if (runSeq !== generationSeq)
     return
 
@@ -527,8 +544,7 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
     if (job.status === 'failed') {
       isGenerating.value = false
       stopPolling()
-      if (isOpen.value)
-        snackbar.error(job.error || 'Quá trình tạo ảnh AI thất bại. Vui lòng thử lại.')
+      notifyJobFailed(job)
 
       return
     }
@@ -543,11 +559,23 @@ async function pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapsh
     }
 
     pollTimer = setTimeout(() => {
-      pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapshot, attempt + 1)
+      pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapshot, attempt + 1, 0)
     }, POLL_INTERVAL_MS)
   } catch (err) {
     if (runSeq !== generationSeq)
       return
+
+    const status = Number(err?.status ?? err?.response?.status ?? 0)
+    const isTerminalStatus = status === 401 || status === 403 || status === 404
+    const nextErrors = consecutiveErrors + 1
+
+    if (!isTerminalStatus && nextErrors < MAX_POLL_ERRORS && attempt < MAX_POLL_ATTEMPTS) {
+      pollTimer = setTimeout(() => {
+        pollJobStatus(jobId, runSeq, modelTitleSnapshot, resolutionSnapshot, attempt + 1, nextErrors)
+      }, POLL_INTERVAL_MS)
+
+      return
+    }
 
     isGenerating.value = false
     stopPolling()
@@ -626,14 +654,13 @@ async function generateImages() {
 
     if (job.status === 'failed') {
       isGenerating.value = false
-      if (isOpen.value)
-        snackbar.error(job.error || 'Quá trình tạo ảnh AI thất bại.')
+      notifyJobFailed(job)
 
       return
     }
 
     pollTimer = setTimeout(() => {
-      pollJobStatus(job.job_id, runSeq, modelTitleSnapshot, resolutionSnapshot, 1)
+      pollJobStatus(job.job_id, runSeq, modelTitleSnapshot, resolutionSnapshot, 1, 0)
     }, POLL_INTERVAL_MS)
   } catch (err) {
     if (runSeq !== generationSeq)

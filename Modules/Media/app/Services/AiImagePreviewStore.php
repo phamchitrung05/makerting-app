@@ -7,6 +7,7 @@ use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
+use Throwable;
 
 /**
  * =====================================================================
@@ -33,7 +34,15 @@ class AiImagePreviewStore
 {
     public const DISK = 'temp_processing';
 
+    public const PREVIEW_DIR = 'ai-previews';
+
+    public const REFERENCE_DIR = 'ai-references';
+
     private const JOB_KEY_PREFIX = 'ai_image_job:';
+
+    private const JOB_LOCK_PREFIX = 'ai_image_job_lock:';
+
+    private const PREVIEW_SAVE_LOCK_PREFIX = 'save_ai_preview:';
 
     private const PREVIEW_KEY_PREFIX = 'ai_image_preview:';
 
@@ -128,7 +137,7 @@ class AiImagePreviewStore
      */
     public function markJobProcessing(string $jobId): ?array
     {
-        return $this->updateJob($jobId, ['status' => 'processing']);
+        return $this->withJobLock($jobId, fn () => $this->updateJobUnlocked($jobId, ['status' => 'processing']));
     }
 
     /**
@@ -137,23 +146,25 @@ class AiImagePreviewStore
      * =====================================================================
      * INPUT: string $jobId, array $previewItem (metadata công khai trả cho UI).
      * OUTPUT: ?array trạng thái job sau khi tăng completed.
-     * SIDE EFFECT: cập nhật Cache key `ai_image_job:{jobId}`.
+     * SIDE EFFECT: cập nhật Cache key `ai_image_job:{jobId}` trong lock.
      * =====================================================================
      */
     public function appendJobResult(string $jobId, array $previewItem): ?array
     {
-        $job = $this->getJob($jobId);
-        if ($job === null) {
-            return null;
-        }
+        return $this->withJobLock($jobId, function () use ($jobId, $previewItem): ?array {
+            $job = $this->getJob($jobId);
+            if ($job === null) {
+                return null;
+            }
 
-        $results = is_array($job['results'] ?? null) ? $job['results'] : [];
-        $results[] = $previewItem;
+            $results = is_array($job['results'] ?? null) ? $job['results'] : [];
+            $results[] = $previewItem;
 
-        return $this->updateJob($jobId, [
-            'results' => $results,
-            'completed' => count($results),
-        ]);
+            return $this->updateJobUnlocked($jobId, [
+                'results' => $results,
+                'completed' => count($results),
+            ]);
+        });
     }
 
     /**
@@ -164,7 +175,7 @@ class AiImagePreviewStore
      */
     public function markJobReady(string $jobId): ?array
     {
-        return $this->updateJob($jobId, ['status' => 'ready']);
+        return $this->withJobLock($jobId, fn () => $this->updateJobUnlocked($jobId, ['status' => 'ready']));
     }
 
     /**
@@ -175,11 +186,11 @@ class AiImagePreviewStore
      */
     public function markJobFailed(string $jobId, string $message, ?string $errorCode = null): ?array
     {
-        return $this->updateJob($jobId, [
+        return $this->withJobLock($jobId, fn () => $this->updateJobUnlocked($jobId, [
             'status' => 'failed',
             'error' => $message,
             'error_code' => $errorCode,
-        ]);
+        ]));
     }
 
     /**
@@ -247,17 +258,22 @@ class AiImagePreviewStore
 
         $jobId = $preview['job_id'] ?? null;
         if (is_string($jobId) && $jobId !== '') {
-            $job = $this->getJob($jobId);
-            if ($job !== null && is_array($job['results'] ?? null)) {
-                $job['results'] = array_map(function (array $item) use ($previewId, $assetId) {
+            $this->withJobLock($jobId, function () use ($jobId, $previewId, $assetId): void {
+                $job = $this->getJob($jobId);
+                if ($job === null || ! is_array($job['results'] ?? null)) {
+                    return;
+                }
+
+                $results = array_map(function (array $item) use ($previewId, $assetId) {
                     if (($item['preview_id'] ?? null) === $previewId) {
                         $item['saved_asset_id'] = $assetId;
                     }
 
                     return $item;
                 }, $job['results']);
-                $this->updateJob($jobId, ['results' => $job['results']]);
-            }
+
+                $this->updateJobUnlocked($jobId, ['results' => $results]);
+            });
         }
 
         return $preview;
@@ -314,7 +330,106 @@ class AiImagePreviewStore
      */
     public function relativePathForPreview(string $previewId, string $mime): string
     {
-        return 'ai-previews/' . $previewId . '.' . $this->extensionForMime($mime);
+        return self::PREVIEW_DIR . '/' . $previewId . '.' . $this->extensionForMime($mime);
+    }
+
+    /**
+     * CHỨC NĂNG: Xóa file ảnh preview AI tạm trên disk `temp_processing`.
+     * INPUT: string $previewId, ?array $preview. OUTPUT: bool.
+     * SIDE EFFECT: Xóa file vật lý trong `ai-previews/` nếu tồn tại.
+     */
+    public function deletePreviewFile(string $previewId, ?array $preview = null): bool
+    {
+        $disk = $this->disk();
+        $deleted = false;
+        $path = is_string($preview['path'] ?? null) ? $preview['path'] : null;
+
+        if ($path !== null && $path !== '' && str_starts_with($path, self::PREVIEW_DIR . '/') && $disk->exists($path)) {
+            $deleted = $disk->delete($path) || $deleted;
+        }
+
+        foreach (['png', 'jpg', 'webp', 'gif', 'avif'] as $ext) {
+            $candidate = self::PREVIEW_DIR . '/' . $previewId . '.' . $ext;
+            if ($candidate !== $path && $disk->exists($candidate)) {
+                $deleted = $disk->delete($candidate) || $deleted;
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Quét và xóa các file tạm AI (ai-previews & ai-references) đã quá hạn TTL.
+     * =====================================================================
+     * INPUT: ?int $ttlMinutes (null = dùng config `media.ai_preview_ttl_minutes`).
+     * OUTPUT: array{ttl_minutes:int, deleted:int, bytes_freed:int, paths:string[]}.
+     * SIDE EFFECT: Xóa file trên disk `temp_processing` có lastModified <= cutoff.
+     * =====================================================================
+     */
+    public function cleanupExpiredTempFiles(?int $ttlMinutes = null): array
+    {
+        $ttl = max(1, $ttlMinutes ?? $this->ttlMinutes());
+        $cutoff = now()->subMinutes($ttl)->getTimestamp();
+        $disk = $this->disk();
+
+        $deletedCount = 0;
+        $bytesFreed = 0;
+        $deletedPaths = [];
+
+        foreach ([self::PREVIEW_DIR, self::REFERENCE_DIR] as $directory) {
+            foreach ($disk->files($directory) as $file) {
+                if (str_starts_with(basename($file), '.')) {
+                    continue;
+                }
+
+                try {
+                    $modifiedAt = $disk->lastModified($file);
+                } catch (Throwable) {
+                    continue;
+                }
+
+                if ($modifiedAt > $cutoff) {
+                    continue;
+                }
+
+                $size = 0;
+                try {
+                    $size = (int) $disk->size($file);
+                } catch (Throwable) {
+                    // Bỏ qua nếu không đọc được dung lượng trước khi xóa.
+                }
+
+                if ($disk->delete($file)) {
+                    $deletedCount++;
+                    $bytesFreed += $size;
+                    $deletedPaths[] = $file;
+                }
+            }
+        }
+
+        return [
+            'ttl_minutes' => $ttl,
+            'deleted' => $deletedCount,
+            'bytes_freed' => $bytesFreed,
+            'paths' => $deletedPaths,
+        ];
+    }
+
+    /**
+     * CHỨC NĂNG: Thực thi callback dưới khóa theo previewId để chặn lưu song song.
+     */
+    public function withPreviewSaveLock(string $previewId, callable $callback, int $seconds = 15, int $waitSeconds = 5): mixed
+    {
+        return $this->withLock(self::PREVIEW_SAVE_LOCK_PREFIX . $previewId, $callback, $seconds, $waitSeconds);
+    }
+
+    /**
+     * CHỨC NĂNG: Thực thi callback dưới khóa theo jobId để tránh race condition Cache job tracker.
+     */
+    public function withJobLock(string $jobId, callable $callback, int $seconds = 10, int $waitSeconds = 5): mixed
+    {
+        return $this->withLock(self::JOB_LOCK_PREFIX . $jobId, $callback, $seconds, $waitSeconds);
     }
 
     /**
@@ -326,7 +441,7 @@ class AiImagePreviewStore
      */
     public function storeTempReference(string $jobId, string $binary, string $mime): string
     {
-        $path = 'ai-references/' . $jobId . '.' . $this->extensionForMime($mime);
+        $path = self::REFERENCE_DIR . '/' . $jobId . '.' . $this->extensionForMime($mime);
         $this->disk()->put($path, $binary);
 
         return $path;
@@ -339,7 +454,7 @@ class AiImagePreviewStore
      */
     public function readTempReference(?string $path): ?string
     {
-        if (! is_string($path) || $path === '' || ! str_starts_with($path, 'ai-references/')) {
+        if (! is_string($path) || $path === '' || ! str_starts_with($path, self::REFERENCE_DIR . '/')) {
             return null;
         }
 
@@ -360,7 +475,7 @@ class AiImagePreviewStore
      */
     public function deleteTempReference(?string $path): void
     {
-        if (! is_string($path) || $path === '' || ! str_starts_with($path, 'ai-references/')) {
+        if (! is_string($path) || $path === '' || ! str_starts_with($path, self::REFERENCE_DIR . '/')) {
             return;
         }
 
@@ -385,11 +500,19 @@ class AiImagePreviewStore
     }
 
     /**
-     * CHỨC NĂNG: Cập nhật một phần field cho job tracker đang nằm trong Cache.
+     * CHỨC NĂNG: Bao bọc Cache::lock()->block() dùng chung cho job tracker & preview save.
+     */
+    private function withLock(string $lockKey, callable $callback, int $seconds, int $waitSeconds): mixed
+    {
+        return Cache::lock($lockKey, $seconds)->block($waitSeconds, $callback);
+    }
+
+    /**
+     * CHỨC NĂNG: Cập nhật một phần field cho job tracker (caller phải giữ job lock trước).
      * INPUT: string $jobId, array $attributes.
      * OUTPUT: ?array.
      */
-    private function updateJob(string $jobId, array $attributes): ?array
+    private function updateJobUnlocked(string $jobId, array $attributes): ?array
     {
         $job = $this->getJob($jobId);
         if ($job === null) {

@@ -11,6 +11,7 @@
  * - PUT    /v1/admin/media/assets/{id}     -> updateAsset()
  * - DELETE /v1/admin/media/assets/{id}     -> deleteAsset()
  * - GET    /v1/admin/media/assets/{id}/stream -> streamUrl() (url thô)
+ * - GET    /v1/admin/media/assets/{id}/share-link -> shareLink() (signed URL tạm 60 phút)
  * - GET    /v1/admin/media/slots           -> slots() metadata registry
  * - GET    /v1/admin/media/usages          -> usages() của model+slot
  * - POST   /v1/admin/media/usages          -> attach() gán media
@@ -107,6 +108,11 @@ export const mediaApi = {
   /* URL stream file vật lý (cho video private / preview) — có tiền tố /api. */
   streamUrl(id) {
     return `${API_BASE}${BASE}/assets/${id}/stream`
+  },
+
+  /* Tạo signed share URL tạm thời (TTL 60 phút) để chia sẻ asset private. */
+  shareLink(id) {
+    return $api(`${BASE}/assets/${id}/share-link`)
   },
 
   /* Metadata slot registry (kind/maxItems/visibility/label). */

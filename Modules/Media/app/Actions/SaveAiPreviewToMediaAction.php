@@ -54,6 +54,16 @@ class SaveAiPreviewToMediaAction
      */
     public function execute(string $previewId, int $userId, array $input = []): MediaAsset
     {
+        return $this->store->withPreviewSaveLock($previewId, function () use ($previewId, $userId, $input): MediaAsset {
+            return $this->executeLocked($previewId, $userId, $input);
+        });
+    }
+
+    /**
+     * Thực thi lưu preview sau khi đã giữ lock `save_ai_preview:{previewId}`.
+     */
+    private function executeLocked(string $previewId, int $userId, array $input = []): MediaAsset
+    {
         $preview = $this->store->getPreview($previewId);
         if ($preview === null) {
             throw new NotFoundHttpException('Ảnh preview không tồn tại hoặc đã hết hạn.');
@@ -67,7 +77,9 @@ class SaveAiPreviewToMediaAction
         if ($savedAssetId !== null) {
             $existing = MediaAsset::query()->find($savedAssetId);
             if ($existing !== null) {
-                return $existing->load(['creator', 'channelGroup'])->loadCount('usages');
+                $this->store->deletePreviewFile($previewId, $preview);
+
+                return $existing->load(['creator', 'channelGroup', 'media'])->loadCount('usages');
             }
         }
 
@@ -135,13 +147,15 @@ class SaveAiPreviewToMediaAction
             checksumSha256: null,
             description: $description,
             tags: $tags,
+            dedupe: false,
         );
 
         $asset = $this->storeGeneratedMedia->executeContent($binary, $dto);
         $this->recordAiProvenance($asset, $preview, $userId);
         $this->store->markPreviewSaved($previewId, $asset->id);
+        $this->store->deletePreviewFile($previewId, $preview);
 
-        return $asset->load(['creator', 'channelGroup'])->loadCount('usages');
+        return $asset->load(['creator', 'channelGroup', 'media'])->loadCount('usages');
     }
 
     /**

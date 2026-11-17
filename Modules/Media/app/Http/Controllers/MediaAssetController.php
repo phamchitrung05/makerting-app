@@ -3,11 +3,13 @@
 namespace Modules\Media\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use InvalidArgumentException;
 use Modules\Core\Http\Responses\BaseResponse;
 use Modules\Media\Actions\UploadMediaAssetAction;
@@ -23,6 +25,7 @@ use Modules\Media\Models\MediaAsset;
 use Modules\Media\Models\MediaAssetUsage;
 use Modules\Media\Registries\MediaSlotRegistry;
 use Spatie\MediaLibrary\MediaCollections\Exceptions\FileIsTooBig;
+use Spatie\MediaLibrary\MediaCollections\Models\Media;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
@@ -38,7 +41,9 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * - POST   /api/v1/admin/media/assets            upload file mới
  * - PUT    /api/v1/admin/media/assets/{asset}    update metadata
  * - DELETE /api/v1/admin/media/assets/{asset}    soft delete
- * - GET    /api/v1/admin/media/assets/{asset}/stream   stream file vật lý
+ * - GET    /api/v1/admin/media/assets/{asset}/stream        stream file vật lý
+ * - GET    /api/v1/admin/media/assets/{asset}/share-link    tạo signed URL chia sẻ tạm (60 phút)
+ * - GET    /api/v1/admin/media/assets/{asset}/share-stream  stream chia sẻ qua signed URL
  * - GET    /api/v1/admin/media/slots             metadata slot registry
  * - POST   /api/v1/admin/media/usages            attach/sync media vào model
  * - GET    /api/v1/admin/media/usages            list usages của 1 model+slot
@@ -49,6 +54,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class MediaAssetController extends Controller
 {
+    private const SHARE_LINK_TTL_MINUTES = 60;
+
     public function __construct(
         private readonly UploadMediaAssetAction $upload,
         private readonly MediaUsageServiceContract $usageService,
@@ -70,7 +77,11 @@ class MediaAssetController extends Controller
         $perPage = max(1, min(200, $perPage));
 
         $query = MediaAsset::query()
-            ->with(['creator', 'channelGroup'])
+            ->with([
+                'creator',
+                'channelGroup',
+                'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+            ])
             ->withCount('usages')
             /* Nhóm Thùng rác: chỉ asset đã soft-delete — phải khai báo trước
              * các filter khác để global scope SoftDeletes không lọc trước. */
@@ -80,7 +91,7 @@ class MediaAssetController extends Controller
             )
             ->when($request->filled('kind'), fn ($q) => $q->where('kind', $request->query('kind')))
             ->when($request->filled('visibility'), fn ($q) => $q->where('visibility', $request->query('visibility')))
-            ->when($request->filled('folder'), fn ($q) => $q->where('folder', $request->query('folder')))
+            ->when($request->filled('folder'), fn ($q) => $this->applyFolderFilter($q, (string) $request->query('folder')))
             ->when($request->filled('channel_group_id'), fn ($q) => $q->where('channel_group_id', $request->query('channel_group_id')))
             /* Bộ lọc nhanh cột trái:
              * - recent : 30 ngày gần nhất.
@@ -133,26 +144,30 @@ class MediaAssetController extends Controller
     public function options(Request $request)
     {
         $query = MediaAsset::query()
+            ->with(['media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY)])
             ->when($request->filled('kind'), fn ($q) => $q->where('kind', $request->query('kind')))
-            ->when($request->filled('folder'), fn ($q) => $q->where('folder', $request->query('folder')))
+            ->when($request->filled('folder'), fn ($q) => $this->applyFolderFilter($q, (string) $request->query('folder')))
             ->when($request->filled('channel_group_id'), fn ($q) => $q->where('channel_group_id', $request->query('channel_group_id')))
             ->when($request->filled('search'), fn ($q) => $q->where('title', 'like', '%' . $request->query('search') . '%'))
             ->orderByDesc('id')
             ->limit(100);
 
-        $options = $query->get()->map(fn (MediaAsset $a) => [
-            'id' => $a->id,
-            'title' => $a->title,
-            'kind' => $a->kind,
-            'folder' => $a->folder,
+        $options = $query->get()->map(function (MediaAsset $a): array {
             // Private: không lộ URL trực tiếp — frontend dùng /assets/{id}/stream.
-            'url' => $a->visibility === MediaAsset::VISIBILITY_PUBLIC
-                ? $a->mediaFile()?->getFullUrl()
-                : null,
-            'thumb' => $a->visibility === MediaAsset::VISIBILITY_PUBLIC
-                ? ($a->isImage() ? ($a->mediaFile()?->getUrl('thumb') ?: $a->mediaFile()?->getFullUrl()) : $a->mediaFile()?->getFullUrl())
-                : null,
-        ])->values();
+            $media = $a->visibility === MediaAsset::VISIBILITY_PUBLIC ? $a->mediaFile() : null;
+            $fullUrl = $media?->getFullUrl();
+
+            return [
+                'id' => $a->id,
+                'title' => $a->title,
+                'kind' => $a->kind,
+                'folder' => $a->folder,
+                'url' => $fullUrl,
+                'thumb' => $media
+                    ? ($a->isImage() ? ($media->getUrl('thumb') ?: $fullUrl) : $fullUrl)
+                    : null,
+            ];
+        })->values();
 
         return BaseResponse::success($options);
     }
@@ -166,15 +181,48 @@ class MediaAssetController extends Controller
      */
     public function folders()
     {
-        /* Mỗi folder kèm số asset — FE cây thư mục cột trái hiển thị count. */
-        $folders = MediaAsset::query()
+        /* Mỗi folder kèm số asset (tự bổ sung prefix cha còn thiếu + cộng dồn
+         * count từ thư mục con để cây thư mục FE không bị rơi nút con thành gốc). */
+        $rows = MediaAsset::query()
             ->select('folder')
             ->selectRaw('COUNT(*) as count')
             ->groupBy('folder')
-            ->orderBy('folder')
-            ->get()
-            ->map(fn ($row) => ['name' => $row->folder, 'count' => (int) $row->count])
-            ->values();
+            ->get();
+
+        $countsByPath = [];
+
+        foreach ($rows as $row) {
+            $rawPath = trim((string) $row->folder);
+            if ($rawPath === '') {
+                continue;
+            }
+
+            $segments = array_values(array_filter(
+                explode('/', $rawPath),
+                static fn (string $segment): bool => $segment !== '',
+            ));
+
+            if ($segments === []) {
+                continue;
+            }
+
+            $rowCount = (int) $row->count;
+            $prefix = '';
+            foreach ($segments as $segment) {
+                $prefix = $prefix === '' ? $segment : "{$prefix}/{$segment}";
+                $countsByPath[$prefix] = ($countsByPath[$prefix] ?? 0) + $rowCount;
+            }
+        }
+
+        ksort($countsByPath, SORT_STRING);
+
+        $folders = [];
+        foreach ($countsByPath as $name => $count) {
+            $folders[] = [
+                'name' => $name,
+                'count' => $count,
+            ];
+        }
 
         return BaseResponse::success($folders);
     }
@@ -188,8 +236,12 @@ class MediaAssetController extends Controller
      */
     public function show(MediaAsset $asset)
     {
-        $asset->load(['creator', 'channelGroup', 'usages.mediaAsset'])
-            ->loadCount('usages');
+        $asset->load([
+            'creator',
+            'channelGroup',
+            'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+            'usages.mediaAsset.media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+        ])->loadCount('usages');
 
         return BaseResponse::success(new MediaAssetResource($asset));
     }
@@ -226,9 +278,13 @@ class MediaAssetController extends Controller
                 return BaseResponse::error($e->getMessage(), 422);
             }
 
-            $assetCollection = collect($assets)->each(
-                fn (MediaAsset $item) => $item->load(['creator', 'channelGroup'])->loadCount('usages')
-            );
+            $assetCollection = (new EloquentCollection($assets))
+                ->load([
+                    'creator',
+                    'channelGroup',
+                    'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+                ])
+                ->loadCount('usages');
 
             return BaseResponse::success(
                 MediaAssetResource::collection($assetCollection),
@@ -247,8 +303,14 @@ class MediaAssetController extends Controller
             ? 'Tải lên thành công'
             : 'File đã tồn tại (trả về bản ghi cũ theo checksum)';
 
+        $asset->load([
+            'creator',
+            'channelGroup',
+            'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+        ])->loadCount('usages');
+
         return BaseResponse::success(
-            new MediaAssetResource($asset->load(['creator', 'channelGroup'])->loadCount('usages')),
+            new MediaAssetResource($asset),
             $message,
         )->setStatusCode($statusCode);
     }
@@ -328,26 +390,123 @@ class MediaAssetController extends Controller
             return BaseResponse::error('Asset chưa có file vật lý.', 404);
         }
 
-        // Asset private -> stream qua controller có auth; đảm bảo file vật lý
-        // nằm trên media_private (không được nằm public nếu cờ lệch).
-        $disk = $media->disk;
-        if ($asset->visibility === MediaAsset::VISIBILITY_PRIVATE && $disk !== 'media_private') {
-            // Nếu file vẫn nằm public (data cũ): vẫn stream nhưng kèm header
-            // X-Content-Type-Options + CSP để hạn chế inline execute.
+        return $this->streamMediaFile($media, $request);
+    }
+
+    /**
+     * =====================================================================
+     * GET /api/v1/admin/media/assets/{asset}/share-link
+     * =====================================================================
+     * Cấp relative signed URL tạm thời (TTL 60 phút) để chia sẻ asset private.
+     * INPUT: MediaAsset.
+     * OUTPUT: BaseResponse::success {url, expires_at, ttl_minutes}.
+     * =====================================================================
+     */
+    public function shareLink(MediaAsset $asset)
+    {
+        if (! $asset->mediaFile()) {
+            return BaseResponse::error('Asset chưa có file vật lý.', 404);
         }
 
+        $expiresAt = now()->addMinutes(self::SHARE_LINK_TTL_MINUTES);
+        $signedUrl = URL::temporarySignedRoute(
+            'api.media.assets.share-stream',
+            $expiresAt,
+            ['asset' => $asset->id],
+            absolute: false,
+        );
+
+        return BaseResponse::success([
+            'url' => $signedUrl,
+            'expires_at' => $expiresAt->toIso8601String(),
+            'ttl_minutes' => self::SHARE_LINK_TTL_MINUTES,
+        ]);
+    }
+
+    /**
+     * =====================================================================
+     * GET /api/v1/admin/media/assets/{asset}/share-stream
+     * =====================================================================
+     * Phát stream file vật lý qua relative signed URL (không yêu cầu Bearer token).
+     * INPUT: MediaAsset, Request.
+     * OUTPUT: StreamedResponse | Response | JsonResponse.
+     * =====================================================================
+     */
+    public function shareStream(MediaAsset $asset, Request $request)
+    {
+        $media = $asset->mediaFile();
+        if (! $media) {
+            return BaseResponse::error('Asset chưa có file vật lý.', 404);
+        }
+
+        return $this->streamMediaFile($media, $request);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Stream file vật lý Spatie có hỗ trợ HTTP Range (206 / 416)
+     * =====================================================================
+     * Dùng chung cho stream() và shareStream(). Đọc kích thước thực từ disk,
+     * stream theo chunk 64 KB và hỗ trợ tua video/audio via Range header.
+     * INPUT: Media $media, Request $request.
+     * OUTPUT: StreamedResponse | Response | JsonResponse.
+     * =====================================================================
+     */
+    protected function streamMediaFile(Media $media, Request $request)
+    {
+        $disk = $media->disk;
         $path = $media->getPathRelativeToRoot();
+        $filesystem = Storage::disk($disk);
+
+        if (! $filesystem->exists($path)) {
+            return BaseResponse::error(
+                "File vật lý của asset này không còn trên disk ({$disk}).",
+                404,
+            );
+        }
+
+        $fileSize = (int) $filesystem->size($path);
         $download = $request->boolean('download');
 
-        // Content-Type: ép octet-stream cho SVG/private (chặn inline JS execute
-        // khi ai đó vẫn gửi được file svg vào private disk).
+        // Content-Type: ép octet-stream cho SVG/HTML (chặn inline JS execute).
         $mime = $media->mime_type ?: 'application/octet-stream';
         $safeMime = in_array($mime, ['image/svg+xml', 'text/html', 'application/xhtml+xml'], true)
             ? 'application/octet-stream'
             : $mime;
 
-        // Mở stream — file vật lý có thể đã bị xóa trên disk khi cờ còn.
-        $stream = Storage::disk($disk)->readStream($path);
+        $baseHeaders = [
+            'Content-Type' => $safeMime,
+            'Content-Disposition' => ($download ? 'attachment' : 'inline') .
+                '; filename="' . addslashes($media->file_name) . '"',
+            'Accept-Ranges' => 'bytes',
+            'Cache-Control' => 'private, max-age=3600',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; img-src 'self'; media-src 'self'",
+        ];
+
+        $rangeHeader = $request->header('Range');
+        $start = 0;
+        $end = max(0, $fileSize - 1);
+        $status = 200;
+
+        if (is_string($rangeHeader) && trim($rangeHeader) !== '') {
+            $trimmedRange = trim($rangeHeader);
+
+            // Chỉ xử lý đơn vị bytes=; các multi-range có dấu phẩy giữ nguyên 200 theo RFC 9110.
+            if (str_starts_with(strtolower($trimmedRange), 'bytes=') && ! str_contains($trimmedRange, ',')) {
+                $parsed = $this->parseByteRange($trimmedRange, $fileSize);
+                if ($parsed === null) {
+                    return response('', 416, array_merge($baseHeaders, [
+                        'Content-Range' => "bytes */{$fileSize}",
+                    ]));
+                }
+
+                [$start, $end] = $parsed;
+                $status = 206;
+            }
+        }
+
+        $stream = $filesystem->readStream($path);
         if ($stream === false || $stream === null || ! is_resource($stream)) {
             return BaseResponse::error(
                 "File vật lý của asset này không còn trên disk ({$disk}).",
@@ -355,19 +514,92 @@ class MediaAssetController extends Controller
             );
         }
 
-        return new StreamedResponse(function () use ($stream) {
-            fpassthru($stream);
-            fclose($stream);
-        }, 200, [
-            'Content-Type' => $safeMime,
-            'Content-Length' => (string) $media->size,
-            'Content-Disposition' => ($download ? 'attachment' : 'inline') .
-                '; filename="' . addslashes($media->file_name) . '"',
-            'Accept-Ranges' => 'bytes',
-            'Cache-Control' => 'private, max-age=3600',
-            'X-Content-Type-Options' => 'nosniff',
-            'Content-Security-Policy' => "default-src 'none'; img-src 'self'; media-src 'self'",
+        $length = $fileSize === 0 ? 0 : ($end - $start + 1);
+        $headers = array_merge($baseHeaders, [
+            'Content-Length' => (string) $length,
         ]);
+
+        if ($status === 206) {
+            $headers['Content-Range'] = "bytes {$start}-{$end}/{$fileSize}";
+        }
+
+        return new StreamedResponse(function () use ($stream, $start, $length): void {
+            $chunkSize = 65536;
+
+            if ($start > 0) {
+                $meta = stream_get_meta_data($stream);
+                if (! empty($meta['seekable'])) {
+                    fseek($stream, $start);
+                } else {
+                    $toSkip = $start;
+                    while ($toSkip > 0 && ! feof($stream)) {
+                        $skipped = fread($stream, min($chunkSize, $toSkip));
+                        if ($skipped === false || $skipped === '') {
+                            break;
+                        }
+                        $toSkip -= strlen($skipped);
+                    }
+                }
+            }
+
+            $remaining = $length;
+            while ($remaining > 0 && ! feof($stream)) {
+                $buffer = fread($stream, min($chunkSize, $remaining));
+                if ($buffer === false || $buffer === '') {
+                    break;
+                }
+                echo $buffer;
+                $remaining -= strlen($buffer);
+            }
+
+            fclose($stream);
+        }, $status, $headers);
+    }
+
+    /**
+     * CHỨC NĂNG: Parse header `Range: bytes=start-end` đơn phần; trả null khi không hợp lệ / ngoài tầm.
+     * INPUT: string $rangeHeader, int $fileSize.
+     * OUTPUT: ?array{0:int, 1:int} [start, end] hoặc null (-> 416).
+     */
+    private function parseByteRange(string $rangeHeader, int $fileSize): ?array
+    {
+        if ($fileSize <= 0) {
+            return null;
+        }
+
+        if (! preg_match('/^bytes=(\d*)-(\d*)$/i', $rangeHeader, $matches)) {
+            return null;
+        }
+
+        $startRaw = $matches[1];
+        $endRaw = $matches[2];
+
+        if ($startRaw === '' && $endRaw === '') {
+            return null;
+        }
+
+        if ($startRaw === '') {
+            $suffixLength = (int) $endRaw;
+            if ($suffixLength <= 0) {
+                return null;
+            }
+
+            $start = max(0, $fileSize - $suffixLength);
+
+            return [$start, $fileSize - 1];
+        }
+
+        $start = (int) $startRaw;
+        if ($start >= $fileSize) {
+            return null;
+        }
+
+        $end = $endRaw !== '' ? min((int) $endRaw, $fileSize - 1) : ($fileSize - 1);
+        if ($end < $start) {
+            return null;
+        }
+
+        return [$start, $end];
     }
 
     /**
@@ -495,6 +727,24 @@ class MediaAssetController extends Controller
     /* =====================================================================
      * Helpers nội bộ
      * ===================================================================== */
+
+    /**
+     * CHỨC NĂNG: Lọc query theo tên folder hoặc toàn bộ thư mục con dưới prefix đó.
+     * INPUT: $query, string $folder.
+     */
+    private function applyFolderFilter($query, string $folder): void
+    {
+        $normalized = trim($folder, '/ ');
+        if ($normalized === '') {
+            return;
+        }
+
+        $escaped = addcslashes($normalized, '\\%_');
+        $query->where(function ($fq) use ($normalized, $escaped): void {
+            $fq->where('folder', $normalized)
+                ->orWhere('folder', 'like', $escaped . '/%');
+        });
+    }
 
     /**
      * =====================================================================

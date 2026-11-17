@@ -70,22 +70,63 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
     },
 
     /* Cây thư mục cho cột trái trang media — dựng từ API folders [{name,count}]
-     * (phân cấp theo dấu '/' đầu tiên, ví dụ 'products/images' → con của 'products'). */
+     * (hỗ trợ nhiều cấp phân tách bởi '/', tự tạo node cha ảo nếu thiếu prefix). */
     folderTree: state => {
       const flat = state.folders || []
       const map = new Map()
       const roots = []
 
-      // Duyệt 2 lần: pass 1 dựng node, pass 2 gắn con vào cha theo prefix.
-      for (const f of flat) {
-        map.set(f.name, { id: f.name, name: f.name.split('/').pop(), count: f.count, expanded: false })
+      const ensureNode = (fullPath, count = 0, synthetic = true) => {
+        if (map.has(fullPath)) {
+          const existing = map.get(fullPath)
+          if (!synthetic) {
+            existing.count = Number(count) || 0
+            existing.synthetic = false
+          }
+
+          return existing
+        }
+
+        const node = {
+          id: fullPath,
+          name: fullPath.split('/').pop(),
+          count: Number(count) || 0,
+          synthetic,
+          expanded: false,
+        }
+
+        map.set(fullPath, node)
+
+        return node
       }
+
+      // Pass 1: nạp mọi node thực từ API (hỗ trợ cả path nhiều dấu '/').
       for (const f of flat) {
-        const node = map.get(f.name)
-        const slash = f.name.lastIndexOf('/')
+        const normalized = String(f?.name || '')
+          .split('/')
+          .map(s => s.trim())
+          .filter(Boolean)
+          .join('/')
+
+        if (!normalized)
+          continue
+
+        ensureNode(normalized, f.count, false)
+      }
+
+      // Pass 2: bổ sung các cấp cha ảo còn thiếu nếu API/state chưa trả về prefix cha.
+      for (const path of [...map.keys()]) {
+        const segments = path.split('/')
+        for (let i = 1; i < segments.length; i++) {
+          ensureNode(segments.slice(0, i).join('/'), 0, true)
+        }
+      }
+
+      // Pass 3: nối quan hệ cha-con theo từng cấp.
+      for (const [path, node] of map.entries()) {
+        const slash = path.lastIndexOf('/')
         if (slash > 0) {
-          const parentName = f.name.slice(0, slash)
-          const parent = map.get(parentName)
+          const parent = map.get(path.slice(0, slash))
           if (parent) {
             ;(parent.children ||= []).push(node)
             continue
@@ -93,7 +134,23 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
         }
         roots.push(node)
       }
-      
+
+      // Pass 4: sắp xếp và tính tổng count cho node cha ảo thuần FE (node thực giữ count từ server).
+      const finalizeCounts = nodes => nodes.reduce((sum, node) => {
+        if (node.children?.length) {
+          node.children.sort((a, b) => a.id.localeCompare(b.id))
+
+          const childSum = finalizeCounts(node.children)
+          if (node.synthetic)
+            node.count = childSum
+        }
+
+        return sum + (Number(node.count) || 0)
+      }, 0)
+
+      roots.sort((a, b) => a.id.localeCompare(b.id))
+      finalizeCounts(roots)
+
       return roots
     },
 

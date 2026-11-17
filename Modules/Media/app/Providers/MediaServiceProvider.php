@@ -2,7 +2,9 @@
 
 namespace Modules\Media\Providers;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Modules\Identity\Registries\PermissionRegistry;
+use Modules\Media\Console\Commands\CleanupAiPreviewsCommand;
 use Modules\Media\Contracts\MediaUsageServiceContract;
 use Modules\Media\Models\MediaAsset;
 use Modules\Media\Registries\MediaSlotRegistry;
@@ -42,6 +44,10 @@ class MediaServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
+    protected array $commands = [
+        CleanupAiPreviewsCommand::class,
+    ];
+
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
@@ -152,5 +158,15 @@ class MediaServiceProvider extends ModuleServiceProvider
                 'media.manage' => 'Tải lên/sửa/xóa media',
             ],
         ]);
+    }
+
+    /**
+     * Đăng ký lịch dọn định kỳ các file ảnh preview / tham chiếu AI hết hạn TTL.
+     */
+    protected function configureSchedules(Schedule $schedule): void
+    {
+        $schedule->command('media:cleanup-ai-previews')
+            ->hourly()
+            ->withoutOverlapping();
     }
 }

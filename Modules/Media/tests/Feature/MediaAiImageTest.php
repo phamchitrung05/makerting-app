@@ -2,6 +2,7 @@
 
 namespace Modules\Media\Tests\Feature;
 
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
@@ -24,8 +25,12 @@ use Modules\CoreAi\Models\AiProvider;
 use Modules\CoreAi\Models\AiRun;
 use Modules\CoreAi\Settings\AiSettings;
 use Modules\Identity\Models\User;
+use Modules\Media\Actions\CalculateMediaChecksumAction;
+use Modules\Media\Actions\StoreGeneratedMediaAction;
+use Modules\Media\DTOs\StoreGeneratedMediaDto;
 use Modules\Media\Jobs\GenerateAiImageJob;
 use Modules\Media\Models\MediaAsset;
+use Modules\Media\Services\AiImagePreviewStore;
 use RuntimeException;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
@@ -1039,5 +1044,303 @@ PROMPT);
             ->assertJsonPath('data.tags', ['mùa hè', 'Banner'])
             ->assertJsonPath('data.ai_generation.style', 'minimal')
             ->assertJsonPath('data.ai_generation.model_label', 'Imagen 3 Studio');
+    }
+
+    public function test_save_ai_same_content_creates_separate_asset_without_losing_ai_meta(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
+        $samePng = $this->pngBinary(48, 48, 120, 180, 90);
+
+        // Upload một ảnh thường trước (trùng binary byte với ảnh AI sắp sinh).
+        $tmpNormal = tempnam(sys_get_temp_dir(), 'norm_') . '.png';
+        file_put_contents($tmpNormal, $samePng);
+        $uploadedNormal = new UploadedFile($tmpNormal, 'normal.png', 'image/png', null, true);
+
+        $normalRes = $this->withHeaders($this->bearerHeader($manager))
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $uploadedNormal,
+                'folder' => 'uploads',
+                'title' => 'Ảnh Upload Thường',
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        // Tạo 2 ảnh AI đều có cùng nội dung binary $samePng.
+        $this->bindFakeImageGateway(fn (): AiImageResponse => new AiImageResponse(
+            images: [['mime' => 'image/png', 'data' => $samePng]],
+            remoteModelId: 'gpt-image-2',
+            providerKey: 'openai-main',
+        ));
+
+        $gen = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/generate', [
+                'prompt' => 'Tem trà sen vàng',
+                'aspect_ratio' => '1:1',
+                'count' => 2,
+            ])
+            ->assertStatus(202)
+            ->json('data');
+
+        $poll = $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/ai-image/jobs/' . $gen['job_id'])
+            ->assertOk()
+            ->json('data');
+
+        $save1 = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/save', [
+                'preview_id' => $poll['results'][0]['preview_id'],
+                'folder' => 'ai-banners',
+                'title' => 'Ảnh AI Bản 1',
+                'visibility' => MediaAsset::VISIBILITY_PUBLIC,
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $save2 = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/save', [
+                'preview_id' => $poll['results'][1]['preview_id'],
+                'folder' => 'ai-private',
+                'title' => 'Ảnh AI Bản 2',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotSame($normalRes['id'], $save1['id']);
+        $this->assertNotSame($save1['id'], $save2['id']);
+        $this->assertSame(3, MediaAsset::query()->count());
+        $this->assertSame($normalRes['checksum_sha256'], $save1['checksum_sha256']);
+        $this->assertSame($normalRes['checksum_sha256'], $save2['checksum_sha256']);
+
+        $this->assertSame('ai-banners', $save1['folder']);
+        $this->assertSame('ai_dialog', $save1['ai_generation']['source']);
+        $this->assertSame('ai-private', $save2['folder']);
+        $this->assertSame('ai_dialog', $save2['ai_generation']['source']);
+        $this->assertSame(MediaAsset::VISIBILITY_PRIVATE, $save2['visibility']);
+
+        // quick=ai phải trả về cả 2 bản AI riêng biệt (không gộp nhầm về ảnh upload thường).
+        $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/assets?quick=ai')
+            ->assertOk()
+            ->assertJsonPath('data.itemsLength', 2)
+            ->assertJsonCount(2, 'data.items');
+
+        // Kiểm chứng #14: StoreGeneratedMediaAction::executeContent dùng đúng CalculateMediaChecksumAction.
+        $checksumHelper = new CalculateMediaChecksumAction();
+        $storeGenerated = app(StoreGeneratedMediaAction::class);
+        $direct = $storeGenerated->executeContent($samePng, new StoreGeneratedMediaDto(
+            tmpPath: '',
+            kind: MediaAsset::KIND_IMAGE,
+            title: 'Direct Content Non-Dedupe',
+            dedupe: false,
+        ));
+        $this->assertSame($checksumHelper->fromContent($samePng), $direct->checksum_sha256);
+        $this->assertSame(4, MediaAsset::query()->count());
+    }
+
+    public function test_job_marks_partial_generation_failed_when_provider_returns_fewer_images(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
+
+        $this->bindFakeImageGateway(function (AiImageRequest $req, int $callIndex): AiImageResponse {
+            if ($callIndex === 4) {
+                return new AiImageResponse(
+                    images: [['mime' => 'image/png', 'data' => '']],
+                    remoteModelId: 'imagen-3',
+                    providerKey: 'gemini-main',
+                );
+            }
+
+            return new AiImageResponse(
+                images: [['mime' => 'image/png', 'data' => $this->pngBinary(24, 24, 20 * $callIndex, 80, 120)]],
+                remoteModelId: 'imagen-3',
+                providerKey: 'gemini-main',
+            );
+        });
+
+        $gen = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/generate', [
+                'prompt' => 'Poster thiếu một ảnh ở lượt cuối',
+                'aspect_ratio' => '1:1',
+                'count' => 4,
+            ])
+            ->assertStatus(202)
+            ->json('data');
+
+        $poll = $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/ai-image/jobs/' . $gen['job_id'])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'failed')
+            ->assertJsonPath('data.error_code', 'partial_generation')
+            ->assertJsonPath('data.total', 4)
+            ->assertJsonPath('data.completed', 3)
+            ->assertJsonCount(3, 'data.results')
+            ->json('data');
+
+        $this->assertStringContainsString('3/4', (string) $poll['error']);
+
+        // Các ảnh đã tạo thành công trước khi thiếu vẫn phải stream và lưu được bình thường.
+        $this->get($poll['results'][0]['preview_url'])->assertOk();
+        $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/save', [
+                'preview_id' => $poll['results'][0]['preview_id'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.kind', 'image');
+    }
+
+    public function test_cache_locks_enforce_contention_on_database_store_and_keep_job_results(): void
+    {
+        $previousDefault = config('cache.default');
+        config(['cache.default' => 'database']);
+        Cache::purge('database');
+
+        try {
+            $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
+            $store = app(AiImagePreviewStore::class);
+
+            $this->bindFakeImageGateway(fn (AiImageRequest $req, int $callIndex): AiImageResponse => new AiImageResponse(
+                images: [['mime' => 'image/png', 'data' => $this->pngBinary(20, 20, 30 * $callIndex, 90, 180)]],
+                remoteModelId: 'gpt-image-2',
+                providerKey: 'openai-main',
+            ));
+
+            $gen = $this->withHeaders($this->bearerHeader($manager))
+                ->postJson('/api/v1/admin/media/ai-image/generate', [
+                    'prompt' => 'Test database cache lock',
+                    'aspect_ratio' => '1:1',
+                    'count' => 2,
+                ])
+                ->assertStatus(202)
+                ->json('data');
+
+            $jobId = $gen['job_id'];
+            $poll = $this->withHeaders($this->bearerHeader($manager))
+                ->getJson('/api/v1/admin/media/ai-image/jobs/' . $jobId)
+                ->assertOk()
+                ->json('data');
+
+            $preview1 = $poll['results'][0]['preview_id'];
+            $preview2 = $poll['results'][1]['preview_id'];
+
+            // 1. Giả lập tranh chấp lock lưu preview trên store `database`: lock đang giữ -> ném LockTimeoutException.
+            $saveLock = Cache::lock('save_ai_preview:' . $preview1, 10);
+            $this->assertTrue($saveLock->get());
+
+            $caughtSaveContention = false;
+            try {
+                $store->withPreviewSaveLock($preview1, fn () => null, seconds: 10, waitSeconds: 0);
+            } catch (LockTimeoutException) {
+                $caughtSaveContention = true;
+            } finally {
+                $saveLock->release();
+            }
+            $this->assertTrue($caughtSaveContention, 'Phải chặn concurrent save bằng Cache::lock.');
+
+            // 2. Giả lập tranh chấp lock job tracker trên store `database`.
+            $jobLock = Cache::lock('ai_image_job_lock:' . $jobId, 10);
+            $this->assertTrue($jobLock->get());
+
+            $caughtJobContention = false;
+            try {
+                $store->withJobLock($jobId, fn () => null, seconds: 10, waitSeconds: 0);
+            } catch (LockTimeoutException) {
+                $caughtJobContention = true;
+            } finally {
+                $jobLock->release();
+            }
+            $this->assertTrue($caughtJobContention, 'Phải chặn concurrent job tracker update bằng Cache::lock.');
+
+            // 3. Lưu cả 2 ảnh trong cùng job -> tracker giữ nguyên saved_asset_id của cả 2.
+            $saved1 = $this->withHeaders($this->bearerHeader($manager))
+                ->postJson('/api/v1/admin/media/ai-image/save', ['preview_id' => $preview1])
+                ->assertOk()
+                ->json('data.id');
+            $saved2 = $this->withHeaders($this->bearerHeader($manager))
+                ->postJson('/api/v1/admin/media/ai-image/save', ['preview_id' => $preview2])
+                ->assertOk()
+                ->json('data.id');
+
+            $afterPoll = $this->withHeaders($this->bearerHeader($manager))
+                ->getJson('/api/v1/admin/media/ai-image/jobs/' . $jobId)
+                ->assertOk()
+                ->json('data');
+
+            $this->assertSame($saved1, $afterPoll['results'][0]['saved_asset_id']);
+            $this->assertSame($saved2, $afterPoll['results'][1]['saved_asset_id']);
+        } finally {
+            config(['cache.default' => $previousDefault]);
+            Cache::purge($previousDefault);
+        }
+    }
+
+    public function test_saved_preview_deletes_temp_file_and_preview_endpoint_falls_back_to_saved_asset(): void
+    {
+        $manager = $this->createUserWithPermissions(['media.view', 'media.manage']);
+
+        $this->bindFakeImageGateway(fn (): AiImageResponse => new AiImageResponse(
+            images: [['mime' => 'image/png', 'data' => $this->pngBinary(32, 32, 90, 140, 210)]],
+        ));
+
+        $gen = $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/generate', [
+                'prompt' => 'Cốc trà sen fallback download',
+                'aspect_ratio' => '1:1',
+                'count' => 1,
+            ])
+            ->assertStatus(202)
+            ->json('data');
+
+        $poll = $this->withHeaders($this->bearerHeader($manager))
+            ->getJson('/api/v1/admin/media/ai-image/jobs/' . $gen['job_id'])
+            ->assertOk()
+            ->json('data');
+
+        $result = $poll['results'][0];
+        $tempPath = 'ai-previews/' . $result['preview_id'] . '.png';
+        Storage::disk('temp_processing')->assertExists($tempPath);
+
+        // Lưu thành asset private -> file tạm ai-previews bị xóa ngay để tiết kiệm disk.
+        $this->withHeaders($this->bearerHeader($manager))
+            ->postJson('/api/v1/admin/media/ai-image/save', [
+                'preview_id' => $result['preview_id'],
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+            ])
+            ->assertOk();
+
+        Storage::disk('temp_processing')->assertMissing($tempPath);
+
+        // Bấm xem lại preview hoặc Tải về từ signed URL cũ trên dialog vẫn phải 200 OK nhờ fallback.
+        $this->get($result['preview_url'])
+            ->assertOk()
+            ->assertHeader('Content-Type', 'image/png');
+        $downloadRes = $this->get($result['download_url'])->assertOk();
+        $this->assertStringStartsWith('attachment;', (string) $downloadRes->headers->get('Content-Disposition'));
+    }
+
+    public function test_cleanup_command_removes_expired_temp_files_and_keeps_fresh_ones(): void
+    {
+        config(['media.ai_preview_ttl_minutes' => 60]);
+        $disk = Storage::disk('temp_processing');
+
+        $expiredPreview = 'ai-previews/expired-preview.png';
+        $expiredRef = 'ai-references/expired-ref.png';
+        $freshPreview = 'ai-previews/fresh-preview.png';
+
+        $disk->put($expiredPreview, $this->pngBinary(12, 12, 10, 20, 30));
+        $disk->put($expiredRef, $this->pngBinary(12, 12, 40, 50, 60));
+        $disk->put($freshPreview, $this->pngBinary(12, 12, 70, 80, 90));
+
+        $oldTime = now()->subMinutes(120)->getTimestamp();
+        @touch($disk->path($expiredPreview), $oldTime);
+        @touch($disk->path($expiredRef), $oldTime);
+        clearstatcache();
+
+        $this->artisan('media:cleanup-ai-previews')
+            ->assertExitCode(0);
+
+        $disk->assertMissing($expiredPreview);
+        $disk->assertMissing($expiredRef);
+        $disk->assertExists($freshPreview);
     }
 }

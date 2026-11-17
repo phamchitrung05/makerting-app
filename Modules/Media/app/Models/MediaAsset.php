@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Log;
-use Modules\Core\Traits\HasSlug;
 use Modules\CoreAi\Traits\HasAiProvenance;
 use Modules\Identity\Models\ChannelGroup;
 use Modules\Identity\Models\User;
@@ -44,12 +43,9 @@ use Spatie\MediaLibrary\MediaCollections\Models\Media;
  */
 class MediaAsset extends Model implements HasMedia
 {
-    use HasAiProvenance, HasSlug, InteractsWithMedia, SoftDeletes;
+    use HasAiProvenance, InteractsWithMedia, SoftDeletes;
 
     protected $table = 'media_assets';
-
-    /** Cột nguồn slug = 'title' (mặc định trait dùng 'title'). */
-    protected string $slugSource = 'title';
 
     /**
      * Tên collection Spatie mặc định gắn file gốc vào model.

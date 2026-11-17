@@ -382,6 +382,7 @@ declare module 'vue' {
     GeneralTab: typeof import('./Modules/Settings/resources/js/components/tabs/GeneralTab.vue')['default']
     I18n: typeof import('./resources/js/@core/components/I18n.vue')['default']
     MediaDetailSidebar: typeof import('./Modules/Media/resources/js/views/MediaDetailSidebar.vue')['default']
+    MediaFolderTreeItem: typeof import('./Modules/Media/resources/js/components/MediaFolderTreeItem.vue')['default']
     MediaGalleryField: typeof import('./Modules/Media/resources/js/components/MediaGalleryField.vue')['default']
     MediaPickerDialog: typeof import('./Modules/Media/resources/js/components/MediaPickerDialog.vue')['default']
     MediaSlotField: typeof import('./Modules/Media/resources/js/components/MediaSlotField.vue')['default']
