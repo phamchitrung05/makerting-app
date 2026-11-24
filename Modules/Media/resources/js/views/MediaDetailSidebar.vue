@@ -36,10 +36,12 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
+import { useSnackbar } from '@/composables/useSnackbar'
 import { $api, fieldErrors, firstErrorMessage, isValidationError } from '@/utils/api'
+import MediaConfirmDialog from '../components/MediaConfirmDialog.vue'
 import { mediaApi } from '../services/mediaApi'
 import { useMediaAssetStore } from '../stores/mediaAsset'
-import { deriveAspectRatio, extOf, fmtDateTime, fmtDuration, fmtSize, previewOf } from '../utils/mediaFormat'
+import { deriveAspectRatio, extOf, fmtDateTime, fmtDuration, fmtSize, KIND_ICONS, KIND_LABELS, previewOf } from '../utils/mediaFormat'
 
 const props = defineProps({
   asset: {
@@ -60,9 +62,10 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['close', 'prev', 'next', 'updated', 'deleted'])
+const emit = defineEmits(['close', 'prev', 'next', 'updated', 'deleted', 'restored', 'generate-from-prompt'])
 
 const store = useMediaAssetStore()
+const snackbar = useSnackbar()
 
 const STYLE_CODE_LABELS = {
   watercolor: 'Mực nước / Vẽ tay',
@@ -72,56 +75,10 @@ const STYLE_CODE_LABELS = {
   poster: 'Poster / Quảng bá',
 }
 
-const STATIC_PROMPT_DEFAULTS = {
-  prompt: 'Vietnamese crispy shrimp spring rolls served on a woven bamboo tray with fresh herbs and dipping sauce, warm studio lighting, editorial food photography, 8k, shallow depth of field.',
-  negativePrompt: 'blurry, oversaturated, plastic texture, watermark, low resolution',
-  aspectRatio: '3:2',
-  qualityTags: ['studio lighting', '8k uhd', 'editorial food', 'shallow dof'],
-}
-
-const AI_MODEL_OPTIONS = [
-  'Leonardo AI',
-  'Flux.1',
-  'Midjourney',
-  'SDXL',
-  'DALL-E 3',
-]
-
-const STYLE_PRESET_OPTIONS = [
-  'Ảnh chụp thực tế',
-  'Thương mại cao cấp',
-  'Tối giản hiện đại',
-  'Cinematic Ấm',
-]
-
-const ASPECT_RATIO_OPTIONS = [
-  '1:1',
-  '3:2',
-  '4:5',
-  '16:9',
-  '9:16',
-]
-
 const VISIBILITY_OPTIONS = [
   { title: 'Công khai (Public)', value: 'public' },
   { title: 'Riêng tư (Private)', value: 'private' },
 ]
-
-const KIND_LABELS = {
-  image: 'Hình ảnh',
-  video: 'Video',
-  audio: 'Âm thanh',
-  document: 'Tài liệu',
-  archive: 'File nén',
-}
-
-const KIND_ICONS = {
-  image: 'tabler-photo-off',
-  video: 'tabler-video',
-  audio: 'tabler-music',
-  document: 'tabler-file-text',
-  archive: 'tabler-archive',
-}
 
 const liveAsset = ref(null)
 const previewTab = ref('info')
@@ -130,6 +87,8 @@ const isAddingTag = ref(false)
 const newTagText = ref('')
 const saving = ref(false)
 const deleting = ref(false)
+const restoring = ref(false)
+const isForceDeleteConfirmOpen = ref(false)
 const downloading = ref(false)
 const sharing = ref(false)
 const previewFailed = ref(false)
@@ -149,12 +108,6 @@ let lightboxPressedBackdrop = false
 let copyResetTimer = null
 let supportsDisplayTransitionCache
 let preloadedUrl = ''
-
-const snack = reactive({
-  show: false,
-  color: 'success',
-  text: '',
-})
 
 const formErrors = reactive({
   title: '',
@@ -177,10 +130,11 @@ const detailForm = reactive({
 const promptForm = reactive({
   aiModel: '',
   stylePreset: '',
-  prompt: STATIC_PROMPT_DEFAULTS.prompt,
-  negativePrompt: STATIC_PROMPT_DEFAULTS.negativePrompt,
-  aspectRatio: STATIC_PROMPT_DEFAULTS.aspectRatio,
-  qualityTags: [...STATIC_PROMPT_DEFAULTS.qualityTags],
+  styleCode: '',
+  prompt: '',
+  negativePrompt: '',
+  aspectRatio: '',
+  qualityTags: [],
 })
 
 const aiMeta = computed(() => {
@@ -210,33 +164,6 @@ const folderSuggestions = computed(() => {
     names.unshift(detailForm.folder)
 
   return names.length ? names : ['root']
-})
-
-const modelOptions = computed(() => {
-  const set = new Set(AI_MODEL_OPTIONS)
-
-  if (promptForm.aiModel)
-    set.add(promptForm.aiModel)
-
-  return [...set]
-})
-
-const stylePresetOptions = computed(() => {
-  const set = new Set(STYLE_PRESET_OPTIONS)
-
-  if (promptForm.stylePreset)
-    set.add(promptForm.stylePreset)
-
-  return [...set]
-})
-
-const aspectRatioOptions = computed(() => {
-  const set = new Set(ASPECT_RATIO_OPTIONS)
-
-  if (promptForm.aspectRatio)
-    set.add(promptForm.aspectRatio)
-
-  return [...set]
 })
 
 const resolvedPreviewUrl = computed(() => {
@@ -326,12 +253,10 @@ const sizeDetailText = computed(() => {
 })
 
 /*
- * CHỨC NĂNG: Hiển thị thông báo snackbar góc trên phải màn hình.
+ * CHỨC NĂNG: Hiển thị thông báo qua Global Snackbar toàn hệ thống.
  */
 function notify(text, color = 'success') {
-  snack.text = text
-  snack.color = color
-  snack.show = true
+  snackbar.show(text, { color })
 }
 
 /*
@@ -386,21 +311,22 @@ function syncTabScroll() {
 }
 
 /*
- * CHỨC NĂNG: Nạp thông số AI từ asset.ai_generation vào tab Prompt.
+ * CHỨC NĂNG: Nạp thông số AI thực tế từ asset.ai_generation vào tab Prompt (không tự điền dữ liệu giả).
  */
-function resetPromptForm() {
+function hydratePromptForm() {
   const ai = aiMeta.value
   const asset = liveAsset.value
   const rawStyle = ai?.style || ai?.style_preset || ai?.stylePreset || ai?.style_name || ai?.purpose || ''
 
-  promptForm.aiModel = ai?.model_label || ai?.model || ai?.ai_model || ai?.provider || ''
+  promptForm.aiModel = ai?.model_label || ai?.model || ai?.ai_model || ai?.provider_key || ai?.provider || ''
+  promptForm.styleCode = typeof rawStyle === 'string' && STYLE_CODE_LABELS[rawStyle] ? rawStyle : ''
   promptForm.stylePreset = rawStyle ? (STYLE_CODE_LABELS[rawStyle] || rawStyle) : ''
-  promptForm.prompt = ai?.prompt || ai?.prompt_used || STATIC_PROMPT_DEFAULTS.prompt
-  promptForm.negativePrompt = ai?.negative_prompt || ai?.negativePrompt || STATIC_PROMPT_DEFAULTS.negativePrompt
-  promptForm.aspectRatio = ai?.aspect_ratio || ai?.aspectRatio || deriveAspectRatio(asset?.width, asset?.height) || STATIC_PROMPT_DEFAULTS.aspectRatio
-  promptForm.qualityTags = Array.isArray(ai?.quality_tags) && ai.quality_tags.length
-    ? [...ai.quality_tags]
-    : [...STATIC_PROMPT_DEFAULTS.qualityTags]
+  promptForm.prompt = ai?.prompt || ai?.prompt_used || ''
+  promptForm.negativePrompt = ai?.negative_prompt || ai?.negativePrompt || ''
+  promptForm.aspectRatio = ai?.aspect_ratio || ai?.aspectRatio || deriveAspectRatio(asset?.width, asset?.height) || ''
+  promptForm.qualityTags = Array.isArray(ai?.quality_tags)
+    ? ai.quality_tags.filter(Boolean)
+    : []
 }
 
 /*
@@ -435,14 +361,14 @@ function hydrateFromAsset(asset) {
   detailForm.tags = normalizeTagList(asset.tags)
   isAddingTag.value = false
   newTagText.value = ''
-  resetPromptForm()
+  hydratePromptForm()
 
   if (!isAiGeneratedImage.value && previewTab.value === 'prompt')
     previewTab.value = 'info'
 }
 
 /*
- * CHỨC NĂNG: Nạp blob qua endpoint /stream có Bearer auth cho asset private.
+ * CHỨC NĂNG: Nạp blob qua endpoint /stream có Bearer auth cho asset private (kể cả trong thùng rác).
  */
 async function refreshPreviewStream(asset) {
   streamSeq += 1
@@ -451,7 +377,7 @@ async function refreshPreviewStream(asset) {
 
   revokePrivateUrl()
 
-  if (!asset || props.trashed || asset.visibility !== 'private')
+  if (!asset || asset.visibility !== 'private')
     return
 
   if (!['image', 'video', 'audio'].includes(asset.kind))
@@ -459,6 +385,7 @@ async function refreshPreviewStream(asset) {
 
   try {
     const blob = await $api(`/v1/admin/media/assets/${asset.id}/stream`, {
+      params: props.trashed ? { trashed: 1 } : undefined,
       responseType: 'blob',
     })
 
@@ -486,7 +413,7 @@ async function loadAssetDetail(id) {
   const seq = detailSeq
 
   try {
-    const detail = await mediaApi.asset(id)
+    const detail = await mediaApi.asset(id, props.trashed ? { trashed: 1 } : {})
     if (seq !== detailSeq || !detail || props.asset?.id !== id)
       return
 
@@ -611,7 +538,53 @@ async function deleteCurrentAsset() {
   try {
     await store.deleteAsset(deletedId)
     emit('deleted', deletedId)
-    notify('Đã xóa tệp tin')
+    notify('Đã chuyển tệp tin vào thùng rác')
+  } catch (err) {
+    notify(firstErrorMessage(err), 'error')
+  } finally {
+    deleting.value = false
+  }
+}
+
+/*
+ * CHỨC NĂNG: Khôi phục asset đang xem từ thùng rác.
+ */
+async function restoreCurrentAsset() {
+  const asset = liveAsset.value
+  if (!asset || !props.trashed || restoring.value)
+    return
+
+  const restoredId = asset.id
+
+  restoring.value = true
+  try {
+    const restored = await store.restoreAsset(restoredId)
+
+    emit('restored', restored || { id: restoredId })
+    notify('Đã khôi phục tệp tin')
+  } catch (err) {
+    notify(firstErrorMessage(err), 'error')
+  } finally {
+    restoring.value = false
+  }
+}
+
+/*
+ * CHỨC NĂNG: Xóa vĩnh viễn asset đang xem (sau khi người dùng xác nhận qua hộp thoại).
+ */
+async function forceDeleteCurrentAsset() {
+  const asset = liveAsset.value
+  if (!asset || !props.trashed || deleting.value)
+    return
+
+  const deletedId = asset.id
+
+  deleting.value = true
+  try {
+    await store.forceDeleteAsset(deletedId)
+    isForceDeleteConfirmOpen.value = false
+    emit('deleted', deletedId)
+    notify('Đã xóa vĩnh viễn tệp tin')
   } catch (err) {
     notify(firstErrorMessage(err), 'error')
   } finally {
@@ -1163,14 +1136,47 @@ onBeforeUnmount(() => {
         <!-- Tab Thông tin chi tiết -->
         <VWindowItem value="info">
           <!-- Nhóm nút hành động nhanh -->
-          <div class="d-flex align-center gap-2 mb-5">
+          <div
+            v-if="trashed"
+            class="d-flex align-center gap-2 mb-5"
+          >
+            <VBtn
+              color="success"
+              variant="tonal"
+              size="small"
+              prepend-icon="tabler-restore"
+              class="flex-grow-1"
+              :loading="restoring"
+              :disabled="deleting"
+              @click="restoreCurrentAsset"
+            >
+              Khôi phục
+            </VBtn>
+
+            <VBtn
+              color="error"
+              variant="tonal"
+              size="small"
+              prepend-icon="tabler-trash-x"
+              class="flex-grow-1"
+              :loading="deleting"
+              :disabled="restoring"
+              @click="isForceDeleteConfirmOpen = true"
+            >
+              Xóa vĩnh viễn
+            </VBtn>
+          </div>
+
+          <div
+            v-else
+            class="d-flex align-center gap-2 mb-5"
+          >
             <VBtn
               color="primary"
               size="small"
               prepend-icon="tabler-download"
               class="flex-grow-1"
               :loading="downloading"
-              :disabled="trashed"
               @click="downloadCurrentAsset"
             >
               Tải xuống
@@ -1183,7 +1189,6 @@ onBeforeUnmount(() => {
               icon
               aria-label="Chia sẻ"
               :loading="sharing"
-              :disabled="trashed"
               @click="shareCurrentAsset"
             >
               <VIcon :icon="copiedKey === 'share' ? 'tabler-check' : 'tabler-share'" />
@@ -1201,7 +1206,6 @@ onBeforeUnmount(() => {
               size="small"
               icon
               aria-label="Chỉnh sửa"
-              :disabled="trashed"
               @click="focusTitleInput"
             >
               <VIcon icon="tabler-edit" />
@@ -1220,7 +1224,6 @@ onBeforeUnmount(() => {
               icon
               aria-label="Xóa"
               :loading="deleting"
-              :disabled="trashed"
               @click="deleteCurrentAsset"
             >
               <VIcon icon="tabler-trash" />
@@ -1445,18 +1448,18 @@ onBeforeUnmount(() => {
           </div>
         </VWindowItem>
 
-        <!-- Tab Prompt AI (đọc ai_generation từ API; field thiếu giữ tĩnh) -->
+        <!-- Tab Prompt AI (đọc ai_generation thực tế từ API — chỉ đọc) -->
         <VWindowItem value="prompt">
-          <!-- Nhãn nguồn dữ liệu AI / Tĩnh -->
+          <!-- Nhãn nguồn dữ liệu AI -->
           <div class="mb-4">
             <VChip
               size="x-small"
-              :color="hasAiMetadata ? 'primary' : 'secondary'"
+              color="primary"
               variant="tonal"
-              :prepend-icon="hasAiMetadata ? 'tabler-sparkles' : 'tabler-database-off'"
+              prepend-icon="tabler-sparkles"
               label
             >
-              {{ hasAiMetadata ? 'Dữ liệu AI từ hệ thống' : 'Chế độ tĩnh (tệp chưa có metadata AI)' }}
+              Dữ liệu AI từ hệ thống
             </VChip>
           </div>
 
@@ -1467,6 +1470,7 @@ onBeforeUnmount(() => {
               size="small"
               :prepend-icon="copiedKey === 'prompt' ? 'tabler-check' : 'tabler-copy'"
               class="flex-grow-1"
+              :disabled="!promptForm.prompt"
               @click="copyFieldValue('prompt', promptForm.prompt)"
             >
               {{ copiedKey === 'prompt' ? 'Đã chép' : 'Chép Prompt' }}
@@ -1474,86 +1478,66 @@ onBeforeUnmount(() => {
 
             <VBtn
               variant="tonal"
-              color="secondary"
+              color="primary"
               size="small"
               icon
-              aria-label="Khôi phục Prompt mặc định"
-              @click="resetPromptForm"
+              aria-label="Tạo lại ảnh bằng AI từ prompt này"
+              :disabled="trashed || !promptForm.prompt"
+              @click="emit('generate-from-prompt', {
+                prompt: promptForm.prompt,
+                style: promptForm.styleCode,
+                aspectRatio: promptForm.aspectRatio,
+              })"
             >
-              <VIcon icon="tabler-refresh" />
+              <VIcon icon="tabler-wand" />
               <VTooltip
                 activator="parent"
                 location="top"
               >
-                Khôi phục mặc định
+                Tạo lại bằng AI
               </VTooltip>
             </VBtn>
           </div>
 
-          <!-- Form cấu hình Prompt -->
+          <!-- Thông số Prompt AI (chỉ đọc) -->
           <div class="d-flex flex-column gap-4 mb-5">
-            <AppSelect
-              v-model="promptForm.aiModel"
-              :items="modelOptions"
+            <AppTextField
+              :model-value="promptForm.aiModel || 'Mặc định hệ thống'"
               label="Mô hình AI"
-              placeholder="Mặc định hệ thống"
-              persistent-placeholder
-              disabled
-            >
-              <template #selection="{ item }">
-                <div class="d-flex align-center">
-                  <VAvatar
-                    color="primary"
-                    variant="tonal"
-                    size="20"
-                    class="me-2"
-                  >
-                    <VIcon
-                      icon="tabler-wand"
-                      size="12"
-                    />
-                  </VAvatar>
-                  <span class="text-body-2 font-weight-medium text-high-emphasis">
-                    {{ item.title }}
-                  </span>
-                </div>
-              </template>
-            </AppSelect>
+              readonly
+            />
 
-            <AppSelect
-              v-model="promptForm.stylePreset"
-              :items="stylePresetOptions"
+            <AppTextField
+              :model-value="promptForm.stylePreset || 'Không xác định'"
               label="Phong cách"
-              placeholder="Không chọn phong cách"
-              persistent-placeholder
-              disabled
+              readonly
             />
 
             <AppTextarea
-              v-model="promptForm.prompt"
-              label="Prompt tạo ảnh *"
+              :model-value="promptForm.prompt || '—'"
+              label="Prompt tạo ảnh"
               rows="4"
               auto-grow
-              counter="1000"
+              readonly
             />
 
             <AppTextarea
-              v-model="promptForm.negativePrompt"
+              v-if="promptForm.negativePrompt"
+              :model-value="promptForm.negativePrompt"
               label="Negative Prompt"
               rows="2"
               auto-grow
-              counter="500"
+              readonly
             />
 
-            <AppSelect
-              v-model="promptForm.aspectRatio"
-              :items="aspectRatioOptions"
+            <AppTextField
+              :model-value="promptForm.aspectRatio || '—'"
               label="Tỷ lệ khung"
-              disabled
+              readonly
             />
 
-            <!-- Từ khóa bổ sung -->
-            <div>
+            <!-- Từ khóa bổ sung (chỉ hiện nếu dữ liệu thật có) -->
+            <div v-if="promptForm.qualityTags.length">
               <VLabel class="mb-2 text-body-2 font-weight-medium text-high-emphasis">
                 Từ khóa chất lượng
               </VLabel>
@@ -1574,13 +1558,14 @@ onBeforeUnmount(() => {
       </VWindow>
     </PerfectScrollbar>
 
-    <VSnackbar
-      v-model="snack.show"
-      :color="snack.color"
-      location="top end"
-    >
-      {{ snack.text }}
-    </VSnackbar>
+    <MediaConfirmDialog
+      v-model="isForceDeleteConfirmOpen"
+      title="Xóa vĩnh viễn tệp tin"
+      :message="`Bạn chắc chắn muốn xóa vĩnh viễn &quot;${liveAsset?.title || 'tệp tin này'}&quot;? File vật lý và dữ liệu liên kết sẽ bị xóa hoàn toàn, không thể khôi phục.`"
+      confirm-text="Xóa vĩnh viễn"
+      :loading="deleting"
+      @confirm="forceDeleteCurrentAsset"
+    />
 
     <!-- Lightbox xem ảnh toàn màn hình (native modal <dialog> hỗ trợ Esc & bấm nền để đóng) -->
     <dialog

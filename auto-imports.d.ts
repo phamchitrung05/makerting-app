@@ -9,6 +9,8 @@ declare global {
   const $api: typeof import('./resources/js/utils/api.js')['$api']
   const COOKIE_MAX_AGE_1_YEAR: typeof import('./resources/js/utils/constants.js')['COOKIE_MAX_AGE_1_YEAR']
   const EffectScope: typeof import('vue')['EffectScope']
+  const KIND_ICONS: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['KIND_ICONS']
+  const KIND_LABELS: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['KIND_LABELS']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
   const alphaDashValidator: typeof import('./resources/js/@core/utils/validators.js')['alphaDashValidator']
   const alphaValidator: typeof import('./resources/js/@core/utils/validators.js')['alphaValidator']
@@ -68,6 +70,7 @@ declare global {
   const ignorableWatch: typeof import('@vueuse/core')['ignorableWatch']
   const inject: typeof import('vue')['inject']
   const injectLocal: typeof import('@vueuse/core')['injectLocal']
+  const inspectCustomLength: typeof import('./Modules/WritingStyle/resources/js/utils/sampleText.js')['inspectCustomLength']
   const integerValidator: typeof import('./resources/js/@core/utils/validators.js')['integerValidator']
   const isConflictError: typeof import('./resources/js/utils/api.js')['isConflictError']
   const isDefined: typeof import('@vueuse/core')['isDefined']
@@ -82,6 +85,7 @@ declare global {
   const isToday: typeof import('./resources/js/@core/utils/helpers.js')['isToday']
   const isValidationError: typeof import('./resources/js/utils/api.js')['isValidationError']
   const kFormatter: typeof import('./resources/js/@core/utils/formatters.js')['kFormatter']
+  const kindMeta: typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['kindMeta']
   const lengthValidator: typeof import('./resources/js/@core/utils/validators.js')['lengthValidator']
   const logicAnd: typeof import('@vueuse/math')['logicAnd']
   const logicNot: typeof import('@vueuse/math')['logicNot']
@@ -392,6 +396,8 @@ declare module 'vue' {
     readonly $api: UnwrapRef<typeof import('./resources/js/utils/api.js')['$api']>
     readonly COOKIE_MAX_AGE_1_YEAR: UnwrapRef<typeof import('./resources/js/utils/constants.js')['COOKIE_MAX_AGE_1_YEAR']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
+    readonly KIND_ICONS: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['KIND_ICONS']>
+    readonly KIND_LABELS: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['KIND_LABELS']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
     readonly alphaDashValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['alphaDashValidator']>
     readonly alphaValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['alphaValidator']>
@@ -451,6 +457,7 @@ declare module 'vue' {
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
     readonly inject: UnwrapRef<typeof import('vue')['inject']>
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
+    readonly inspectCustomLength: UnwrapRef<typeof import('./Modules/WritingStyle/resources/js/utils/sampleText.js')['inspectCustomLength']>
     readonly integerValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['integerValidator']>
     readonly isConflictError: UnwrapRef<typeof import('./resources/js/utils/api.js')['isConflictError']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
@@ -465,6 +472,7 @@ declare module 'vue' {
     readonly isToday: UnwrapRef<typeof import('./resources/js/@core/utils/helpers.js')['isToday']>
     readonly isValidationError: UnwrapRef<typeof import('./resources/js/utils/api.js')['isValidationError']>
     readonly kFormatter: UnwrapRef<typeof import('./resources/js/@core/utils/formatters.js')['kFormatter']>
+    readonly kindMeta: UnwrapRef<typeof import('./Modules/Media/resources/js/utils/mediaFormat.js')['kindMeta']>
     readonly lengthValidator: UnwrapRef<typeof import('./resources/js/@core/utils/validators.js')['lengthValidator']>
     readonly logicAnd: UnwrapRef<typeof import('@vueuse/math')['logicAnd']>
     readonly logicNot: UnwrapRef<typeof import('@vueuse/math')['logicNot']>

@@ -31,7 +31,7 @@ class MediaAssetUpdateRequest extends FormRequest
         return array_merge([
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'alt_text' => ['nullable', 'string', 'max:255'],
-            'folder' => ['sometimes', 'required', 'string', 'max:60'],
+            'folder' => \Modules\Media\Support\MediaMetadataHelper::folderRules(['sometimes', 'required']),
             'visibility' => ['sometimes', 'required', Rule::in(MediaAsset::VISIBILITIES)],
             'channel_group_id' => ['nullable', 'integer', 'exists:channel_groups,id'],
         ], \Modules\Media\Support\MediaMetadataHelper::validationRules());

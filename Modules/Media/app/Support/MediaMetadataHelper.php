@@ -28,11 +28,34 @@ final class MediaMetadataHelper
     }
 
     /**
-     * Chuẩn hóa input `description` và `tags` trước khi Laravel chạy validator.
+     * Rule validate dùng chung cho tên thư mục phân cấp (chặn '.' / '..').
+     *
+     * @param  array<int, string>  $presenceRules
+     * @return array<int, string>
+     */
+    public static function folderRules(array $presenceRules = ['nullable']): array
+    {
+        return array_merge($presenceRules, [
+            'string',
+            'max:60',
+            'not_regex:#(^|[/\\\\])\.\.?([/\\\\]|$)#',
+        ]);
+    }
+
+    /**
+     * Chuẩn hóa input `description`, `tags` và `folder` trước khi Laravel chạy validator.
      */
     public static function prepareRequestMetadata(FormRequest $request): void
     {
         $merged = [];
+
+        if ($request->exists('folder') && is_string($request->input('folder'))) {
+            $rawFolder = $request->input('folder');
+            // Giữ nguyên chuỗi chứa '.'/'..' để rule not_regex trả lỗi 422 rõ ràng.
+            if (! preg_match('#(^|[/\\\\])\.\.?([/\\\\]|$)#', $rawFolder)) {
+                $merged['folder'] = self::normalizeFolder($rawFolder);
+            }
+        }
 
         if ($request->exists('description')) {
             $description = $request->input('description');
@@ -62,6 +85,21 @@ final class MediaMetadataHelper
         $trimmed = trim($description);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * Chuẩn hóa đường dẫn thư mục phân cấp (gộp '/' trùng, bỏ '/' hai đầu, mặc định 'root').
+     */
+    public static function normalizeFolder(?string $folder): string
+    {
+        if ($folder === null) {
+            return 'root';
+        }
+
+        $cleaned = preg_replace('#/+#', '/', str_replace('\\', '/', trim($folder)));
+        $trimmed = trim((string) $cleaned, '/ ');
+
+        return $trimmed === '' ? 'root' : $trimmed;
     }
 
     /**

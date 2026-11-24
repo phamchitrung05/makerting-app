@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Modules\Identity\Models\User;
 use Modules\Media\Models\MediaAsset;
+use Modules\Media\Tests\Concerns\UsesIsolatedMediaDisks;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
@@ -28,15 +29,14 @@ use Tests\TestCase;
 class MediaHttpTest extends TestCase
 {
     use RefreshDatabase;
+    use UsesIsolatedMediaDisks;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        // Fake 3 disk media để test không ghi rác vào storage/app/media thật.
-        Storage::fake('media_public');
-        Storage::fake('media_private');
-        Storage::fake('temp_processing');
+        // Disk fake cô lập cho từng test (tránh ghi thật & tránh xung đột thư mục trên Windows).
+        $this->setUpIsolatedMediaDisks();
 
         Schema::create('_test_posts', function (Blueprint $t) {
             $t->id(); $t->string('title'); $t->timestamps();
@@ -46,6 +46,7 @@ class MediaHttpTest extends TestCase
     protected function tearDown(): void
     {
         Schema::dropIfExists('_test_posts');
+        $this->tearDownIsolatedMediaDisks();
         parent::tearDown();
     }
 
@@ -666,6 +667,169 @@ class MediaHttpTest extends TestCase
             ->getJson('/api/v1/admin/media/assets?folder=products/shoes')
             ->assertOk()
             ->assertJsonPath('data.itemsLength', 2);
+    }
+
+    public function test_trash_show_restore_and_force_delete_lifecycle_and_permissions(): void
+    {
+        $admin = $this->admin();
+        $headers = $this->token($admin);
+
+        // User chỉ có media.view (không có media.manage) để kiểm tra chặn 403 trên restore/forceDelete.
+        $viewer = User::create([
+            'name' => 'Media Viewer',
+            'email' => 'viewer-trash@test.local',
+            'password' => \Illuminate\Support\Facades\Hash::make('secret'),
+        ]);
+        $viewer->givePermissionTo(Permission::findOrCreate('media.view', 'admin'));
+        $viewerHeaders = $this->token($viewer);
+
+        $created = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Private Trash Target',
+                'visibility' => MediaAsset::VISIBILITY_PRIVATE,
+                'folder' => 'trash-check',
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        $assetId = (int) $created['id'];
+        $this->assertNotEmpty(Storage::disk('media_private')->allFiles());
+
+        // Soft delete -> bình thường show/stream trả 404, có ?trashed=1 xem & stream bình thường.
+        $this->withHeaders($headers)
+            ->deleteJson("/api/v1/admin/media/assets/{$assetId}")
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->getJson("/api/v1/admin/media/assets/{$assetId}")
+            ->assertNotFound();
+
+        $this->withHeaders($headers)
+            ->get("/api/v1/admin/media/assets/{$assetId}/stream")
+            ->assertNotFound();
+
+        $this->withHeaders($headers)
+            ->getJson("/api/v1/admin/media/assets/{$assetId}?trashed=1")
+            ->assertOk()
+            ->assertJsonPath('data.id', $assetId);
+        $this->assertNotNull(
+            $this->withHeaders($headers)
+                ->getJson("/api/v1/admin/media/assets/{$assetId}?trashed=1")
+                ->json('data.deleted_at')
+        );
+
+        $this->withHeaders($headers)
+            ->get("/api/v1/admin/media/assets/{$assetId}/stream?trashed=1")
+            ->assertOk();
+
+        // Thiếu media.manage bị chặn 403 khi restore / force-delete.
+        app('auth')->forgetGuards();
+        $this->withHeaders($viewerHeaders)
+            ->postJson("/api/v1/admin/media/assets/{$assetId}/restore")
+            ->assertForbidden();
+        $this->withHeaders($viewerHeaders)
+            ->deleteJson("/api/v1/admin/media/assets/{$assetId}/force")
+            ->assertForbidden();
+
+        // Restore -> quay lại hoạt động bình thường.
+        app('auth')->forgetGuards();
+        $this->withHeaders($headers)
+            ->postJson("/api/v1/admin/media/assets/{$assetId}/restore")
+            ->assertOk()
+            ->assertJsonPath('data.id', $assetId)
+            ->assertJsonPath('data.deleted_at', null);
+
+        $this->assertNotSoftDeleted('media_assets', ['id' => $assetId]);
+        $this->withHeaders($headers)
+            ->getJson("/api/v1/admin/media/assets/{$assetId}")
+            ->assertOk();
+
+        // Soft delete lại -> forceDelete xóa hẳn DB + Spatie media + file vật lý trên disk.
+        $this->withHeaders($headers)
+            ->deleteJson("/api/v1/admin/media/assets/{$assetId}")
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->deleteJson("/api/v1/admin/media/assets/{$assetId}/force")
+            ->assertOk()
+            ->assertJsonPath('data.force_deleted', true);
+
+        $this->assertDatabaseMissing('media_assets', ['id' => $assetId]);
+        $this->assertSame(0, DB::table('media')->where('model_id', $assetId)->count());
+        $this->assertSame([], Storage::disk('media_private')->allFiles());
+    }
+
+    public function test_stats_and_bulk_move_folder_work_and_validate(): void
+    {
+        $headers = $this->token($this->admin());
+
+        $first = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $this->png(),
+                'title' => 'Stats Img 1',
+                'folder' => 'drafts',
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        // Tạo ảnh thứ 2 khác nội dung để không bị dedupe.
+        $img2 = imagecreatetruecolor(14, 14);
+        imagefill($img2, 0, 0, imagecolorallocate($img2, 20, 200, 90));
+        $tmp2 = tempnam(sys_get_temp_dir(), 'stats2_') . '.png';
+        imagepng($img2, $tmp2);
+        imagedestroy($img2);
+        $file2 = new UploadedFile($tmp2, 'stats2.png', 'image/png', null, true);
+
+        $second = $this->withHeaders($headers)
+            ->post('/api/v1/admin/media/assets', [
+                'file' => $file2,
+                'title' => 'Stats Img 2',
+                'folder' => 'drafts',
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('data');
+
+        // Xóa mềm 1 tệp -> kiểm tra stats tách đúng active và trashed.
+        $this->withHeaders($headers)
+            ->deleteJson('/api/v1/admin/media/assets/' . $second['id'])
+            ->assertOk();
+
+        $stats = $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/media/assets/stats')
+            ->assertOk()
+            ->assertJsonPath('data.total_files', 1)
+            ->assertJsonPath('data.trashed_files', 1)
+            ->json('data');
+
+        $this->assertSame((int) $first['size'], (int) $stats['total_size_bytes']);
+        $this->assertSame((int) $second['size'], (int) $stats['trashed_size_bytes']);
+
+        // Khôi phục lại asset thứ 2 rồi test chuyển thư mục hàng loạt + chuẩn hóa path.
+        $this->withHeaders($headers)
+            ->postJson('/api/v1/admin/media/assets/' . $second['id'] . '/restore')
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson('/api/v1/admin/media/assets/bulk-folder', [
+                'ids' => [$first['id'], $second['id']],
+                'folder' => ' /campaign//tet-2027/ ',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.updated', 2)
+            ->assertJsonPath('data.folder', 'campaign/tet-2027');
+
+        $this->assertDatabaseHas('media_assets', ['id' => $first['id'], 'folder' => 'campaign/tet-2027']);
+        $this->assertDatabaseHas('media_assets', ['id' => $second['id'], 'folder' => 'campaign/tet-2027']);
+
+        // Chặn '..' traversal khi đổi thư mục.
+        $this->withHeaders($headers)
+            ->postJson('/api/v1/admin/media/assets/bulk-folder', [
+                'ids' => [$first['id']],
+                'folder' => '../secret',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['folder']);
     }
 }
 

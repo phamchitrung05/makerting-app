@@ -36,6 +36,12 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
     total: 0,
     folders: [],
     slots: [],
+    stats: {
+      totalFiles: 0,
+      totalSizeBytes: 0,
+      trashedFiles: 0,
+      trashedSizeBytes: 0,
+    },
     loading: false,
     filters: {
       kind: '',
@@ -279,15 +285,54 @@ export const useMediaAssetStore = defineStore('mediaAsset', {
       this.folders = await mediaApi.folders()
     },
 
-    /* Xóa mềm asset trên server rồi gỡ khỏi items (trừ khi đang xem thùng rác,
-     * thì giữ lại để phản ánh đúng trạng thái đã xóa). */
+    /* Nạp thống kê tổng số tệp & dung lượng toàn thư viện (active + trash). */
+    async loadStats() {
+      const data = await mediaApi.stats()
+
+      this.stats = {
+        totalFiles: Number(data?.total_files) || 0,
+        totalSizeBytes: Number(data?.total_size_bytes) || 0,
+        trashedFiles: Number(data?.trashed_files) || 0,
+        trashedSizeBytes: Number(data?.trashed_size_bytes) || 0,
+      }
+    },
+
+    /* Chuyển hàng loạt asset sang thư mục đích rồi làm mới lưới/thư mục. */
+    async bulkMoveFolder(ids, folder) {
+      const res = await mediaApi.bulkMoveFolder(ids, folder)
+
+      await Promise.all([this.refresh(), this.loadFolders()])
+
+      return res
+    },
+
+    /* Xóa mềm asset trên server rồi gỡ khỏi items. */
     async deleteAsset(id) {
       await mediaApi.deleteAsset(id)
       if (this.filters.trashed) {
-        this.refresh() // đang ở nhóm thùng rác → refetch thay vì gỡ tay
+        await this.refresh()
       } else {
         this.remove(id)
       }
+    },
+
+    /* Khôi phục asset từ thùng rác (gỡ khỏi danh sách thùng rác nếu đang xem trash). */
+    async restoreAsset(id) {
+      const asset = await mediaApi.restoreAsset(id)
+      if (this.filters.trashed) {
+        this.remove(id)
+      }
+
+      return asset
+    },
+
+    /* Xóa vĩnh viễn asset (DB + file vật lý) rồi gỡ khỏi danh sách. */
+    async forceDeleteAsset(id) {
+      const res = await mediaApi.forceDeleteAsset(id)
+
+      this.remove(id)
+
+      return res
     },
 
     /* Cập nhật metadata asset (title/alt_text/folder/visibility) rồi sửa in-place. */

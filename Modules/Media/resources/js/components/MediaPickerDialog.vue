@@ -5,8 +5,8 @@
   - Tab "Thư viện"  : grid media từ store (lọc kind/folder/channel_group/
   search), phân trang, bấm chọn (single/multi).
   - Tab "Tải lên"   : dropzone upload file -> store.upload() -> auto chọn.
-  - Tab "Tạo bằng AI": placeholder gọi VisualStyle/CoreAi (P2/P3) —
-  hiện hiển thị empty state + nút chuyển tab upload.
+  - Tab "Tạo bằng AI": mở AiGenerateImageDialog nối CoreAi -> lưu vào thư viện
+  & tự động chọn ngay trong picker.
 
   model-value: id | id[] (tùy multiple).
   PROPS:
@@ -26,6 +26,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useMediaAssetStore } from '../stores/mediaAsset'
+import AiGenerateImageDialog from './AiGenerateImageDialog.vue'
 
 const props = defineProps({
   modelValue: { type: [Number, Array], default: null },
@@ -49,6 +50,8 @@ const search = ref('')
 const kindFilter = ref('')
 const folderFilter = ref('')
 const selected = ref(new Set())
+const selectedAssetCache = ref(new Map())
+const isAiDialogOpen = ref(false)
 
 /* Giới hạn chọn thực tế: prop -> mặc định theo multiple. */
 const effectiveMax = computed(() => {
@@ -68,6 +71,11 @@ const allowedKinds = computed(() => {
   return []
 })
 
+/* Chỉ bật tab Tạo ảnh AI khi slot/caller cho phép loại 'image'. */
+const allowsAiGeneration = computed(() => (
+  !allowedKinds.value.length || allowedKinds.value.includes('image')
+))
+
 /* Items đã lọc theo allowedKinds + kind filter người dùng. */
 const filteredItems = computed(() => {
   let items = store.items
@@ -84,6 +92,9 @@ const filteredItems = computed(() => {
 /* Nạp dữ liệu khi mở dialog. */
 watch(dialog, async open => {
   if (!open) { return }
+  if (!allowsAiGeneration.value && activeTab.value === 'ai') {
+    activeTab.value = 'library'
+  }
   store.pagination.page = 1
   if (allowedKinds.value.length === 1) {
     store.filters.kind = allowedKinds.value[0]
@@ -94,15 +105,21 @@ watch(dialog, async open => {
     store.loadSlots(),
   ])
 
-  // Đồng bộ lựa chọn ban đầu từ modelValue.
-  selected.value = new Set(
-    Array.isArray(props.modelValue) ? props.modelValue :
-      (props.modelValue ? [props.modelValue] : []),
-  )
+  // Đồng bộ lựa chọn ban đầu từ modelValue + cache lại object nếu có trên trang hiện tại.
+  const initialIds = Array.isArray(props.modelValue)
+    ? props.modelValue
+    : (props.modelValue ? [props.modelValue] : [])
+
+  selected.value = new Set(initialIds)
+  for (const item of store.items) {
+    if (selected.value.has(item.id))
+      selectedAssetCache.value.set(item.id, item)
+  }
 })
 
-/* Đổi filter -> refresh (debounce nhẹ qua watch). */
+/* Đổi filter -> refresh (chỉ chạy khi dialog đang mở). */
 watch([search, kindFilter, folderFilter], () => {
+  if (!dialog.value) { return }
   store.filters.search = search.value
   store.filters.kind = kindFilter.value || (allowedKinds.value.length === 1 ? allowedKinds.value[0] : '')
   store.filters.folder = folderFilter.value
@@ -119,14 +136,17 @@ function toggle(asset) {
 
   if (set.has(id)) {
     set.delete(id)
+    selectedAssetCache.value.delete(id)
   } else {
     if (!props.multiple || effectiveMax.value === 1) {
       set.clear()
+      selectedAssetCache.value.clear()
     }
     if (effectiveMax.value > 0 && set.size >= effectiveMax.value) {
       return
     }
     set.add(id)
+    selectedAssetCache.value.set(id, asset)
   }
   selected.value = set
 }
@@ -135,35 +155,57 @@ function isSelected(asset) {
   return selected.value.has(asset.id)
 }
 
-/* Xác nhận chọn — asset có thể ở trang/lọc khác, nên tìm trong store.items
-   * (đã nạp đầy đủ) chứ không chỉ filteredItems hiện tại. */
+/* Xác nhận chọn — ưu tiên cache asset đã chọn ở các trang/tab trước đó. */
 function confirm() {
   const ids = [...selected.value]
-  const assets = store.items.filter(i => selected.value.has(i.id))
+  const storeById = new Map(store.items.map(i => [i.id, i]))
+  const assets = ids
+    .map(id => storeById.get(id) || selectedAssetCache.value.get(id))
+    .filter(Boolean)
 
   emit('update:modelValue', props.multiple ? ids : (ids[0] ?? null))
   emit('select', assets)
   close()
 }
 
-/* Upload thành công -> auto chọn asset mới. */
-async function onUploaded(assets) {
-  emit('upload', assets)
+/* Đưa danh sách asset mới (upload hoặc tạo AI) vào tập đang chọn và quay về tab Thư viện. */
+function applyPickedAssets(assets) {
+  const valid = (assets || []).filter(a => a?.id)
+  if (!valid.length)
+    return
 
-  const ids = assets.map(a => a.id)
-
-  if (!props.multiple) {
-    selected.value = new Set([ids[0]])
+  if (!props.multiple || effectiveMax.value === 1) {
+    selected.value = new Set([valid[0].id])
+    selectedAssetCache.value = new Map([[valid[0].id, valid[0]]])
   } else {
     const set = new Set(selected.value)
-    for (const id of ids) {
+    for (const asset of valid) {
       if (effectiveMax.value === 0 || set.size < effectiveMax.value) {
-        set.add(id)
+        set.add(asset.id)
+        selectedAssetCache.value.set(asset.id, asset)
       }
     }
     selected.value = set
   }
+
   activeTab.value = 'library'
+}
+
+/* Upload thành công -> auto chọn asset mới. */
+async function onUploaded(assets) {
+  emit('upload', assets)
+  applyPickedAssets(assets)
+}
+
+/* Tạo ảnh AI & lưu vào thư viện -> prepend vào store, cập nhật folder/stats & tự chọn ngay. */
+async function onAiGenerated(asset) {
+  if (!asset?.id)
+    return
+
+  store.prependUploaded(asset)
+  applyPickedAssets([asset])
+  isAiDialogOpen.value = false
+  await Promise.all([store.loadFolders(), store.loadStats()])
 }
 
 defineExpose({ open, close })
@@ -179,7 +221,7 @@ defineExpose({ open, close })
       <VCardItem class="pb-2">
         <VCardTitle>{{ title }}</VCardTitle>
         <VCardSubtitle v-if="slotInfo">
-          Slot "{{ slot }}" — {{ slotInfo.label }}
+          Slot "{{ slotProp }}" — {{ slotInfo.label }}
           <template v-if="effectiveMax > 0">
             (tối đa {{ effectiveMax }} media)
           </template>
@@ -208,7 +250,10 @@ defineExpose({ open, close })
             class="me-2"
           /> Tải lên
         </VTab>
-        <VTab value="ai">
+        <VTab
+          v-if="allowsAiGeneration"
+          value="ai"
+        >
           <VIcon
             icon="tabler-wand"
             class="me-2"
@@ -384,7 +429,10 @@ defineExpose({ open, close })
           </VWindowItem>
 
           <!-- TAB 3: TẠO BẰNG AI -->
-          <VWindowItem value="ai">
+          <VWindowItem
+            v-if="allowsAiGeneration"
+            value="ai"
+          >
             <div class="pa-8 text-center">
               <VAvatar
                 color="primary"
@@ -400,16 +448,31 @@ defineExpose({ open, close })
               <h6 class="text-h6 mb-2">
                 Tạo ảnh bằng AI
               </h6>
-              <p class="text-body-2 text-medium-emphasis mb-6">
-                Tính năng sẽ nối với VisualStyle DNA + CoreAi ở Phase 2 —
-                hiện chưa khả dụng. Bạn có thể tải lên ảnh có sẵn ở tab "Tải lên".
-              </p>
-              <VBtn
-                variant="tonal"
-                @click="activeTab = 'upload'"
+              <p
+                class="text-body-2 text-medium-emphasis mb-2 mx-auto"
+                style="max-inline-size: 520px;"
               >
-                Chuyển sang Tải lên
-              </VBtn>
+                Mô tả ý tưởng hoặc đính kèm ảnh tham chiếu để AI gợi ý prompt và tạo nhiều phương án ảnh theo phong cách mong muốn.
+              </p>
+              <p class="text-caption text-medium-emphasis mb-6">
+                Thư mục lưu mặc định: <strong>{{ folderFilter || 'root' }}</strong> — ảnh sau khi lưu sẽ tự động được chọn vào danh sách.
+              </p>
+              <div class="d-flex justify-center flex-wrap gap-3">
+                <VBtn
+                  color="primary"
+                  prepend-icon="tabler-wand"
+                  @click="isAiDialogOpen = true"
+                >
+                  Mở trình tạo ảnh AI
+                </VBtn>
+                <VBtn
+                  variant="tonal"
+                  color="secondary"
+                  @click="activeTab = 'upload'"
+                >
+                  Hoặc tải ảnh lên
+                </VBtn>
+              </div>
             </div>
           </VWindowItem>
         </VWindow>
@@ -435,6 +498,12 @@ defineExpose({ open, close })
         </VBtn>
       </VCardActions>
     </VCard>
+
+    <AiGenerateImageDialog
+      v-model="isAiDialogOpen"
+      :folder="folderFilter || 'root'"
+      @saved="onAiGenerated"
+    />
   </VDialog>
 </template>
 

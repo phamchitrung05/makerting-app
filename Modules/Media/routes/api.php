@@ -20,25 +20,39 @@ use Modules\Media\Http\Controllers\MediaAssetController;
  */
 
 Route::middleware(['auth:sanctum'])->prefix('v1/admin/media')->name('media.')->group(function () {
-    // Metadata slot + folder — đặt trước để tránh nuốt bởi {asset}.
+    // Metadata slot + folder + thống kê + thao tác hàng loạt — đặt trước để tránh nuốt bởi {asset}.
     Route::get('slots', [MediaAssetController::class, 'slots'])
         ->middleware('permission:media.view')->name('slots');
     Route::get('assets/options', [MediaAssetController::class, 'options'])
         ->middleware('permission:media.view')->name('assets.options');
     Route::get('assets/folders', [MediaAssetController::class, 'folders'])
         ->middleware('permission:media.view')->name('assets.folders');
+    Route::get('assets/stats', [MediaAssetController::class, 'stats'])
+        ->middleware('permission:media.view')->name('assets.stats');
+    Route::post('assets/bulk-folder', [MediaAssetController::class, 'bulkMoveFolder'])
+        ->middleware('permission:media.manage')->name('assets.bulk-folder');
 
-    // CRUD assets.
+    // CRUD assets (show hỗ trợ ?trashed=1 để xem chi tiết trong thùng rác).
     Route::apiResource('assets', MediaAssetController::class)
+        ->except(['show'])
         ->middlewareFor('index', 'permission:media.view')
-        ->middlewareFor('show', 'permission:media.view')
         ->middlewareFor('store', 'permission:media.manage')
         ->middlewareFor('update', 'permission:media.manage')
         ->middlewareFor('destroy', 'permission:media.manage')
         ->parameters(['assets' => 'asset']);
+    Route::get('assets/{asset}', [MediaAssetController::class, 'show'])
+        ->withTrashed()
+        ->middleware('permission:media.view')->name('assets.show');
+    Route::post('assets/{asset}/restore', [MediaAssetController::class, 'restore'])
+        ->withTrashed()
+        ->middleware('permission:media.manage')->name('assets.restore');
+    Route::delete('assets/{asset}/force', [MediaAssetController::class, 'forceDestroy'])
+        ->withTrashed()
+        ->middleware('permission:media.manage')->name('assets.force-destroy');
 
-    // Stream file vật lý (video private / preview) & cấp signed share URL tạm thời.
+    // Stream file vật lý (video private / preview; hỗ trợ ?trashed=1 trong thùng rác) & cấp signed share URL tạm thời.
     Route::get('assets/{asset}/stream', [MediaAssetController::class, 'stream'])
+        ->withTrashed()
         ->middleware('permission:media.view')->name('assets.stream');
     Route::get('assets/{asset}/share-link', [MediaAssetController::class, 'shareLink'])
         ->middleware('permission:media.view')->name('assets.share-link');

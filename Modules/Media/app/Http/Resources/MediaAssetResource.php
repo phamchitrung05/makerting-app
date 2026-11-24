@@ -64,6 +64,7 @@ class MediaAssetResource extends JsonResource
             ]),
             'created_at' => $dto->createdAt,
             'updated_at' => $dto->updatedAt,
+            'deleted_at' => $this->deleted_at?->toIso8601String(),
         ];
     }
 }

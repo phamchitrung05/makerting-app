@@ -114,7 +114,7 @@ class UploadMediaAssetAction
         $asset = DB::transaction(function () use ($file, $options, $checksum, $scan, $title, $disk, $createdBy, $visibility, $channelGroupId) {
             $asset = MediaAsset::create([
                 'channel_group_id' => $channelGroupId,
-                'folder' => $options['folder'] ?? 'root',
+                'folder' => \Modules\Media\Support\MediaMetadataHelper::normalizeFolder($options['folder'] ?? 'root'),
                 'kind' => $scan['kind'],
                 'title' => $title,
                 'alt_text' => $options['alt_text'] ?? null,

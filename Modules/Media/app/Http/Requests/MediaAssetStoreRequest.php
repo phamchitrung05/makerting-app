@@ -47,7 +47,7 @@ class MediaAssetStoreRequest extends FormRequest
             'file' => ['required_without:files', 'file', 'max:' . $this->maxKb()],
             'files' => ['required_without:file', 'array', 'min:1', 'max:20'],
             'files.*' => ['file', 'max:' . $this->maxKb()],
-            'folder' => ['nullable', 'string', 'max:60'],
+            'folder' => \Modules\Media\Support\MediaMetadataHelper::folderRules(['nullable']),
             'visibility' => ['nullable', Rule::in(MediaAsset::VISIBILITIES)],
             'channel_group_id' => ['nullable', 'integer', 'exists:channel_groups,id'],
             'title' => ['nullable', 'string', 'max:255'],

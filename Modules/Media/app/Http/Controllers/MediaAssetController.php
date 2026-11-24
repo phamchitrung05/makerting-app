@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use Modules\Core\Http\Responses\BaseResponse;
 use Modules\Media\Actions\UploadMediaAssetAction;
@@ -24,6 +25,7 @@ use Modules\Media\Http\Resources\MediaAssetUsageResource;
 use Modules\Media\Models\MediaAsset;
 use Modules\Media\Models\MediaAssetUsage;
 use Modules\Media\Registries\MediaSlotRegistry;
+use Modules\Media\Support\MediaMetadataHelper;
 use Spatie\MediaLibrary\MediaCollections\Exceptions\FileIsTooBig;
 use Spatie\MediaLibrary\MediaCollections\Models\Media;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -229,19 +231,86 @@ class MediaAssetController extends Controller
 
     /**
      * =====================================================================
-     * GET /api/v1/admin/media/assets/{asset}
+     * GET /api/v1/admin/media/assets/stats
      * =====================================================================
-     * INPUT: MediaAsset. OUTPUT: BaseResponse::success chi tiết + usages.
+     * Thống kê tổng số tệp & dung lượng toàn thư viện (kể cả thùng rác).
+     * INPUT: không. OUTPUT: BaseResponse::success {total_files,total_size_bytes,trashed_files,trashed_size_bytes}.
      * =====================================================================
      */
-    public function show(MediaAsset $asset)
+    public function stats()
     {
-        $asset->load([
-            'creator',
-            'channelGroup',
-            'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
-            'usages.mediaAsset.media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
-        ])->loadCount('usages');
+        $morphClass = (new MediaAsset)->getMorphClass();
+
+        $activeRow = DB::table('media_assets')
+            ->leftJoin('media', function ($join) use ($morphClass): void {
+                $join->on('media.model_id', '=', 'media_assets.id')
+                    ->where('media.model_type', '=', $morphClass)
+                    ->where('media.collection_name', '=', MediaAsset::COLLECTION_LIBRARY);
+            })
+            ->whereNull('media_assets.deleted_at')
+            ->selectRaw('COUNT(DISTINCT media_assets.id) as total_files, COALESCE(SUM(media.size), 0) as total_size_bytes')
+            ->first();
+
+        $trashedRow = DB::table('media_assets')
+            ->leftJoin('media', function ($join) use ($morphClass): void {
+                $join->on('media.model_id', '=', 'media_assets.id')
+                    ->where('media.model_type', '=', $morphClass)
+                    ->where('media.collection_name', '=', MediaAsset::COLLECTION_LIBRARY);
+            })
+            ->whereNotNull('media_assets.deleted_at')
+            ->selectRaw('COUNT(DISTINCT media_assets.id) as trashed_files, COALESCE(SUM(media.size), 0) as trashed_size_bytes')
+            ->first();
+
+        return BaseResponse::success([
+            'total_files' => (int) ($activeRow->total_files ?? 0),
+            'total_size_bytes' => (int) ($activeRow->total_size_bytes ?? 0),
+            'trashed_files' => (int) ($trashedRow->trashed_files ?? 0),
+            'trashed_size_bytes' => (int) ($trashedRow->trashed_size_bytes ?? 0),
+        ]);
+    }
+
+    /**
+     * =====================================================================
+     * POST /api/v1/admin/media/assets/bulk-folder
+     * =====================================================================
+     * Chuyển hàng loạt asset sang một thư mục mới.
+     * INPUT: ids (int[]), folder (string). OUTPUT: BaseResponse::success {updated, folder}.
+     * =====================================================================
+     */
+    public function bulkMoveFolder(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:200'],
+            'ids.*' => ['integer', 'distinct', Rule::exists('media_assets', 'id')->whereNull('deleted_at')],
+            'folder' => MediaMetadataHelper::folderRules(['required']),
+        ]);
+
+        $folder = MediaMetadataHelper::normalizeFolder($validated['folder']);
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'])));
+
+        $updated = MediaAsset::query()
+            ->whereIn('id', $ids)
+            ->update(['folder' => $folder]);
+
+        return BaseResponse::success(
+            ['updated' => (int) $updated, 'folder' => $folder],
+            "Đã chuyển {$updated} tệp sang thư mục \"{$folder}\"",
+        );
+    }
+
+    /**
+     * =====================================================================
+     * GET /api/v1/admin/media/assets/{asset}
+     * =====================================================================
+     * INPUT: MediaAsset, Request (?trashed=1 cho phép xem chi tiết trong thùng rác).
+     * OUTPUT: BaseResponse::success chi tiết + usages.
+     * =====================================================================
+     */
+    public function show(MediaAsset $asset, Request $request)
+    {
+        $this->abortIfTrashedWithoutAccess($asset, $request);
+
+        $this->loadAssetDetails($asset, withUsages: true);
 
         return BaseResponse::success(new MediaAssetResource($asset));
     }
@@ -258,7 +327,7 @@ class MediaAssetController extends Controller
     public function store(MediaAssetStoreRequest $request)
     {
         $options = [
-            'folder' => $request->input('folder', 'root'),
+            'folder' => MediaMetadataHelper::normalizeFolder($request->input('folder', 'root')),
             'visibility' => $request->input('visibility', MediaAsset::VISIBILITY_PUBLIC),
             'channel_group_id' => $request->input('channel_group_id'),
             'title' => $request->input('title'),
@@ -278,13 +347,7 @@ class MediaAssetController extends Controller
                 return BaseResponse::error($e->getMessage(), 422);
             }
 
-            $assetCollection = (new EloquentCollection($assets))
-                ->load([
-                    'creator',
-                    'channelGroup',
-                    'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
-                ])
-                ->loadCount('usages');
+            $assetCollection = $this->loadAssetDetails(new EloquentCollection($assets));
 
             return BaseResponse::success(
                 MediaAssetResource::collection($assetCollection),
@@ -303,11 +366,7 @@ class MediaAssetController extends Controller
             ? 'Tải lên thành công'
             : 'File đã tồn tại (trả về bản ghi cũ theo checksum)';
 
-        $asset->load([
-            'creator',
-            'channelGroup',
-            'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
-        ])->loadCount('usages');
+        $this->loadAssetDetails($asset);
 
         return BaseResponse::success(
             new MediaAssetResource($asset),
@@ -341,8 +400,10 @@ class MediaAssetController extends Controller
 
         $asset->update($data);
 
+        $fresh = $this->loadAssetDetails($asset->fresh());
+
         return BaseResponse::success(
-            new MediaAssetResource($asset->fresh(['creator', 'channelGroup', 'media'])->loadCount('usages')),
+            new MediaAssetResource($fresh),
             'Cập nhật media thành công',
         );
     }
@@ -351,7 +412,7 @@ class MediaAssetController extends Controller
      * =====================================================================
      * DELETE /api/v1/admin/media/assets/{asset}
      * =====================================================================
-     * INPUT: MediaAsset. OUTPUT: BaseResponse::success (204 khi không còn usage).
+     * INPUT: MediaAsset. OUTPUT: BaseResponse::success (gỡ usages + soft-delete).
      * =====================================================================
      */
     public function destroy(MediaAsset $asset)
@@ -376,15 +437,63 @@ class MediaAssetController extends Controller
 
     /**
      * =====================================================================
+     * POST /api/v1/admin/media/assets/{asset}/restore
+     * =====================================================================
+     * Khôi phục asset đã xóa mềm từ thùng rác.
+     * INPUT: MediaAsset (withTrashed). OUTPUT: BaseResponse::success MediaAssetResource.
+     * =====================================================================
+     */
+    public function restore(MediaAsset $asset)
+    {
+        if ($asset->trashed()) {
+            $asset->restore();
+        }
+
+        $fresh = $this->loadAssetDetails($asset->fresh());
+
+        return BaseResponse::success(
+            new MediaAssetResource($fresh),
+            'Đã khôi phục media',
+        );
+    }
+
+    /**
+     * =====================================================================
+     * DELETE /api/v1/admin/media/assets/{asset}/force
+     * =====================================================================
+     * Xóa vĩnh viễn asset khỏi DB và xóa toàn bộ file vật lý/conversions Spatie.
+     * INPUT: MediaAsset (withTrashed). OUTPUT: BaseResponse::success {id, force_deleted}.
+     * =====================================================================
+     */
+    public function forceDestroy(MediaAsset $asset)
+    {
+        $id = $asset->id;
+
+        DB::transaction(function () use ($asset): void {
+            $asset->usages()->delete();
+            // Spatie InteractsWithMedia::bootInteractsWithMedia() xóa file vật lý khi forceDeleting = true.
+            $asset->forceDelete();
+        });
+
+        return BaseResponse::success(
+            ['id' => $id, 'force_deleted' => true],
+            'Đã xóa vĩnh viễn media',
+        );
+    }
+
+    /**
+     * =====================================================================
      * GET /api/v1/admin/media/assets/{asset}/stream
      * =====================================================================
      * Stream file vật lý của asset (dùng cho video private/preview).
-     * INPUT: MediaAsset, Request (?download=1 để đính Content-Disposition).
+     * INPUT: MediaAsset, Request (?download=1 để đính Content-Disposition; ?trashed=1 cho thùng rác).
      * OUTPUT: StreamedResponse (Content-Type theo mime file Spatie).
      * =====================================================================
      */
     public function stream(MediaAsset $asset, Request $request)
     {
+        $this->abortIfTrashedWithoutAccess($asset, $request);
+
         $media = $asset->mediaFile();
         if (! $media) {
             return BaseResponse::error('Asset chưa có file vật lý.', 404);
@@ -727,6 +836,39 @@ class MediaAssetController extends Controller
     /* =====================================================================
      * Helpers nội bộ
      * ===================================================================== */
+
+    /**
+     * Chặn truy cập show/stream đối với asset đã soft-delete khi caller không truyền ?trashed=1.
+     */
+    private function abortIfTrashedWithoutAccess(MediaAsset $asset, Request $request): void
+    {
+        if ($asset->trashed() && ! filter_var($request->query('trashed'), FILTER_VALIDATE_BOOLEAN)) {
+            abort(404);
+        }
+    }
+
+    /**
+     * Eager load đồng nhất các quan hệ cho MediaAssetResource (tránh N+1 và lặp code).
+     *
+     * @template TModel of MediaAsset|EloquentCollection
+     *
+     * @param  TModel  $target
+     * @return TModel
+     */
+    private function loadAssetDetails(MediaAsset|EloquentCollection $target, bool $withUsages = false): MediaAsset|EloquentCollection
+    {
+        $relations = [
+            'creator',
+            'channelGroup',
+            'media' => fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY),
+        ];
+
+        if ($withUsages) {
+            $relations['usages.mediaAsset.media'] = fn ($mq) => $mq->where('collection_name', MediaAsset::COLLECTION_LIBRARY);
+        }
+
+        return $target->load($relations)->loadCount('usages');
+    }
 
     /**
      * CHỨC NĂNG: Lọc query theo tên folder hoặc toàn bộ thư mục con dưới prefix đó.

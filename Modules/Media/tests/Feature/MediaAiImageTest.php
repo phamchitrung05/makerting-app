@@ -31,6 +31,7 @@ use Modules\Media\DTOs\StoreGeneratedMediaDto;
 use Modules\Media\Jobs\GenerateAiImageJob;
 use Modules\Media\Models\MediaAsset;
 use Modules\Media\Services\AiImagePreviewStore;
+use Modules\Media\Tests\Concerns\UsesIsolatedMediaDisks;
 use RuntimeException;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
@@ -53,20 +54,25 @@ use Tests\TestCase;
 class MediaAiImageTest extends TestCase
 {
     use RefreshDatabase;
+    use UsesIsolatedMediaDisks;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        Storage::fake('media_public');
-        Storage::fake('media_private');
-        Storage::fake('temp_processing');
+        $this->setUpIsolatedMediaDisks();
         Cache::flush();
 
         app(PermissionRegistrar::class)->forgetCachedPermissions();
         foreach (['media.view', 'media.manage'] as $permission) {
             Permission::findOrCreate($permission, 'admin');
         }
+    }
+
+    protected function tearDown(): void
+    {
+        $this->tearDownIsolatedMediaDisks();
+        parent::tearDown();
     }
 
     /**

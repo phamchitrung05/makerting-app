@@ -131,3 +131,34 @@ export function deriveAspectRatio(width, height) {
 
   return `${Math.round(w) / divisor}:${Math.round(h) / divisor}`
 }
+
+export const KIND_LABELS = {
+  image: 'Hình ảnh',
+  video: 'Video',
+  audio: 'Âm thanh',
+  document: 'Tài liệu',
+  archive: 'File nén',
+}
+
+export const KIND_ICONS = {
+  image: 'tabler-photo-off',
+  video: 'tabler-video',
+  audio: 'tabler-music',
+  document: 'tabler-file-text',
+  archive: 'tabler-archive',
+}
+
+/*
+ * CHỨC NĂNG: Trả metadata hiển thị đồng nhất (icon, bgClass, color, label) theo kind.
+ */
+export function kindMeta(kind) {
+  const map = {
+    image: { icon: 'tabler-photo-off', bgClass: '', color: 'secondary', label: KIND_LABELS.image },
+    video: { icon: KIND_ICONS.video, bgClass: 'bg-primary', color: 'primary', label: KIND_LABELS.video },
+    audio: { icon: KIND_ICONS.audio, bgClass: 'bg-info', color: 'info', label: KIND_LABELS.audio },
+    document: { icon: KIND_ICONS.document, bgClass: 'bg-error', color: 'error', label: KIND_LABELS.document },
+    archive: { icon: KIND_ICONS.archive, bgClass: 'bg-warning', color: 'warning', label: KIND_LABELS.archive },
+  }
+
+  return map[kind] || { icon: KIND_ICONS.document, bgClass: 'bg-error', color: 'secondary', label: kind || 'Tệp' }
+}

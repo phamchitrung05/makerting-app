@@ -53,7 +53,7 @@ const previewUrl = computed(() => {
   return current.value.url
 })
 
-const previewAlt = computed(() => current.value?.altText || current.value?.title || '')
+const previewAlt = computed(() => current.value?.alt_text || current.value?.altText || current.value?.title || '')
 
 /* Khi modelValue đổi từ ngoài (form load) -> nạp asset nếu chưa có. */
 watch(() => props.modelValue, async id => {

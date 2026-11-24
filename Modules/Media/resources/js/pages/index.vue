@@ -35,10 +35,13 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
+import { useSnackbar } from '@/composables/useSnackbar'
 import { firstErrorMessage } from '@/utils/api'
 import AiGenerateImageDialog from '../components/AiGenerateImageDialog.vue'
+import MediaConfirmDialog from '../components/MediaConfirmDialog.vue'
+import MediaMoveFolderDialog from '../components/MediaMoveFolderDialog.vue'
 import { useMediaAssetStore } from '../stores/mediaAsset'
-import { extOf, fmtDate, fmtDuration, fmtSize, thumbOf } from '../utils/mediaFormat'
+import { extOf, fmtDate, fmtDuration, fmtSize, kindMeta, thumbOf } from '../utils/mediaFormat'
 import MediaDetailSidebar from '../views/MediaDetailSidebar.vue'
 
 definePage({
@@ -49,6 +52,7 @@ definePage({
 })
 
 const store = useMediaAssetStore()
+const snackbar = useSnackbar()
 
 const isRightSidebarOpen = ref(true)
 
@@ -68,14 +72,29 @@ const page = computed({
 
 const itemsPerPage = ref(18)
 
-/* Bộ lọc nhanh cột trái — count bind từ store. */
+/* Bộ lọc nhanh cột trái — count bind từ store.stats & store.total. */
 const quickFilters = computed(() => [
-  { id: 'all',     name: 'Tất cả tệp tin', icon: 'tabler-folders', count: store.total },
+  { id: 'all',     name: 'Tất cả tệp tin', icon: 'tabler-folders', count: store.stats.totalFiles || store.total },
   { id: 'recent',  name: 'Gần đây',        icon: 'tabler-clock',   count: null },
   { id: 'shared',  name: 'Đã chia sẻ',     icon: 'tabler-share',   count: null },
   { id: 'ai',      name: 'Ảnh AI',          icon: 'tabler-wand',    count: null },
-  { id: 'trash',   name: 'Thùng rác',       icon: 'tabler-trash',   count: null },
+  { id: 'trash',   name: 'Thùng rác',       icon: 'tabler-trash',   count: store.stats.trashedFiles > 0 ? store.stats.trashedFiles : null },
 ])
+
+/* Khối dung lượng ở đáy cột trái (toàn thư viện hoặc thùng rác). */
+const footerStats = computed(() => (
+  activeQuickFilter.value === 'trash'
+    ? {
+        label: 'Dung lượng thùng rác',
+        sizeBytes: store.stats.trashedSizeBytes,
+        filesCount: store.stats.trashedFiles,
+      }
+    : {
+        label: 'Dung lượng thư viện',
+        sizeBytes: store.stats.totalSizeBytes,
+        filesCount: store.stats.totalFiles,
+      }
+))
 
 const kindOptions = [
   { title: 'Mọi loại', value: '' },
@@ -108,16 +127,17 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 const uploading = ref(false)
 const uploadingFiles = ref([])
 const deleting = ref(false)
+const restoring = ref(false)
+const movingFolder = ref(false)
+const isForceDeleteConfirmOpen = ref(false)
+const isMoveFolderOpen = ref(false)
 const isAiGenerateDialogOpen = ref(false)
+const aiInitialPrompt = ref('')
+const aiInitialStyle = ref('')
+const aiInitialAspectRatio = ref('')
 const fileInput = ref(null)
 const isDraggingOver = ref(false)
 let dragCounter = 0
-
-const snackbar = ref({
-  show: false,
-  color: 'success',
-  text: '',
-})
 
 let suppressFilterWatch = false
 
@@ -185,8 +205,16 @@ watch(sortFilter, v => {
   store.refresh()
 })
 
-watch([() => store.items.length, () => store.loading, isRightSidebarOpen], () => {
+watch([() => store.items.length, () => store.loading, isRightSidebarOpen, viewMode], () => {
   nextTick(syncScrollbarObservers)
+})
+
+watch(isAiGenerateDialogOpen, open => {
+  if (!open) {
+    aiInitialPrompt.value = ''
+    aiInitialStyle.value = ''
+    aiInitialAspectRatio.value = ''
+  }
 })
 
 /* Giữ selectedFile đồng bộ với danh sách trang hiện tại (tự chọn mục đầu nếu chưa chọn hoặc vừa đổi trang/lọc). */
@@ -205,7 +233,7 @@ watch(pagedItems, items => {
 
 onMounted(async () => {
   store.pagination.itemsPerPage = itemsPerPage.value
-  await Promise.all([store.refresh(), store.loadFolders(), store.loadSlots()])
+  await Promise.all([store.refresh(), store.loadFolders(), store.loadSlots(), store.loadStats()])
   await nextTick()
   syncScrollbarObservers()
 })
@@ -217,6 +245,7 @@ onBeforeUnmount(() => {
 
 /* ============ ĐIỀU HƯỚNG CỘT TRÁI ============ */
 function selectQuickFilter(id) {
+  selectedIds.value = new Set()
   activeQuickFilter.value = id
   store.setQuickFilter(id)
 }
@@ -259,18 +288,29 @@ async function onAssetUpdated(updatedAsset) {
   if (updatedAsset)
     selectedFile.value = updatedAsset
 
-  await store.loadFolders()
+  await Promise.all([store.loadFolders(), store.loadStats()])
+}
+
+function clearSelectionId(id) {
+  if (!selectedIds.value.has(id))
+    return
+
+  const next = new Set(selectedIds.value)
+
+  next.delete(id)
+  selectedIds.value = next
 }
 
 async function onAssetDeleted(deletedId) {
-  if (selectedIds.value.has(deletedId)) {
-    const next = new Set(selectedIds.value)
+  clearSelectionId(deletedId)
+  await syncPaginationAfterRemoval()
+}
 
-    next.delete(deletedId)
-    selectedIds.value = next
-  }
+async function onAssetRestored(restoredAsset) {
+  if (restoredAsset?.id)
+    clearSelectionId(restoredAsset.id)
 
-  await store.loadFolders()
+  await syncPaginationAfterRemoval()
 }
 
 function toggleSelected(file) {
@@ -280,12 +320,32 @@ function toggleSelected(file) {
   selectedIds.value = s
 }
 
+const allPageSelected = computed(() => (
+  pagedItems.value.length > 0 && pagedItems.value.every(f => selectedIds.value.has(f.id))
+))
+
+const somePageSelected = computed(() => (
+  pagedItems.value.some(f => selectedIds.value.has(f.id)) && !allPageSelected.value
+))
+
+function toggleSelectAllOnPage() {
+  const next = new Set(selectedIds.value)
+  if (allPageSelected.value) {
+    for (const item of pagedItems.value)
+      next.delete(item.id)
+  } else {
+    for (const item of pagedItems.value)
+      next.add(item.id)
+  }
+  selectedIds.value = next
+}
+
 const selectedAssets = computed(() => pagedItems.value.filter(f => selectedIds.value.has(f.id)))
 const selectedSizeText = computed(() => fmtSize(store.selectedSizeBytes(selectedAssets.value)))
 
-/* ============ ACTION: UPLOAD / DELETE / DOWNLOAD / SAVE ============ */
+/* ============ ACTION: UPLOAD / DELETE / RESTORE / MOVE / AI ============ */
 function showNotice(text, color = 'success') {
-  snackbar.value = { show: true, color, text }
+  snackbar.show(text, { color })
 }
 
 /* Kiểm tra sự kiện kéo-thả có mang file thật từ máy người dùng không. */
@@ -393,7 +453,7 @@ async function uploadFiles(fileList) {
 
     await syncViewAfterUpload(uploaded)
     uploading.value = false
-    await store.loadFolders()
+    await Promise.all([store.loadFolders(), store.loadStats()])
 
     if (uploaded.length === 1)
       showNotice(`Đã tải lên "${uploaded[0].title}" và đưa vào cột giữa.`)
@@ -412,6 +472,16 @@ async function uploadFiles(fileList) {
 }
 
 function openAiGenerateDialog() {
+  aiInitialPrompt.value = ''
+  aiInitialStyle.value = ''
+  aiInitialAspectRatio.value = ''
+  isAiGenerateDialogOpen.value = true
+}
+
+function onGenerateFromPrompt({ prompt, style, aspectRatio }) {
+  aiInitialPrompt.value = prompt || ''
+  aiInitialStyle.value = style || ''
+  aiInitialAspectRatio.value = aspectRatio || ''
   isAiGenerateDialogOpen.value = true
 }
 
@@ -421,7 +491,7 @@ async function onAiImageSaved(asset) {
     return
 
   await syncViewAfterUpload([asset])
-  await store.loadFolders()
+  await Promise.all([store.loadFolders(), store.loadStats()])
   showNotice(`Đã lưu ảnh AI "${asset.title}" vào thư viện.`)
 }
 
@@ -464,18 +534,73 @@ async function onGridDrop(event) {
   await uploadFiles(event.dataTransfer?.files)
 }
 
-async function onDeleteSelected() {
-  if (!selectedIds.value.size) return
-  deleting.value = true
+async function syncPaginationAfterRemoval() {
+  if (!pagedItems.value.length && store.pagination.page > 1)
+    store.pagination.page -= 1
+
+  await Promise.all([store.refresh(), store.loadFolders(), store.loadStats()])
+}
+
+async function runBulkAssetMutation({ loadingRef, requireTrash, mutate, formatMessage, closeConfirm = false }) {
+  const isTrash = activeQuickFilter.value === 'trash'
+  if (!selectedIds.value.size || isTrash !== requireTrash)
+    return
+
+  const ids = [...selectedIds.value]
+
+  loadingRef.value = true
   try {
-    await Promise.all([...selectedIds.value].map(id => store.deleteAsset(id)))
+    await Promise.all(ids.map(mutate))
+    if (closeConfirm)
+      isForceDeleteConfirmOpen.value = false
     selectedIds.value = new Set()
+    await syncPaginationAfterRemoval()
     selectedFile.value = pagedItems.value[0] || null
-    await store.loadFolders()
+    showNotice(formatMessage(ids.length))
   } catch (err) {
     showNotice(firstErrorMessage(err), 'error')
   } finally {
-    deleting.value = false
+    loadingRef.value = false
+  }
+}
+
+const onDeleteSelected = () => runBulkAssetMutation({
+  loadingRef: deleting,
+  requireTrash: false,
+  mutate: id => store.deleteAsset(id),
+  formatMessage: n => `Đã chuyển ${n} tệp tin vào thùng rác.`,
+})
+
+const onRestoreSelected = () => runBulkAssetMutation({
+  loadingRef: restoring,
+  requireTrash: true,
+  mutate: id => store.restoreAsset(id),
+  formatMessage: n => `Đã khôi phục ${n} tệp tin từ thùng rác.`,
+})
+
+const onForceDeleteSelected = () => runBulkAssetMutation({
+  loadingRef: deleting,
+  requireTrash: true,
+  mutate: id => store.forceDeleteAsset(id),
+  formatMessage: n => `Đã xóa vĩnh viễn ${n} tệp tin.`,
+  closeConfirm: true,
+})
+
+async function onBulkMoveFolder(folder) {
+  if (!selectedIds.value.size) return
+
+  movingFolder.value = true
+  try {
+    const res = await store.bulkMoveFolder([...selectedIds.value], folder)
+
+    isMoveFolderOpen.value = false
+    selectedIds.value = new Set()
+    await store.loadStats()
+    showNotice(`Đã chuyển ${res?.updated ?? 0} tệp tin sang thư mục "${res?.folder || folder}".`)
+  } catch (err) {
+    showNotice(firstErrorMessage(err), 'error')
+  } finally {
+    movingFolder.value = false
   }
 }
 </script>
@@ -578,15 +703,15 @@ async function onDeleteSelected() {
               </div>
             </PerfectScrollbar>
 
-            <!-- Dung lượng lưu trữ cố định dưới cùng cột trái (tính từ items trang đang xem) -->
+            <!-- Dung lượng lưu trữ cố định dưới cùng cột trái (tổng toàn thư viện hoặc thùng rác) -->
             <VDivider class="flex-shrink-0" />
             <div class="pa-4 flex-shrink-0">
               <div class="text-body-1 font-weight-medium text-high-emphasis mb-2">
-                Dung lượng (trang này)
+                {{ footerStats.label }}
               </div>
               <div class="d-flex justify-space-between align-center text-caption text-medium-emphasis">
-                <span>{{ fmtSize(store.selectedSizeBytes(pagedItems)) }}</span>
-                <span class="font-weight-medium text-high-emphasis">{{ pagedItems.length }} tệp</span>
+                <span>{{ fmtSize(footerStats.sizeBytes) }}</span>
+                <span class="font-weight-medium text-high-emphasis">{{ footerStats.filesCount }} tệp</span>
               </div>
             </div>
           </VCol>
@@ -718,32 +843,53 @@ async function onDeleteSelected() {
                 :options="{ wheelPropagation: false, suppressScrollX: true }"
                 class="media-grid-scroll pa-5"
               >
-                <!-- Loading lần đầu: Skeleton grid mô phỏng card thật -->
-                <div
-                  v-if="store.loading && !pagedItems.length && !uploadingFiles.length"
-                  class="media-grid"
-                >
+                <!-- Loading lần đầu: Skeleton theo chế độ xem Grid hoặc List -->
+                <template v-if="store.loading && !pagedItems.length && !uploadingFiles.length">
                   <div
-                    v-for="n in 12"
-                    :key="`skeleton-${n}`"
-                    class="media-card rounded border pa-2"
+                    v-if="viewMode === 'list'"
+                    class="border rounded overflow-hidden"
                   >
-                    <div class="rounded overflow-hidden mb-2 thumb-wrap thumb-square">
+                    <div
+                      v-for="n in 8"
+                      :key="`list-skeleton-${n}`"
+                      class="d-flex align-center gap-3 px-4 py-3 border-b"
+                    >
                       <VSkeletonLoader
-                        type="image"
-                        class="media-skeleton-thumb h-100 w-100 bg-transparent"
+                        type="avatar"
+                        class="bg-transparent"
+                      />
+                      <VSkeletonLoader
+                        type="text"
+                        class="flex-grow-1 bg-transparent"
                       />
                     </div>
-                    <VSkeletonLoader
-                      type="text"
-                      class="media-skeleton-line bg-transparent mb-1"
-                    />
-                    <VSkeletonLoader
-                      type="text"
-                      class="media-skeleton-line media-skeleton-line--short bg-transparent"
-                    />
                   </div>
-                </div>
+                  <div
+                    v-else
+                    class="media-grid"
+                  >
+                    <div
+                      v-for="n in 12"
+                      :key="`skeleton-${n}`"
+                      class="media-card rounded border pa-2"
+                    >
+                      <div class="rounded overflow-hidden mb-2 thumb-wrap thumb-square">
+                        <VSkeletonLoader
+                          type="image"
+                          class="media-skeleton-thumb h-100 w-100 bg-transparent"
+                        />
+                      </div>
+                      <VSkeletonLoader
+                        type="text"
+                        class="media-skeleton-line bg-transparent mb-1"
+                      />
+                      <VSkeletonLoader
+                        type="text"
+                        class="media-skeleton-line media-skeleton-line--short bg-transparent"
+                      />
+                    </div>
+                  </div>
+                </template>
 
                 <!-- Empty state -->
                 <div
@@ -780,6 +926,155 @@ async function onDeleteSelected() {
                   </VBtn>
                 </div>
 
+                <!-- Chế độ xem Danh sách (List view) -->
+                <div
+                  v-else-if="viewMode === 'list'"
+                  class="media-list-wrap border rounded overflow-hidden"
+                  :class="{ 'media-grid--loading': store.loading }"
+                >
+                  <VTable class="media-list-table text-no-wrap">
+                    <thead>
+                      <tr>
+                        <th style="inline-size: 44px;">
+                          <VCheckboxBtn
+                            :model-value="allPageSelected"
+                            :indeterminate="somePageSelected"
+                            color="primary"
+                            density="compact"
+                            aria-label="Chọn tất cả tệp trên trang"
+                            @click.stop="toggleSelectAllOnPage"
+                          />
+                        </th>
+                        <th>Tệp tin</th>
+                        <th>Thư mục</th>
+                        <th>Loại</th>
+                        <th>Quyền</th>
+                        <th>Dung lượng</th>
+                        <th>Ngày tạo</th>
+                        <th class="text-end">
+                          Thao tác
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="item in uploadingFiles"
+                        :key="item.key"
+                        class="media-list-row media-card--uploading"
+                      >
+                        <td>
+                          <VProgressCircular
+                            indeterminate
+                            color="primary"
+                            size="18"
+                            width="2"
+                          />
+                        </td>
+                        <td colspan="4">
+                          <div class="d-flex align-center gap-3">
+                            <span class="text-body-2 font-weight-medium text-primary">
+                              Đang tải lên: {{ item.name }}
+                            </span>
+                          </div>
+                        </td>
+                        <td class="text-caption text-medium-emphasis">
+                          {{ fmtSize(item.size) }}
+                        </td>
+                        <td colspan="2" />
+                      </tr>
+
+                      <tr
+                        v-for="file in pagedItems"
+                        :key="file.id"
+                        class="media-list-row cursor-pointer"
+                        :class="{ 'media-list-row--selected': selectedFile && selectedFile.id === file.id }"
+                        @click="onSelectFile(file)"
+                      >
+                        <td>
+                          <VCheckboxBtn
+                            :model-value="selectedIds.has(file.id)"
+                            color="primary"
+                            density="compact"
+                            @click.stop="toggleSelected(file)"
+                          />
+                        </td>
+                        <td>
+                          <div class="d-flex align-center gap-3 py-1">
+                            <div class="media-list-thumb rounded overflow-hidden flex-shrink-0">
+                              <VImg
+                                v-if="file.kind === 'image' && thumbOf(file)"
+                                :src="thumbOf(file)"
+                                cover
+                                class="h-100 w-100"
+                              />
+                              <div
+                                v-else
+                                class="d-flex align-center justify-center h-100 w-100"
+                                :class="kindMeta(file.kind).bgClass || 'bg-secondary'"
+                              >
+                                <VIcon
+                                  :icon="kindMeta(file.kind).icon"
+                                  size="18"
+                                  color="white"
+                                />
+                              </div>
+                            </div>
+                            <div class="media-list-title">
+                              <div class="text-body-2 font-weight-medium text-high-emphasis text-truncate">
+                                {{ file.title }}
+                              </div>
+                              <div class="text-caption text-medium-emphasis text-truncate">
+                                {{ extOf(file) || file.mime || kindMeta(file.kind).label }}
+                                <template v-if="file.width && file.height">
+                                  • {{ file.width }}×{{ file.height }}
+                                </template>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="text-body-2 text-medium-emphasis">
+                          <VChip
+                            size="x-small"
+                            variant="tonal"
+                            color="secondary"
+                            prepend-icon="tabler-folder"
+                          >
+                            {{ file.folder || 'root' }}
+                          </VChip>
+                        </td>
+                        <td class="text-caption text-medium-emphasis">
+                          {{ kindMeta(file.kind).label }}
+                        </td>
+                        <td>
+                          <VChip
+                            size="x-small"
+                            :color="file.visibility === 'private' ? 'warning' : 'success'"
+                            variant="tonal"
+                          >
+                            {{ file.visibility === 'private' ? 'Riêng tư' : 'Công khai' }}
+                          </VChip>
+                        </td>
+                        <td class="text-caption text-medium-emphasis">
+                          {{ fmtSize(file.size) }}
+                        </td>
+                        <td class="text-caption text-medium-emphasis">
+                          {{ fmtDate(file.created_at) }}
+                        </td>
+                        <td class="text-end">
+                          <IconBtn
+                            size="small"
+                            aria-label="Xem chi tiết"
+                            @click.stop="onSelectFile(file)"
+                          >
+                            <VIcon icon="tabler-eye" />
+                          </IconBtn>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </VTable>
+                </div>
+
+                <!-- Chế độ xem Lưới (Grid view) -->
                 <div
                   v-else
                   class="media-grid"
@@ -837,31 +1132,12 @@ async function onDeleteSelected() {
                           />
                         </div>
                         <div
-                          v-else-if="file.kind === 'video'"
-                          class="thumb-fallback d-flex align-center justify-center bg-primary"
-                        >
-                          <VIcon
-                            icon="tabler-video"
-                            size="32"
-                            color="white"
-                          />
-                        </div>
-                        <div
-                          v-else-if="file.kind === 'audio'"
-                          class="thumb-fallback d-flex align-center justify-center bg-info"
-                        >
-                          <VIcon
-                            icon="tabler-music"
-                            size="32"
-                            color="white"
-                          />
-                        </div>
-                        <div
                           v-else
-                          class="thumb-fallback d-flex align-center justify-center bg-error"
+                          class="thumb-fallback d-flex align-center justify-center"
+                          :class="kindMeta(file.kind).bgClass"
                         >
                           <VIcon
-                            icon="tabler-file-text"
+                            :icon="kindMeta(file.kind).icon"
                             size="32"
                             color="white"
                           />
@@ -934,20 +1210,60 @@ async function onDeleteSelected() {
                 {{ selectedIds.size }} tệp tin đã chọn
               </span>
               <span class="text-caption text-medium-emphasis me-2">({{ selectedSizeText }})</span>
-              <VBtn
-                variant="tonal"
-                color="error"
-                size="small"
-                prepend-icon="tabler-trash"
-                :loading="deleting"
-                @click="onDeleteSelected"
-              >
-                {{ activeQuickFilter === 'trash' ? 'Xóa vĩnh viễn' : 'Xóa' }}
-              </VBtn>
+
+              <template v-if="activeQuickFilter === 'trash'">
+                <VBtn
+                  variant="tonal"
+                  color="success"
+                  size="small"
+                  prepend-icon="tabler-restore"
+                  :loading="restoring"
+                  :disabled="deleting"
+                  @click="onRestoreSelected"
+                >
+                  Khôi phục
+                </VBtn>
+                <VBtn
+                  variant="tonal"
+                  color="error"
+                  size="small"
+                  prepend-icon="tabler-trash-x"
+                  :loading="deleting"
+                  :disabled="restoring"
+                  @click="isForceDeleteConfirmOpen = true"
+                >
+                  Xóa vĩnh viễn
+                </VBtn>
+              </template>
+
+              <template v-else>
+                <VBtn
+                  variant="tonal"
+                  color="primary"
+                  size="small"
+                  prepend-icon="tabler-folder-share"
+                  :disabled="deleting"
+                  @click="isMoveFolderOpen = true"
+                >
+                  Chuyển thư mục
+                </VBtn>
+                <VBtn
+                  variant="tonal"
+                  color="error"
+                  size="small"
+                  prepend-icon="tabler-trash"
+                  :loading="deleting"
+                  @click="onDeleteSelected"
+                >
+                  Xóa
+                </VBtn>
+              </template>
+
               <VBtn
                 variant="tonal"
                 color="secondary"
                 size="small"
+                :disabled="deleting || restoring"
                 @click="selectedIds = new Set()"
               >
                 Bỏ chọn
@@ -978,6 +1294,8 @@ async function onDeleteSelected() {
               @next="stepSelectedFile(1)"
               @updated="onAssetUpdated"
               @deleted="onAssetDeleted"
+              @restored="onAssetRestored"
+              @generate-from-prompt="onGenerateFromPrompt"
               @close="isRightSidebarOpen = false"
             />
           </VCol>
@@ -988,17 +1306,29 @@ async function onDeleteSelected() {
     <AiGenerateImageDialog
       v-model="isAiGenerateDialogOpen"
       :folder="activeFolder || 'root'"
+      :initial-prompt="aiInitialPrompt"
+      :initial-style="aiInitialStyle"
+      :initial-aspect-ratio="aiInitialAspectRatio"
       @saved="onAiImageSaved"
     />
 
-    <VSnackbar
-      v-model="snackbar.show"
-      :color="snackbar.color"
-      location="bottom end"
-      timeout="3500"
-    >
-      {{ snackbar.text }}
-    </VSnackbar>
+    <MediaConfirmDialog
+      v-model="isForceDeleteConfirmOpen"
+      title="Xóa vĩnh viễn tệp tin"
+      :message="`Bạn chắc chắn muốn xóa vĩnh viễn ${selectedIds.size} tệp tin đã chọn? File vật lý và dữ liệu liên kết sẽ bị xóa hoàn toàn, không thể khôi phục.`"
+      confirm-text="Xóa vĩnh viễn"
+      :loading="deleting"
+      @confirm="onForceDeleteSelected"
+    />
+
+    <MediaMoveFolderDialog
+      v-model="isMoveFolderOpen"
+      :folders="store.folders"
+      :selected-count="selectedIds.size"
+      :initial-folder="activeFolder || 'root'"
+      :loading="movingFolder"
+      @submit="onBulkMoveFolder"
+    />
   </VLayout>
 </template>
 
@@ -1267,5 +1597,39 @@ async function onDeleteSelected() {
   font-weight: 500;
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+.media-list-wrap {
+  background: rgb(var(--v-theme-surface));
+  transition: opacity 0.15s ease;
+}
+
+.media-list-table :deep(th) {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.media-list-row {
+  transition: background 0.12s ease;
+}
+
+.media-list-row:hover {
+  background: rgba(var(--v-theme-primary), 0.04);
+}
+
+.media-list-row--selected {
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.media-list-thumb {
+  inline-size: 40px;
+  block-size: 40px;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.media-list-title {
+  max-inline-size: 260px;
+  min-inline-size: 0;
 }
 </style>

@@ -46,9 +46,19 @@ export const mediaApi = {
     return $api(`${BASE}/assets/folders`)
   },
 
-  /* Chi tiết 1 asset (kèm usages + creator/channel_group). */
-  asset(id) {
-    return $api(`${BASE}/assets/${id}`)
+  /* Thống kê tổng số tệp & dung lượng toàn thư viện (active + trash). */
+  stats() {
+    return $api(`${BASE}/assets/stats`)
+  },
+
+  /* Chuyển hàng loạt asset sang thư mục đích. */
+  bulkMoveFolder(ids, folder) {
+    return $api(`${BASE}/assets/bulk-folder`, { method: 'POST', body: { ids, folder } })
+  },
+
+  /* Chi tiết 1 asset (kèm usages + creator/channel_group; hỗ trợ { trashed: 1 }). */
+  asset(id, params = {}) {
+    return $api(`${BASE}/assets/${id}`, { params })
   },
 
   /*
@@ -103,6 +113,16 @@ export const mediaApi = {
   /* Soft delete asset. */
   deleteAsset(id) {
     return $api(`${BASE}/assets/${id}`, { method: 'DELETE' })
+  },
+
+  /* Khôi phục asset đã soft-delete từ thùng rác. */
+  restoreAsset(id) {
+    return $api(`${BASE}/assets/${id}/restore`, { method: 'POST' })
+  },
+
+  /* Xóa vĩnh viễn asset (DB + file vật lý Spatie). */
+  forceDeleteAsset(id) {
+    return $api(`${BASE}/assets/${id}/force`, { method: 'DELETE' })
   },
 
   /* URL stream file vật lý (cho video private / preview) — có tiền tố /api. */

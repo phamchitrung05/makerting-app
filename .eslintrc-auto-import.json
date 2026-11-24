@@ -383,6 +383,10 @@
     "previewOf": true,
     "thumbOf": true,
     "appSnackbar": true,
-    "useSnackbar": true
+    "useSnackbar": true,
+    "KIND_ICONS": true,
+    "KIND_LABELS": true,
+    "kindMeta": true,
+    "inspectCustomLength": true
   }
 }

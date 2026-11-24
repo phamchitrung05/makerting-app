@@ -38,6 +38,18 @@ const props = defineProps({
     type: String,
     default: 'root',
   },
+  initialPrompt: {
+    type: String,
+    default: '',
+  },
+  initialStyle: {
+    type: String,
+    default: '',
+  },
+  initialAspectRatio: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits(['saved'])
@@ -128,6 +140,7 @@ const snackbar = useSnackbar()
 let pollTimer = null
 let generationSeq = 0
 let suggestSeq = 0
+let keepSnackbarOnClose = false
 
 const modelSelectOptions = computed(() => aiModels.value.map(model => ({
   title: model.provider_name
@@ -714,6 +727,7 @@ async function saveToLibrary() {
     })
 
     target.savedAssetId = asset.id
+    keepSnackbarOnClose = true
     if (isOpen.value)
       snackbar.success(`Đã lưu "${asset.title}" vào thư viện Media.`)
     emit('saved', asset)
@@ -790,13 +804,23 @@ function resetAfterLeave() {
 
 watch(isOpen, open => {
   if (open) {
+    keepSnackbarOnClose = false
+    if (props.initialPrompt && !aiPromptText.value.trim())
+      aiPromptText.value = props.initialPrompt
+    if (props.initialStyle && visualStyles.some(s => s.value === props.initialStyle))
+      selectedStyle.value = props.initialStyle
+    if (props.initialAspectRatio && aspectRatios.some(r => r.value === props.initialAspectRatio))
+      selectedRatio.value = props.initialAspectRatio
+
     loadAiModels()
   } else {
     generationSeq += 1
     suggestSeq += 1
     isSuggestingPrompt.value = false
     stopPolling()
-    snackbar.hide()
+    if (!keepSnackbarOnClose)
+      snackbar.hide()
+    keepSnackbarOnClose = false
   }
 })
 

@@ -34,6 +34,8 @@ declare module 'vue-router/auto-routes' {
     'admin-task-center-tasks': RouteRecordInfo<'admin-task-center-tasks', '/admin/task-center/tasks', Record<never, never>, Record<never, never>>,
     'admin-taxonomy-categories': RouteRecordInfo<'admin-taxonomy-categories', '/admin/taxonomy/categories', Record<never, never>, Record<never, never>>,
     'admin-taxonomy-tags': RouteRecordInfo<'admin-taxonomy-tags', '/admin/taxonomy/tags', Record<never, never>, Record<never, never>>,
+    'admin-visual-style-visual-styles-create': RouteRecordInfo<'admin-visual-style-visual-styles-create', '/admin/visual-style/visual-styles/create', Record<never, never>, Record<never, never>>,
+    'admin-visual-style-visual-styles-list': RouteRecordInfo<'admin-visual-style-visual-styles-list', '/admin/visual-style/visual-styles/list', Record<never, never>, Record<never, never>>,
     'admin-writing-style-writing-profiles-create': RouteRecordInfo<'admin-writing-style-writing-profiles-create', '/admin/writing-style/writing-profiles/create', Record<never, never>, Record<never, never>>,
     'admin-writing-style-writing-profiles-edit-id': RouteRecordInfo<'admin-writing-style-writing-profiles-edit-id', '/admin/writing-style/writing-profiles/edit/:id', { id: ParamValue<true> }, { id: ParamValue<false> }>,
     'admin-writing-style-writing-profiles-list': RouteRecordInfo<'admin-writing-style-writing-profiles-list', '/admin/writing-style/writing-profiles/list', Record<never, never>, Record<never, never>>,

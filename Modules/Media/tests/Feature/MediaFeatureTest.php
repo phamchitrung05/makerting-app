@@ -15,6 +15,7 @@ use Modules\Media\Contracts\MediaUsageServiceContract;
 use Modules\Media\DTOs\StoreGeneratedMediaDto;
 use Modules\Media\DTOs\MediaItemDto;
 use Modules\Media\Models\MediaAsset;
+use Modules\Media\Tests\Concerns\UsesIsolatedMediaDisks;
 use Modules\Media\Traits\HasThumbnail;
 use Modules\Media\Traits\HasGallery;
 use Modules\Media\Traits\HasVideoAsset;
@@ -27,15 +28,14 @@ use Tests\TestCase;
 class MediaFeatureTest extends TestCase
 {
     use RefreshDatabase;
+    use UsesIsolatedMediaDisks;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        // Fake 3 disk media để test không ghi rác vào storage/app/media thật.
-        Storage::fake('media_public');
-        Storage::fake('media_private');
-        Storage::fake('temp_processing');
+        // Disk fake cô lập cho từng test (tránh ghi thật & tránh xung đột thư mục trên Windows).
+        $this->setUpIsolatedMediaDisks();
 
         Schema::create('_test_posts', function (Blueprint $t) {
             $t->id(); $t->string('title'); $t->timestamps();
@@ -45,6 +45,7 @@ class MediaFeatureTest extends TestCase
     protected function tearDown(): void
     {
         Schema::dropIfExists('_test_posts');
+        $this->tearDownIsolatedMediaDisks();
         parent::tearDown();
     }
 
