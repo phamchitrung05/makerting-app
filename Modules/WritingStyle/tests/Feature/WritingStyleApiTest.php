@@ -1984,4 +1984,260 @@ class WritingStyleApiTest extends TestCase
 
         $res->assertForbidden();
     }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng cập nhật is_enabled không ghi đè status draft (Bug #1)
+     * =====================================================================
+     */
+    public function test_update_profile_preserves_draft_status_when_toggling_is_enabled_without_status(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+        $t = $this->token($u);
+
+        $profile = WritingProfile::create([
+            'name' => 'Hồ sơ nháp',
+            'dominant_tier' => 'medium',
+            'origin' => 'manual',
+            'status' => WritingProfile::STATUS_DRAFT,
+            'is_enabled' => false,
+            'rules_json' => ['tone' => 'ấm áp'],
+            'evidence_json' => [],
+        ]);
+
+        // Bật is_enabled mà không gửi status -> giữ nguyên draft.
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$profile->id}", [
+            'is_enabled' => true,
+        ], $t)
+            ->assertOk()
+            ->assertJsonPath('data.status', WritingProfile::STATUS_DRAFT)
+            ->assertJsonPath('data.is_enabled', true);
+
+        // Gửi status: null cũng không ghi null làm lỗi DB mà giữ nguyên status cũ.
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$profile->id}", [
+            'is_enabled' => false,
+            'status' => null,
+        ], $t)
+            ->assertOk()
+            ->assertJsonPath('data.status', WritingProfile::STATUS_DRAFT)
+            ->assertJsonPath('data.is_enabled', false);
+
+        // Chỉ đổi sang active khi gửi tường minh status='active'.
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$profile->id}", [
+            'status' => WritingProfile::STATUS_ACTIVE,
+            'is_enabled' => true,
+        ], $t)
+            ->assertOk()
+            ->assertJsonPath('data.status', WritingProfile::STATUS_ACTIVE)
+            ->assertJsonPath('data.is_enabled', true);
+
+        $fresh = $profile->fresh();
+        $this->assertSame(WritingProfile::STATUS_ACTIVE, $fresh->status);
+        $this->assertTrue($fresh->is_enabled);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng store() cho dùng chung analysis trong team nhưng chặn re-link analysis đã gắn hồ sơ (Bug #4)
+     * =====================================================================
+     */
+    public function test_store_allows_team_shared_analysis_and_blocks_relinking_already_linked_analysis(): void
+    {
+        $owner = $this->admin(['writing.evaluate', 'writing.profile.create']);
+        $teammate = $this->admin(['writing.profile.create']);
+
+        $analysis = WritingProfileAnalysis::create([
+            'created_by'     => $owner->id,
+            'name'           => 'Phân tích chung team',
+            'source_type'    => 'paste',
+            'reference_text' => 'Nhà em có mẫu thiệp cưới mới cho dâu rể xem.',
+            'status'         => 'succeeded',
+            'result_json'    => [
+                'detected_tier'      => 'short',
+                'rules_json'         => ['pronouns' => 'Xưng nhà em'],
+                'evidence_json'      => [],
+                'style_instructions' => 'Thân thiện, gần gũi.',
+                'metadata'           => ['word_count' => 11, 'sentence_count' => 1, 'detected_tier' => 'short'],
+            ],
+        ]);
+
+        // Thành viên khác trong team vẫn lưu profile từ analysis chưa gắn được.
+        $first = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'Profile Từ Đồng Nghiệp',
+            'analysis_id' => $analysis->id,
+            'rules_json'  => ['pronouns' => 'Xưng nhà em'],
+            'style_instructions' => 'Thân thiện, gần gũi.',
+        ], $this->token($teammate));
+
+        $first->assertCreated();
+        $firstId = (int) $first->json('data.id');
+        $this->assertSame($firstId, $analysis->fresh()->draft_profile_id);
+
+        // Gửi lại cùng analysis_id để tạo profile thứ 2 -> phải bị chặn 422, giữ nguyên hồ sơ cũ.
+        $duplicate = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'Profile Trùng Analysis',
+            'analysis_id' => $analysis->id,
+            'rules_json'  => ['pronouns' => 'Xưng nhà em'],
+            'style_instructions' => 'Thân thiện, gần gũi.',
+        ], $this->token($owner));
+
+        $duplicate->assertStatus(422)
+            ->assertJsonValidationErrors(['analysis_id']);
+
+        $this->assertSame(1, WritingProfile::count());
+        $this->assertSame($firstId, $analysis->fresh()->draft_profile_id);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng store() rollback toàn bộ transaction nếu bước gắn slug sau tạo profile bị lỗi (Bug #4)
+     * =====================================================================
+     */
+    public function test_store_rolls_back_profile_and_analysis_link_when_transaction_fails(): void
+    {
+        $u = $this->admin(['writing.profile.create']);
+
+        $analysis = WritingProfileAnalysis::create([
+            'created_by'     => $u->id,
+            'source_type'    => 'paste',
+            'reference_text' => 'Văn phong thử nghiệm transaction rollback.',
+            'status'         => 'succeeded',
+            'result_json'    => [
+                'detected_tier'      => 'short',
+                'rules_json'         => ['tone' => 'ấm áp'],
+                'evidence_json'      => [],
+                'style_instructions' => 'Ngắn gọn.',
+            ],
+        ]);
+
+        // Để bước create() sinh slug mặc định từ name chạy thật rồi chỉ ném lỗi ở bước syncSlugNow(preferredSlug).
+        $this->app->extend(
+            \Modules\Core\Contracts\SlugServiceContract::class,
+            fn (\Modules\Core\Contracts\SlugServiceContract $inner) => new class($inner) implements \Modules\Core\Contracts\SlugServiceContract {
+                public function __construct(private readonly \Modules\Core\Contracts\SlugServiceContract $inner) {}
+
+                public function syncForModel(\Illuminate\Database\Eloquent\Model $model, ?string $preferredSlug = null, ?string $locale = null): \Modules\Core\Models\Slug
+                {
+                    if ($preferredSlug === 'trigger-rollback') {
+                        throw new \RuntimeException('Simulated failure inside store transaction');
+                    }
+
+                    return $this->inner->syncForModel($model, $preferredSlug, $locale);
+                }
+
+                public function resolve(string $slug, string $sluggableType, ?string $locale = null): \Modules\Core\DTOs\SlugResolveResultDto
+                {
+                    return $this->inner->resolve($slug, $sluggableType, $locale);
+                }
+
+                public function preview(string $source, string $sluggableType, ?string $locale = null): string
+                {
+                    return $this->inner->preview($source, $sluggableType, $locale);
+                }
+
+                public function suggest(string $source, string $sluggableType, ?int $sluggableId = null, ?string $locale = null): array
+                {
+                    return $this->inner->suggest($source, $sluggableType, $sluggableId, $locale);
+                }
+            },
+        );
+
+        $res = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name'        => 'Rollback Profile',
+            'slug'        => 'trigger-rollback',
+            'analysis_id' => $analysis->id,
+            'rules_json'  => ['tone' => 'ấm áp'],
+            'style_instructions' => 'Ngắn gọn.',
+        ], $this->token($u));
+
+        $res->assertStatus(500);
+        $this->assertSame(0, WritingProfile::count());
+        $this->assertNull($analysis->fresh()->draft_profile_id);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng saveSample/deleteSample nạp lại dữ liệu fresh trong transaction để tránh mất sample khi lưu đồng thời (Bug #10)
+     * =====================================================================
+     */
+    public function test_sandbox_save_and_delete_sample_use_fresh_locked_profile_state(): void
+    {
+        $profile = WritingProfile::create([
+            'name' => 'Sandbox Concurrency',
+            'dominant_tier' => 'medium',
+            'origin' => 'manual',
+            'status' => 'active',
+            'is_enabled' => true,
+            'rules_json' => ['tone' => 'ấm áp'],
+            'evidence_json' => [],
+            'sandbox_samples_json' => [],
+        ]);
+
+        // Bản stale giữ snapshot [] trong bộ nhớ, giả lập 1 request khác đã kịp ghi S1 và S2 vào DB trước đó.
+        $staleModel = WritingProfile::findOrFail($profile->id);
+
+        WritingProfile::whereKey($profile->id)->update([
+            'sandbox_samples_json' => json_encode([
+                ['id' => 'sample-1', 'topic' => 'Chủ đề 1', 'text' => 'Bài 1'],
+                ['id' => 'sample-2', 'topic' => 'Chủ đề 2', 'text' => 'Bài 2'],
+            ], JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $controller = app(\Modules\WritingStyle\Http\Controllers\WritingSandboxController::class);
+
+        $saveRequest = \Illuminate\Http\Request::create('/sandbox-samples', 'POST', [
+            'topic' => 'Chủ đề 3',
+            'text' => 'Bài 3',
+        ]);
+        $controller->saveSample($saveRequest, $staleModel);
+
+        $afterSave = $profile->fresh()->sandbox_samples_json;
+        $this->assertCount(3, $afterSave);
+        $this->assertSame('Chủ đề 3', $afterSave[0]['topic']);
+        $this->assertSame('Chủ đề 1', $afterSave[1]['topic']);
+        $this->assertSame('Chủ đề 2', $afterSave[2]['topic']);
+
+        // Tiếp tục dùng lại staleModel cũ (vẫn đang nghĩ samples là []) để xóa sample-1 -> phải giữ nguyên sample-2 và sample-3.
+        $controller->deleteSample($staleModel, 'sample-1');
+
+        $afterDelete = $profile->fresh()->sandbox_samples_json;
+        $this->assertCount(2, $afterDelete);
+        $this->assertSame('Chủ đề 3', $afterDelete[0]['topic']);
+        $this->assertSame('Chủ đề 2', $afterDelete[1]['topic']);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng cập nhật tên hồ sơ không tự đổi slug trừ khi gửi slug mới
+     * =====================================================================
+     */
+    public function test_update_profile_name_preserves_existing_slug_unless_explicit_slug_sent(): void
+    {
+        $u = $this->admin(['writing.profile.create', 'writing.profile.view']);
+        $t = $this->token($u);
+
+        $created = $this->postJson('/api/v1/admin/writing-style/writing-profiles', [
+            'name' => 'Giọng Ban Đầu',
+            'slug' => 'slug-ban-dau',
+            'rules_json' => ['tone' => 'ấm áp'],
+        ], $t)->assertCreated();
+
+        $id = $created->json('data.id');
+        $this->assertSame('slug-ban-dau', $created->json('data.slug'));
+
+        // Chỉ sửa name -> slug phải giữ nguyên, không bị HasSlug tự sinh đè theo tên mới.
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$id}", [
+            'name' => 'Tên Mới Hoàn Toàn Khác',
+        ], $t)
+            ->assertOk()
+            ->assertJsonPath('data.name', 'Tên Mới Hoàn Toàn Khác')
+            ->assertJsonPath('data.slug', 'slug-ban-dau');
+
+        // Chỉ khi gửi slug tường minh thì slug mới được cập nhật.
+        $this->putJson("/api/v1/admin/writing-style/writing-profiles/{$id}", [
+            'slug' => 'slug-sua-truc-tiep',
+        ], $t)
+            ->assertOk()
+            ->assertJsonPath('data.slug', 'slug-sua-truc-tiep');
+    }
 }

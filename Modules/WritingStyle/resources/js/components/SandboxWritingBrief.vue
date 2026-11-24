@@ -17,6 +17,9 @@
   =====================================================================
 -->
 <script setup>
+import { computed } from 'vue'
+import { inspectCustomLength } from '../utils/sampleText'
+
 const brief = defineModel({ type: Object, required: true })
 
 const types = [
@@ -26,11 +29,37 @@ const types = [
   { value: 'technical_article', title: 'Bài kỹ thuật' },
   { value: 'blog', title: 'Blog' },
 ]
+
 const formatOptions = [
   { title: 'Theo hồ sơ', value: null },
   { title: 'Cho phép', value: true },
   { title: 'Không dùng', value: false },
 ]
+
+const lengthMeta = computed(() => inspectCustomLength(brief.value))
+const lengthMaxLimit = computed(() => lengthMeta.value.maxLimit)
+const lengthRangeWarning = computed(() => lengthMeta.value.error)
+
+const validateBoundField = (val, { isMax = false } = {}) => {
+  if (!brief.value?.lengthUnit || !lengthMeta.value.hasAnyBound) return true
+  if (val === '' || val === null || val === undefined) return 'Nhập số nguyên >= 1'
+
+  const num = Number(val)
+  if (!Number.isInteger(num) || num < 1) return 'Nhập số nguyên >= 1'
+  if (num > lengthMaxLimit.value) return `Tối đa ${lengthMaxLimit.value}`
+
+  if (isMax) {
+    const minVal = Number(brief.value?.lengthMin)
+    if (Number.isInteger(minVal) && minVal >= 1 && num < minVal) {
+      return 'Tối đa phải >= tối thiểu'
+    }
+  }
+
+  return true
+}
+
+const lengthMinRules = [v => validateBoundField(v)]
+const lengthMaxRules = [v => validateBoundField(v, { isMax: true })]
 </script>
 
 <template>
@@ -54,7 +83,7 @@ const formatOptions = [
             <AppTextarea v-model="brief.facts" label="Dữ kiện được cung cấp" placeholder="Mỗi dòng một dữ kiện, ví dụ giá, địa chỉ, chất liệu" rows="3" />
           </VCol>
           <VCol cols="12">
-            <AppTextarea v-model="brief.requiredDetails" label="Chi tiết bắt buộc xuất hiện" placeholder="Mỗi dòng một chi tiết có trong chủ đề, dữ kiện, ưu đãi hoặc CTA" rows="2" />
+            <AppTextarea v-model="brief.requiredDetails" label="Chi tiết bắt buộc xuất hiện" placeholder="Mỗi dòng một chi tiết hoặc từ khóa bắt buộc AI phải nhắc đến trong bài" rows="2" />
           </VCol>
           <VCol cols="12" md="6">
             <AppTextField v-model="brief.offer" label="Ưu đãi và điều kiện" />
@@ -72,10 +101,33 @@ const formatOptions = [
             <AppSelect v-model="brief.lengthUnit" :items="[{ title: 'Từ', value: 'words' }, { title: 'Câu', value: 'sentences' }]" label="Độ dài tùy chỉnh" clearable />
           </VCol>
           <VCol v-if="brief.lengthUnit" cols="6" md="4">
-            <AppTextField v-model="brief.lengthMin" label="Tối thiểu" type="number" min="1" />
+            <AppTextField
+              v-model="brief.lengthMin"
+              label="Tối thiểu"
+              type="number"
+              min="1"
+              :max="lengthMaxLimit"
+              :rules="lengthMinRules"
+            />
           </VCol>
           <VCol v-if="brief.lengthUnit" cols="6" md="4">
-            <AppTextField v-model="brief.lengthMax" label="Tối đa" type="number" min="1" />
+            <AppTextField
+              v-model="brief.lengthMax"
+              label="Tối đa"
+              type="number"
+              min="1"
+              :max="lengthMaxLimit"
+              :rules="lengthMaxRules"
+            />
+          </VCol>
+          <VCol v-if="lengthRangeWarning" cols="12">
+            <VAlert
+              type="warning"
+              variant="tonal"
+              density="compact"
+            >
+              {{ lengthRangeWarning }}
+            </VAlert>
           </VCol>
           <VCol cols="12">
             <AppTextarea v-model="brief.constraints" label="Yêu cầu thêm" placeholder="Mỗi dòng một yêu cầu" rows="2" />

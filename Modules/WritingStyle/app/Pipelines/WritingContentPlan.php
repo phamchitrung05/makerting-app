@@ -93,8 +93,15 @@ final class WritingContentPlan
      */
     public static function fingerprint(WritingProfileSnapshotDto $snapshot, WritingBrief $brief): string
     {
+        $stableProvenance = [
+            'prompt_version' => $snapshot->provenance['prompt_version'] ?? 3,
+            'schema_version' => $snapshot->provenance['schema_version'] ?? 'legacy',
+            'compiler_version' => $snapshot->provenance['compiler_version'] ?? 3,
+            'profile_id' => $snapshot->provenance['profile_id'] ?? $snapshot->profileId,
+        ];
+
         return hash('sha256', PromptPack::json([
-            'provenance' => $snapshot->provenance,
+            'provenance' => $stableProvenance,
             'tier' => $snapshot->targetTier,
             'style' => $snapshot->styleSummary,
             'brief' => $brief->data,

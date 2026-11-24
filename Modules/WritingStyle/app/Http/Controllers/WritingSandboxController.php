@@ -5,6 +5,7 @@ namespace Modules\WritingStyle\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Modules\Core\Http\Responses\BaseResponse;
 use Modules\WritingStyle\DTOs\WritingBrief;
@@ -219,7 +220,7 @@ class WritingSandboxController extends Controller
      * - Ghi sandbox_samples_json với brief, steps, artifacts, trạng thái, text và thời gian. Quyền writing.evaluate.
      *
      * EXCEPTION/TRANSACTION:
-     * - ValidationException hoặc lỗi DB. Không mở transaction hay giữ khóa cho chuỗi đọc-sửa-ghi.
+     * - ValidationException hoặc lỗi DB. Bọc DB::transaction kèm lockForUpdate() tránh mất sample khi lưu đồng thời.
      * =====================================================================
      */
     public function saveSample(Request $request, WritingProfile $writingProfile)
@@ -238,57 +239,69 @@ class WritingSandboxController extends Controller
             'system_prompt'      => ['nullable', 'string', 'max:'.($cfg['text_max'] ?? 50000)],
         ]);
 
-        $samples = is_array($writingProfile->sandbox_samples_json)
-            ? $writingProfile->sandbox_samples_json
-            : [];
-
-        $incomingId = isset($data['id']) && ! str_starts_with((string) $data['id'], 'local-')
-            ? (string) $data['id']
-            : (string) Str::uuid();
-
-        $existingIdx = null;
-        foreach ($samples as $idx => $item) {
-            if ((string) ($item['id'] ?? '') === $incomingId) {
-                $existingIdx = $idx;
-                break;
-            }
-        }
-
-        $newSample = [
-            'id'                 => $incomingId,
-            'topic'              => trim($data['topic']),
-            'brief'              => $data['brief'] ?? null,
-            'target_tier'        => $data['target_tier'] ?? $writingProfile->dominant_tier ?? 'medium',
-            'status'             => $data['status'] ?? (! empty($data['text']) ? 'completed' : 'in_progress'),
-            'current_step_index' => (int) ($data['current_step_index'] ?? 0),
-            'steps'              => $data['steps'] ?? [],
-            'artifacts'          => $data['artifacts'] ?? [],
-            'text'               => isset($data['text']) ? trim($data['text']) : '',
-            'system_prompt'      => isset($data['system_prompt']) ? trim($data['system_prompt']) : '',
-            'created_at'         => $existingIdx !== null
-                ? ($samples[$existingIdx]['created_at'] ?? now()->toISOString())
-                : now()->toISOString(),
-            'updated_at'         => now()->toISOString(),
-        ];
-
-        if ($existingIdx !== null) {
-            $samples[$existingIdx] = $newSample;
-        } else {
-            array_unshift($samples, $newSample);
-        }
-
-        // Giữ tối đa N bản viết thử gần nhất — đọc từ config để chỉnh không sửa code
         $maxSamples = (int) (config('writingstyle.brief.sandbox_samples.max_items') ?? 30);
-        $samples = array_slice(array_values($samples), 0, $maxSamples);
 
-        $writingProfile->update([
-            'sandbox_samples_json' => $samples,
-        ]);
+        $result = DB::transaction(function () use ($writingProfile, $data, $maxSamples) {
+            // Đọc lại bản ghi mới nhất kèm lockForUpdate() để tránh race condition
+            // ghi đè mất sample khi người dùng mở nhiều tab lưu song song.
+            $fresh = WritingProfile::query()
+                ->whereKey($writingProfile->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        return BaseResponse::success([
-            'sample'  => $newSample,
-            'samples' => $samples,
-        ], 'Đã lưu bản viết thử vào hồ sơ');
+            $samples = is_array($fresh->sandbox_samples_json)
+                ? $fresh->sandbox_samples_json
+                : [];
+
+            $incomingId = isset($data['id']) && ! str_starts_with((string) $data['id'], 'local-')
+                ? (string) $data['id']
+                : (string) Str::uuid();
+
+            $existingIdx = null;
+            foreach ($samples as $idx => $item) {
+                if ((string) ($item['id'] ?? '') === $incomingId) {
+                    $existingIdx = $idx;
+                    break;
+                }
+            }
+
+            $newSample = [
+                'id'                 => $incomingId,
+                'topic'              => trim($data['topic']),
+                'brief'              => $data['brief'] ?? null,
+                'target_tier'        => $data['target_tier'] ?? $fresh->dominant_tier ?? 'medium',
+                'status'             => $data['status'] ?? (! empty($data['text']) ? 'completed' : 'in_progress'),
+                'current_step_index' => (int) ($data['current_step_index'] ?? 0),
+                'steps'              => $data['steps'] ?? [],
+                'artifacts'          => $data['artifacts'] ?? [],
+                'text'               => isset($data['text']) ? trim($data['text']) : '',
+                'system_prompt'      => isset($data['system_prompt']) ? trim($data['system_prompt']) : '',
+                'created_at'         => $existingIdx !== null
+                    ? ($samples[$existingIdx]['created_at'] ?? now()->toISOString())
+                    : now()->toISOString(),
+                'updated_at'         => now()->toISOString(),
+            ];
+
+            if ($existingIdx !== null) {
+                $samples[$existingIdx] = $newSample;
+            } else {
+                array_unshift($samples, $newSample);
+            }
+
+            // Giữ tối đa N bản viết thử gần nhất — đọc từ config để chỉnh không sửa code.
+            $samples = array_slice(array_values($samples), 0, $maxSamples);
+
+            $fresh->update([
+                'sandbox_samples_json' => $samples,
+            ]);
+
+            return [
+                'sample'  => $newSample,
+                'samples' => $samples,
+            ];
+        });
+
+        return BaseResponse::success($result, 'Đã lưu bản viết thử vào hồ sơ');
     }
 
     /**
@@ -316,23 +329,32 @@ class WritingSandboxController extends Controller
      * - Ghi sandbox_samples_json, không báo lỗi nếu ID không có. Quyền writing.evaluate.
      *
      * EXCEPTION/TRANSACTION:
-     * - Lỗi DB truyền lên. Không mở transaction hoặc lock.
+     * - Lỗi DB truyền lên. Bọc DB::transaction kèm lockForUpdate() tránh mất dữ liệu khi xóa/lưu song song.
      * =====================================================================
      */
     public function deleteSample(WritingProfile $writingProfile, string $sampleId)
     {
-        $samples = is_array($writingProfile->sandbox_samples_json)
-            ? $writingProfile->sandbox_samples_json
-            : [];
+        $filtered = DB::transaction(function () use ($writingProfile, $sampleId) {
+            $fresh = WritingProfile::query()
+                ->whereKey($writingProfile->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        $filtered = array_values(array_filter(
-            $samples,
-            static fn ($item) => (string) ($item['id'] ?? '') !== $sampleId
-        ));
+            $samples = is_array($fresh->sandbox_samples_json)
+                ? $fresh->sandbox_samples_json
+                : [];
 
-        $writingProfile->update([
-            'sandbox_samples_json' => $filtered,
-        ]);
+            $filtered = array_values(array_filter(
+                $samples,
+                static fn ($item) => (string) ($item['id'] ?? '') !== $sampleId
+            ));
+
+            $fresh->update([
+                'sandbox_samples_json' => $filtered,
+            ]);
+
+            return $filtered;
+        });
 
         return BaseResponse::success([
             'samples' => $filtered,

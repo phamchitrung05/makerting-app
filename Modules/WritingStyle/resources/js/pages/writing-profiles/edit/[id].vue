@@ -75,9 +75,8 @@
   - buildRulesJsonPayload(): Tạo rules_json từ các ô đã sửa, giữ nguyên nội dung chưa đổi.
   - buildEvidenceJsonPayload(): Chuẩn bị bằng chứng trích dẫn cho payload lưu hồ sơ.
   - saveProfile(): Lưu form hồ sơ, DNA và baseline/preset slider qua PUT.
-  - runSlugSuggest(): Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại.
-  - onNameBlur(): Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên.
-  - onSlugBlur(): Kiểm tra và gợi ý slug từ ô slug khi mất focus.
+  - runSlugSuggest(): Chuẩn hóa và kiểm tra slug khả dụng theo nội dung ô slug.
+  - onSlugBlur(): Chuẩn hóa và kiểm tra slug từ ô slug khi mất focus.
   - onSlugInput(): Ghi nhận slug người dùng tự sửa để chỉ gửi trường này khi thay đổi.
   - updateAdvancedCardHeight(): Căn chiều cao panel nâng cao theo viewport và footer.
   - Computed: dominantTierMeta, VOICE_STYLE_OPTIONS, voiceStyleSelectItems, hasModifiedVoiceSliders, TONE_STYLE_OPTIONS, toneStyleSelectItems, hasModifiedToneSliders, usesPromptV3, currentTierPipelineSteps, activeSandboxSample.
@@ -97,7 +96,7 @@ import SlugField from '@modules/Core/resources/js/components/SlugField.vue'
 import TaxonomyField from '@modules/Taxonomy/resources/js/components/TaxonomyField.vue'
 import SandboxSampleDetailDialog from '../../../components/SandboxSampleDetailDialog.vue'
 import SandboxWritingBrief from '../../../components/SandboxWritingBrief.vue'
-import { mergeRuleEdits } from '../../../utils/sampleText.js'
+import { inspectCustomLength, mergeRuleEdits } from '../../../utils/sampleText'
 import { firstErrorMessage } from '@/utils/api'
 import { useWritingStyleStore } from '../../../stores/writingStyle'
 
@@ -120,6 +119,7 @@ const snack = reactive({ show: false, text: '', color: 'success' })
 const slugAvailable = ref(null)
 const slugTakenBy = ref(null)
 const slugDirty = ref(false) // user đã chỉnh slug tay -> chỉ gửi khi dirty
+let initialLoadedSlug = ''
 
 /* ---------------------------------------------------------------------
  * BANNER + TAB 1: TỔNG QUAN
@@ -131,6 +131,21 @@ const profileData = reactive({
   status: 'draft',
   shortDesc: '',        // description
   slug: '',
+})
+
+const statusSelectItems = [
+  { title: 'Bản nháp (Draft)', value: 'draft' },
+  { title: 'Hoạt động (Active)', value: 'active' },
+]
+
+const profileStatusMeta = computed(() => {
+  if (!profileData.isActive)
+    return { label: 'Đã lưu trữ', color: 'secondary' }
+
+  if (profileData.status === 'active')
+    return { label: 'Đang sử dụng', color: 'success' }
+
+  return { label: 'Bản nháp (Đang bật)', color: 'warning' }
 })
 
 const overviewForm = reactive({
@@ -787,8 +802,38 @@ const deletingSandboxSampleId = ref(null)
 const runningSampleStepId = ref(null)
 const expandedSamplePrompts = reactive({})
 const expandedSampleSteps = reactive({})
+const outlineApprovedIds = ref(new Set())
 const sandboxDetailDialogOpen = ref(false)
 const activeDialogSample = ref(null)
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Bật/tắt trạng thái đã duyệt dàn ý cho 1 bản viết thử
+ * =====================================================================
+ *
+ * INPUT:
+ * - sampleId (string), approved (boolean)
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật Set phản ứng outlineApprovedIds.
+ *
+ * EXCEPTION:
+ * - Không có.
+ * =====================================================================
+ */
+function setOutlineApproved(sampleId, approved) {
+  if (!sampleId) return
+  const next = new Set(outlineApprovedIds.value)
+  if (approved) {
+    next.add(sampleId)
+  } else {
+    next.delete(sampleId)
+  }
+  outlineApprovedIds.value = next
+}
 
 /**
  * =====================================================================
@@ -1020,6 +1065,42 @@ const toneSliders = reactive([
  * - Validation nghiệp vụ do backend xử lý.
  * =====================================================================
  */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra và chuẩn hóa khoảng độ dài tùy chỉnh của brief
+ * =====================================================================
+ *
+ * INPUT:
+ * - form (briefForm.value)
+ *
+ * OUTPUT:
+ * - string thông báo lỗi nếu user nhập dở dang/sai; '' nếu hợp lệ hoặc dùng preset
+ *
+ * SIDE EFFECT:
+ * - Không đổi state.
+ *
+ * EXCEPTION:
+ * - Không có.
+ * =====================================================================
+ */
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Đóng gói form sandbox thành brief V3 theo chủ đề
+ * =====================================================================
+ *
+ * INPUT:
+ * - topic
+ *
+ * OUTPUT:
+ * - Object brief chuẩn V3
+ *
+ * SIDE EFFECT:
+ * - Đọc dữ liệu từ briefForm.
+ *
+ * EXCEPTION:
+ * - Độ dài tùy chỉnh dùng inspectCustomLength() để không gửi min/max null.
+ * =====================================================================
+ */
 function buildSandboxBrief(topic) {
   const form = briefForm.value
   const lines = text => String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
@@ -1034,7 +1115,7 @@ function buildSandboxBrief(topic) {
     required_details: [...new Set(lines(form.requiredDetails))],
     offer: form.offer?.trim() || null,
     cta: form.cta?.trim() || null,
-    length: form.lengthUnit ? { unit: form.lengthUnit, min: form.lengthMin || null, max: form.lengthMax || null } : null,
+    length: inspectCustomLength(form).length,
     format: {
       ...(form.headings == null ? {} : { headings: form.headings }),
       ...(form.bullets == null ? {} : { bullets: form.bullets }),
@@ -1208,6 +1289,15 @@ async function runSandboxDemo() {
     return
   }
 
+  const { error: lengthErr } = inspectCustomLength(briefForm.value)
+  if (lengthErr) {
+    snack.text = lengthErr
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
   try {
     await store.fetchOptions()
     const targetTier = sandboxForm.targetTier || profile.value.dominant_tier || 'medium'
@@ -1251,18 +1341,21 @@ async function runSandboxDemo() {
     expandedSampleSteps[newSample.id] = true
 
     if (isTerminal) {
-      await persistSampleToDb(newSample, true)
-
-      snack.text = `Đã hoàn thành bài viết thử nghiệm ở cấp độ "${targetTier.toUpperCase()}"`
-      snack.color = 'success'
+      const persisted = await persistSampleToDb(newSample, true)
+      if (persisted) {
+        snack.text = `Đã hoàn thành bài viết thử nghiệm ở cấp độ "${targetTier.toUpperCase()}"`
+        snack.color = 'success'
+        snack.show = true
+      }
     } else {
       // Lưu ngay cả khi mới xong Bước 1 (đang in_progress) để F5 không bị mất tiến trình
-      await persistSampleToDb(newSample, true)
-
-      snack.text = `Đã tạo và lưu bản ghi ở Bước 1/${steps.length} (${cleanStepLabel(firstStep)}). Bấm nút tiếp tục trên bản ghi để qua bước kế tiếp!`
-      snack.color = 'info'
+      const persisted = await persistSampleToDb(newSample, true)
+      if (persisted) {
+        snack.text = `Đã tạo và lưu bản ghi ở Bước 1/${steps.length} (${cleanStepLabel(firstStep)}). Xem & duyệt dàn ý trước khi qua bước kế tiếp!`
+        snack.color = 'info'
+        snack.show = true
+      }
     }
-    snack.show = true
   } catch (e) {
     snack.text = firstErrorMessage(e)
     snack.color = 'error'
@@ -1297,11 +1390,32 @@ async function runSandboxDemo() {
  * - Bắt lỗi API và giải phóng runningSampleStepId trong finally.
  * =====================================================================
  */
-async function runNextSandboxStep(sample) {
+function isStaleOutlineError(error) {
+  return /Dàn ý đã cũ|khác phiên bản/i.test(firstErrorMessage(error))
+}
+
+async function runNextSandboxStep(sample, { approveOutline = false } = {}) {
   if (!profile.value?.id || !sample) return
 
   const nextIdx = sample.current_step_index + 1
   if (nextIdx >= sample.steps.length) return
+
+  const hasTopicOutline = Boolean(sample.artifacts?.topic_outline)
+  if (hasTopicOutline && approveOutline) {
+    setOutlineApproved(sample.id, true)
+  }
+
+  const outlineApproved = hasTopicOutline
+    ? (approveOutline || outlineApprovedIds.value.has(sample.id))
+    : false
+
+  if (hasTopicOutline && !outlineApproved) {
+    snack.text = 'Vui lòng tick xác nhận đã duyệt dàn ý (hoặc duyệt trong dialog) trước khi tiếp tục.'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
 
   const nextStep = sample.steps[nextIdx]
   const overrides = buildCurrentSandboxOverrides()
@@ -1313,7 +1427,7 @@ async function runNextSandboxStep(sample) {
       brief: sample.brief,
       target_tier: sample.target_tier,
       artifacts: sample.artifacts || {},
-      outline_approved: Boolean(sample.artifacts?.topic_outline),
+      outline_approved: outlineApproved,
       ...overrides,
     })
 
@@ -1332,19 +1446,30 @@ async function runNextSandboxStep(sample) {
       sample.system_prompt = artifact.system_prompt || artifact.snapshot?.system_prompt || ''
 
       // Lưu bản hoàn thành vào DB
-      await persistSampleToDb(sample, true)
-
-      snack.text = `Hoàn thành toàn bộ ${sample.steps.length}/${sample.steps.length} bước — Đã sinh bài văn hoàn chỉnh!`
-      snack.color = 'success'
+      const persisted = await persistSampleToDb(sample, true)
+      if (persisted) {
+        snack.text = `Hoàn thành toàn bộ ${sample.steps.length}/${sample.steps.length} bước — Đã sinh bài văn hoàn chỉnh!`
+        snack.color = 'success'
+        snack.show = true
+      }
     } else {
       // Cập nhật tiến trình bước trung gian vào DB
-      await persistSampleToDb(sample, true)
-
-      snack.text = `Đã hoàn tất Bước ${nextIdx + 1}/${sample.steps.length} (${cleanStepLabel(nextStep)}). Hãy bấm tiếp tục để sang bước kế tiếp!`
-      snack.color = 'info'
+      const persisted = await persistSampleToDb(sample, true)
+      if (persisted) {
+        snack.text = `Đã hoàn tất Bước ${nextIdx + 1}/${sample.steps.length} (${cleanStepLabel(nextStep)}). Hãy bấm tiếp tục để sang bước kế tiếp!`
+        snack.color = 'info'
+        snack.show = true
+      }
     }
-    snack.show = true
   } catch (e) {
+    if (isStaleOutlineError(e) && sample.artifacts?.topic_outline) {
+      await executeRefreshSandboxOutline(sample, {
+        customNotice: 'Đã lập lại dàn ý theo style hiện tại — kiểm tra rồi bấm tiếp tục',
+      })
+
+      return
+    }
+
     snack.text = firstErrorMessage(e)
     snack.color = 'error'
     snack.show = true
@@ -1371,9 +1496,7 @@ async function runNextSandboxStep(sample) {
  * - Bắt lỗi API qua firstErrorMessage và giải phóng loading trong finally.
  * =====================================================================
  */
-async function refreshSandboxOutline(sample) {
-  if (!profile.value?.id || runningSampleStepId.value) return
-
+async function executeRefreshSandboxOutline(sample, { customNotice = null } = {}) {
   runningSampleStepId.value = sample.id
   try {
     const res = await store.runSandboxStep(profile.value.id, 'topic_outline', {
@@ -1385,7 +1508,17 @@ async function refreshSandboxOutline(sample) {
 
     sample.artifacts = { topic_outline: res.artifact }
     sample.current_step_index = 0
-    await persistSampleToDb(sample)
+    sample.status = 'in_progress'
+    sample.text = ''
+    setOutlineApproved(sample.id, false)
+
+    const persisted = await persistSampleToDb(sample, Boolean(customNotice))
+
+    if (customNotice && persisted) {
+      snack.text = customNotice
+      snack.color = 'warning'
+      snack.show = true
+    }
   } catch (error) {
     snack.text = firstErrorMessage(error)
     snack.color = 'error'
@@ -1393,6 +1526,12 @@ async function refreshSandboxOutline(sample) {
   } finally {
     runningSampleStepId.value = null
   }
+}
+
+async function refreshSandboxOutline(sample) {
+  if (!profile.value?.id || !sample || runningSampleStepId.value) return
+
+  await executeRefreshSandboxOutline(sample)
 }
 
 /**
@@ -1413,17 +1552,17 @@ async function refreshSandboxOutline(sample) {
  * - sample, silent = false
  *
  * OUTPUT:
- * - Promise<void>
+ * - Promise<boolean> — true nếu lưu thành công, false nếu lỗi/thiếu dữ liệu
  *
  * SIDE EFFECT:
  * - Gọi saveSandboxSample, cập nhật ID và cờ lưu; gửi cả brief/steps/artifacts.
  *
  * EXCEPTION:
- * - Bắt lỗi; chỉ hiển thị snackbar khi silent=false. Luôn giải phóng cờ đang lưu.
+ * - Bắt lỗi và luôn hiển thị snackbar error (kể cả khi silent=true để tránh mất dữ liệu âm thầm).
  * =====================================================================
  */
 async function persistSampleToDb(sample, silent = false) {
-  if (!profile.value?.id || !sample) return
+  if (!profile.value?.id || !sample) return false
 
   savingSampleId.value = sample.id
   savingSandboxSample.value = true
@@ -1449,6 +1588,10 @@ async function persistSampleToDb(sample, silent = false) {
       if (expandedSampleSteps[oldId]) {
         expandedSampleSteps[sample.id] = true
       }
+      if (oldId !== sample.id && outlineApprovedIds.value.has(oldId)) {
+        setOutlineApproved(oldId, false)
+        setOutlineApproved(sample.id, true)
+      }
     } else {
       sample.saved_to_db = true
     }
@@ -1458,12 +1601,18 @@ async function persistSampleToDb(sample, silent = false) {
       snack.color = 'success'
       snack.show = true
     }
+
+    return true
   } catch (e) {
-    if (!silent) {
-      snack.text = firstErrorMessage(e)
-      snack.color = 'error'
-      snack.show = true
-    }
+    const detail = firstErrorMessage(e)
+
+    snack.text = silent
+      ? `Không lưu được bản viết thử vào hồ sơ — dữ liệu sẽ mất khi tải lại trang (${detail})`
+      : detail
+    snack.color = 'error'
+    snack.show = true
+
+    return false
   } finally {
     savingSampleId.value = null
     savingSandboxSample.value = false
@@ -1777,6 +1926,7 @@ function applyProfileToForm(p) {
   profileData.status = p.status ?? 'draft'
   profileData.shortDesc = p.description ?? ''
   profileData.slug = p.slug ?? ''
+  initialLoadedSlug = p.slug ?? ''
   slugDirty.value = false
 
   advancedConfig.systemPrompt = p.style_instructions ?? ''
@@ -2041,6 +2191,11 @@ async function saveProfile() {
     return
   }
 
+  const rawSlug = String(profileData.slug ?? '').trim()
+  if (rawSlug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rawSlug)) {
+    await runSlugSuggest(rawSlug)
+  }
+
   const voiceSlidersPayload = Object.fromEntries(
     voiceTextureSliders.map(s => [s.key, s.value ?? null]),
   )
@@ -2067,7 +2222,7 @@ async function saveProfile() {
       tone_presets: [...selectedToneOptionIds.value],
     },
     temperature: Number(advancedConfig.temperature),
-    status: profileData.isActive ? 'active' : 'draft',
+    status: profileData.status || 'draft',
     is_enabled: Boolean(profileData.isActive),
 
     // Taxonomy — TaxonomyField v-model đã chuẩn hóa: categories = id[],
@@ -2102,7 +2257,7 @@ async function saveProfile() {
 /* Slug — blur ô name/slug gọi suggest, loại trừ chính id này. */
 /**
  * =====================================================================
- * CHỨC NĂNG: Xin slug khả dụng theo nguồn nhập và ID hồ sơ hiện tại
+ * CHỨC NĂNG: Chuẩn hóa và kiểm tra slug khả dụng theo nội dung người dùng sửa
  * =====================================================================
  *
  * INPUT:
@@ -2112,7 +2267,7 @@ async function saveProfile() {
  * - Promise<void>
  *
  * SIDE EFFECT:
- * - Gọi suggestSlug, cập nhật slug/available/takenBy nếu có response.
+ * - Gọi suggestSlug, chuẩn hóa profileData.slug, đồng bộ slugDirty và available/takenBy.
  *
  * EXCEPTION:
  * - Bắt lỗi và đặt trạng thái kiểm tra về null.
@@ -2120,7 +2275,12 @@ async function saveProfile() {
  */
 async function runSlugSuggest(source) {
   const src = String(source ?? '').trim()
-  if (!src) return
+  if (!src) {
+    slugAvailable.value = null
+    slugTakenBy.value = null
+
+    return
+  }
 
   try {
     const res = await store.suggestSlug({
@@ -2130,7 +2290,10 @@ async function runSlugSuggest(source) {
     })
 
     if (!res) return
-    if (res?.slug) profileData.slug = res.slug
+    if (res?.slug) {
+      profileData.slug = res.slug
+      slugDirty.value = profileData.slug !== initialLoadedSlug
+    }
     slugAvailable.value = res?.available ?? null
     slugTakenBy.value = res?.taken_by ?? null
   } catch {
@@ -2141,42 +2304,25 @@ async function runSlugSuggest(source) {
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Gợi ý slug từ tên hồ sơ khi người dùng rời ô tên
+ * CHỨC NĂNG: Chuẩn hóa và kiểm tra slug khi người dùng rời ô slug
  * =====================================================================
  *
  * INPUT:
- * - ) { runSlugSuggest(profileData.name
+ * - Không có tham số.
  *
  * OUTPUT:
  * - void
  *
  * SIDE EFFECT:
- * - Gọi bất đồng bộ runSlugSuggest để cập nhật trạng thái slug.
+ * - Gọi bất đồng bộ runSlugSuggest để chuẩn hóa dấu/khoảng trắng và kiểm tra trùng.
  *
  * EXCEPTION:
  * - Lỗi API do runSlugSuggest xử lý.
  * =====================================================================
  */
-function onNameBlur() { runSlugSuggest(profileData.name) }
-/**
- * =====================================================================
- * CHỨC NĂNG: Kiểm tra và gợi ý slug từ ô slug khi mất focus
- * =====================================================================
- *
- * INPUT:
- * - ) { runSlugSuggest(profileData.slug
- *
- * OUTPUT:
- * - void
- *
- * SIDE EFFECT:
- * - Gọi bất đồng bộ runSlugSuggest.
- *
- * EXCEPTION:
- * - Lỗi API do runSlugSuggest xử lý.
- * =====================================================================
- */
-function onSlugBlur() { runSlugSuggest(profileData.slug) }
+function onSlugBlur() {
+  runSlugSuggest(profileData.slug)
+}
 
 /* SlugField update → đánh dấu dirty để chỉ gửi khi đổi. */
 /**
@@ -2473,11 +2619,11 @@ onBeforeUnmount(() => {
                   </VChip>
                   <VChip
                     size="small"
-                    :color="profileData.isActive ? 'success' : 'secondary'"
+                    :color="profileStatusMeta.color"
                     variant="tonal"
                     label
                   >
-                    {{ profileData.isActive ? 'Đang sử dụng' : 'Nháp / Lưu trữ' }}
+                    {{ profileStatusMeta.label }}
                   </VChip>
                   <VChip
                     size="small"
@@ -2551,17 +2697,26 @@ onBeforeUnmount(() => {
                   <VRow>
                     <VCol
                       cols="12"
-                      sm="8"
+                      sm="6"
                     >
                       <AppTextField
                         v-model="profileData.name"
                         label="Tên Writing Profile *"
-                        @blur="onNameBlur"
                       />
                     </VCol>
                     <VCol
-                      cols="12"
-                      sm="4"
+                      cols="6"
+                      sm="3"
+                    >
+                      <AppSelect
+                        v-model="profileData.status"
+                        :items="statusSelectItems"
+                        label="Trạng thái"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="6"
+                      sm="3"
                     >
                       <AppTextField
                         :model-value="profileData.version"
@@ -2575,7 +2730,7 @@ onBeforeUnmount(() => {
                         v-model="profileData.slug"
                         label="Slug định danh"
                         placeholder="vd: giong-chuyen-gia-ky-thuat"
-                        hint="Blur ô tên hoặc ô slug để gợi ý slug khả dụng"
+                        hint="Sửa trực tiếp slug và rời ô để chuẩn hóa và kiểm tra khả dụng"
                         persistent-hint
                         :suggesting="store.slugSuggesting"
                         :available="slugAvailable"
@@ -4166,6 +4321,17 @@ onBeforeUnmount(() => {
                             {{ cleanStepLabel(sample.steps?.[sample.current_step_index ?? 0]) }}
                           </VChip>
 
+                          <VChip
+                            v-if="!sample.saved_to_db"
+                            size="x-small"
+                            color="error"
+                            variant="tonal"
+                            label
+                            prepend-icon="tabler-cloud-off"
+                          >
+                            Chưa lưu DB
+                          </VChip>
+
                           <span
                             v-if="sample.created_at"
                             class="text-caption text-disabled"
@@ -4187,7 +4353,7 @@ onBeforeUnmount(() => {
                           </VBtn>
 
                           <VBtn
-                            v-if="sample.status === 'completed' && !sample.saved_to_db"
+                            v-if="!sample.saved_to_db"
                             variant="tonal"
                             color="success"
                             size="x-small"
@@ -4255,50 +4421,108 @@ onBeforeUnmount(() => {
                         </template>
                       </div>
 
-                      <!-- 3. NÚT BẤM CHUYỂN SANG BƯỚC PHÂN TÍCH TIẾP THEO / VIẾT VĂN CUỐI CÙNG (KHI ĐANG IN_PROGRESS) -->
+                      <!-- 3. XEM/DUYỆT DÀN Ý + NÚT CHUYỂN SANG BƯỚC KẾ TIẾP (KHI ĐANG IN_PROGRESS) -->
                       <div
                         v-if="sample.status !== 'completed' && sample.steps && sample.current_step_index + 1 < sample.steps.length"
-                        class="pa-3 rounded border border-dashed d-flex align-center justify-space-between flex-wrap gap-3 bg-var-theme-background"
+                        class="pa-3 rounded border border-dashed d-flex flex-column gap-3 bg-var-theme-background"
                       >
-                        <div class="d-flex align-center gap-2">
-                          <VAvatar
-                            color="primary"
-                            variant="tonal"
-                            size="32"
-                            rounded
-                          >
-                            <VIcon
-                              :icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-arrow-right'"
-                              size="18"
-                            />
-                          </VAvatar>
-                          <div>
-                            <div class="text-body-2 font-weight-bold text-high-emphasis">
-                              Sẵn sàng cho Bước {{ sample.current_step_index + 2 }}/{{ sample.steps.length }}:
-                              {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
-                            </div>
-                            <div class="text-caption text-medium-emphasis">
-                              {{ sample.steps[sample.current_step_index + 1]?.description || 'Sử dụng kết quả phân tích ở bước trước kết hợp với DNA văn phong để xử lý bước tiếp theo.' }}
+                        <div
+                          v-if="sample.artifacts?.topic_outline?.sections?.length"
+                          class="pa-3 rounded border bg-surface"
+                        >
+                          <div class="text-caption font-weight-bold text-high-emphasis mb-2">
+                            Dàn ý đề xuất ({{ sample.artifacts.topic_outline.sections.length }} mục)
+                          </div>
+                          <div class="d-flex flex-column gap-2">
+                            <div
+                              v-for="(sec, secIdx) in sample.artifacts.topic_outline.sections"
+                              :key="sec.id || secIdx"
+                              class="text-caption"
+                            >
+                              <div class="font-weight-medium text-high-emphasis">
+                                {{ secIdx + 1 }}. {{ sec.title }}
+                              </div>
+                              <ul
+                                v-if="sec.key_points?.length"
+                                class="ps-4 mt-1 text-medium-emphasis"
+                              >
+                                <li
+                                  v-for="(kp, kpIdx) in sec.key_points"
+                                  :key="kpIdx"
+                                >
+                                  {{ kp }}
+                                </li>
+                              </ul>
                             </div>
                           </div>
                         </div>
 
-                        <VBtn
-                          color="primary"
-                          variant="flat"
-                          size="small"
-                          :prepend-icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-player-track-next'"
-                          :loading="runningSampleStepId === sample.id"
-                          :disabled="Boolean(runningSampleStepId)"
-                          @click="runNextSandboxStep(sample)"
-                        >
-                          <template v-if="sample.steps[sample.current_step_index + 1]?.is_terminal">
-                            Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }} (Viết văn hoàn chỉnh)
-                          </template>
-                          <template v-else>
-                            Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }}: {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
-                          </template>
-                        </VBtn>
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                          <div class="d-flex align-center gap-2">
+                            <VAvatar
+                              color="primary"
+                              variant="tonal"
+                              size="32"
+                              rounded
+                            >
+                              <VIcon
+                                :icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-arrow-right'"
+                                size="18"
+                              />
+                            </VAvatar>
+                            <div>
+                              <div class="text-body-2 font-weight-bold text-high-emphasis">
+                                Sẵn sàng cho Bước {{ sample.current_step_index + 2 }}/{{ sample.steps.length }}:
+                                {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
+                              </div>
+                              <div class="text-caption text-medium-emphasis">
+                                {{ sample.steps[sample.current_step_index + 1]?.description || 'Sử dụng kết quả phân tích ở bước trước kết hợp với DNA văn phong để xử lý bước tiếp theo.' }}
+                              </div>
+                              <VCheckbox
+                                v-if="sample.artifacts?.topic_outline"
+                                :model-value="outlineApprovedIds.has(sample.id)"
+                                label="Tôi đã duyệt dàn ý này"
+                                density="compact"
+                                color="primary"
+                                hide-details
+                                class="mt-1"
+                                @update:model-value="v => setOutlineApproved(sample.id, Boolean(v))"
+                              />
+                            </div>
+                          </div>
+
+                          <div class="d-flex align-center gap-2 flex-wrap">
+                            <VBtn
+                              v-if="sample.steps.length > 1 && sample.artifacts?.topic_outline"
+                              variant="tonal"
+                              color="secondary"
+                              size="small"
+                              prepend-icon="tabler-refresh"
+                              :loading="runningSampleStepId === sample.id"
+                              :disabled="Boolean(runningSampleStepId)"
+                              @click="refreshSandboxOutline(sample)"
+                            >
+                              Lập lại dàn ý
+                            </VBtn>
+
+                            <VBtn
+                              color="primary"
+                              variant="flat"
+                              size="small"
+                              :prepend-icon="sample.steps[sample.current_step_index + 1]?.is_terminal ? 'tabler-writing' : 'tabler-player-track-next'"
+                              :loading="runningSampleStepId === sample.id"
+                              :disabled="Boolean(runningSampleStepId) || (Boolean(sample.artifacts?.topic_outline) && !outlineApprovedIds.has(sample.id))"
+                              @click="runNextSandboxStep(sample)"
+                            >
+                              <template v-if="sample.steps[sample.current_step_index + 1]?.is_terminal">
+                                Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }} (Viết văn hoàn chỉnh)
+                              </template>
+                              <template v-else>
+                                Tiếp tục phân tích lần thứ {{ sample.current_step_index + 2 }}: {{ cleanStepLabel(sample.steps[sample.current_step_index + 1]) }}
+                              </template>
+                            </VBtn>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -4618,7 +4842,7 @@ onBeforeUnmount(() => {
       :sample="activeDialogSample"
       :profile="profile"
       :running-step="Boolean(runningSampleStepId)"
-      @run-next-step="runNextSandboxStep"
+      @run-next-step="s => runNextSandboxStep(s, { approveOutline: Boolean(s?.artifacts?.topic_outline) })"
       @refresh-outline="refreshSandboxOutline"
       @copy-text="txt => copyText(txt, 'Đã sao chép nội dung')"
     />

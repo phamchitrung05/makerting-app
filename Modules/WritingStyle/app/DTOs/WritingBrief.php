@@ -224,6 +224,10 @@ final readonly class WritingBrief
 
         $facts = array_map(static fn (array $fact) => ['id' => $fact['id'], 'text' => $fact['text'], 'source' => 'user'], array_values($input['provided_facts'] ?? []));
         usort($facts, static fn (array $a, array $b) => strcmp($a['id'], $b['id']));
+        $requiredDetails = array_values(array_filter(
+            array_map(static fn ($detail) => trim((string) $detail), $input['required_details'] ?? []),
+            static fn (string $detail) => $detail !== '',
+        ));
         $data = [
             'topic' => $topic,
             'platform' => $input['platform'] ?? null,
@@ -231,7 +235,7 @@ final readonly class WritingBrief
             'audience' => $input['audience'] ?? null,
             'objective' => $input['objective'] ?? null,
             'provided_facts' => $facts,
-            'required_details' => array_values($input['required_details'] ?? []),
+            'required_details' => $requiredDetails,
             'offer' => $input['offer'] ?? null,
             'cta' => $input['cta'] ?? null,
             'length' => $length,
@@ -241,18 +245,9 @@ final readonly class WritingBrief
             ], static fn ($value) => $value !== null),
             'constraints' => array_values($input['constraints'] ?? []),
         ];
+        // Chỉ kiểm tra required_fields; required_details cho phép người dùng tự khai báo
+        // trực tiếp mà không bắt buộc phải trùng trước trong facts/offer/cta.
         $missing = array_values(array_filter($input['required_fields'] ?? [], static fn (string $key) => blank($data[$key] ?? null)));
-        // $supplied = nội dung "có" — gồm topic + offer + cta + text facts +
-        // required_details (chi tiết người dùng khai báo bắt buộc xuất hiện
-        // trong bài). Cho phép người dùng gõ thêm chi tiết mới trực tiếp
-        // ở ô "Chi tiết bắt buộc xuất hiện" thay vì chỉ khóa lại chi tiết
-        // đã nêu ở facts/offer/cta.
-        $supplied = implode("\n", [$topic, $data['offer'] ?? '', $data['cta'] ?? '', ...array_column($facts, 'text'), ...$data['required_details']]);
-        foreach ($data['required_details'] as $detail) {
-            if (mb_stripos($supplied, $detail) === false) {
-                $missing[] = $detail;
-            }
-        }
         if ($missing !== []) {
             throw ValidationException::withMessages(['missing_fields' => $missing]);
         }

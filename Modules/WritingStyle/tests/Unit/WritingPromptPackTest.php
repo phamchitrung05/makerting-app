@@ -35,7 +35,8 @@ use Tests\TestCase;
  * - test_large_analysis_budget_does_not_relax_other_requests(): Trần analyzer
  *   cao hơn không làm nới giới hạn chung của brief/planner/writer.
  * - test_compiler_preserves_signature_and_honors_explicit_removal(): Kiểm chứng compiler giữ dấu ấn, xóa chỉ dẫn theo null và áp dụng brief.
- * - test_brief_rejects_required_information_absent_from_provided_facts(): Kiểm chứng brief từ chối chi tiết bắt buộc chưa được cung cấp.
+ * - test_brief_accepts_required_details_as_new_declared_details(): Kiểm chứng required_details cho phép tự khai báo mới và lọc chuỗi rỗng.
+ * - test_brief_still_rejects_missing_required_fields(): Kiểm chứng required_fields vẫn báo lỗi missing_fields khi thiếu trường brief.
  * - test_plan_rejects_unknown_fact_references(): Kiểm chứng dàn ý từ chối fact ID ngoài brief.
  * - test_long_pipeline_passes_style_to_planner_and_rejects_stale_plan_before_writing(): Kiểm chứng planner nhận văn phong, writer nhận dàn ý và từ chối dàn ý cũ.
  * - test_writer_reports_length_format_and_missing_cta(): Kiểm chứng báo cáo nhận ra sai độ dài, headings bị cấm và CTA thiếu.
@@ -278,24 +279,6 @@ class WritingPromptPackTest extends TestCase
 
     /**
      * =====================================================================
-     * CHỨC NĂNG: Kiểm chứng brief từ chối chi tiết bắt buộc chưa được cung cấp
-     * =====================================================================
-     *
-     * INPUT:
-     * - Không có tham số; sử dụng state hoặc config của lớp.
-     *
-     * OUTPUT:
-     * - void; mong đợi ValidationException
-     *
-     * SIDE EFFECT:
-     * - Thiết lập fixture/mock và chạy assertions; feature test có thể tạo dữ liệu trong DB kiểm thử.
-     *
-     * EXCEPTION/TRANSACTION:
-     * - AssertionFailedError khi hành vi khác kỳ vọng; transaction DB do RefreshDatabase quản lý khi trait được dùng.
-     * =====================================================================
-     */
-    /**
-     * =====================================================================
      * CHỨC NĂNG: Kiểm chứng required_details được chấp nhận khi đã nêu trong
      * các nguồn khác (topic/offer/cta/facts) hoặc tự khai báo ở chính ô đó.
      * =====================================================================
@@ -303,16 +286,16 @@ class WritingPromptPackTest extends TestCase
      * Trước: required_details phải xuất hiện trong nguồn khác — gõ mới ở ô
      * "Chi tiết bắt buộc xuất hiện" bị missing_fields. Sau: người dùng có
      * thể tự khai báo chi tiết mới trực tiếp qua ô đó (writer được lệnh
-     * chêm vào bài), nên trường hợp này giờ hợp lệ.
+     * chêm vào bài), nên trường hợp này giờ hợp lệ; dòng trống bị bỏ qua.
      * =====================================================================
      */
     public function test_brief_accepts_required_details_as_new_declared_details(): void
     {
-        // Chi tiết chưa nêu ở đâu khác — người dùng tự khai báo.
-        $brief = WritingBrief::fromInput('Thiệp cưới', 'short', ['brief' => ['required_details' => ['Malibu Print']]]);
+        // Chi tiết chưa nêu ở đâu khác — người dùng tự khai báo (bỏ khoảng trắng/rỗng).
+        $brief = WritingBrief::fromInput('Thiệp cưới', 'short', ['brief' => ['required_details' => ['  Malibu Print ', '   ']]]);
         $this->assertSame(['Malibu Print'], $brief->data['required_details']);
 
-        // Chi tiết đã nêu ở provided_facts — vẫn hợp lệ (giữ hành vi cũ).
+        // Chi tiết đã nêu ở provided_facts — vẫn hợp lệ.
         $brief = WritingBrief::fromInput('Thiệp cưới', 'short', [
             'brief' => [
                 'provided_facts' => [['id' => 'f1', 'text' => 'Có dịch vụ Malibu Print']],
@@ -320,6 +303,27 @@ class WritingPromptPackTest extends TestCase
             ],
         ]);
         $this->assertSame(['Malibu Print'], $brief->data['required_details']);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng required_fields vẫn báo lỗi missing_fields khi bỏ dead code required_details (Bug #5)
+     * =====================================================================
+     */
+    public function test_brief_still_rejects_missing_required_fields(): void
+    {
+        try {
+            WritingBrief::fromInput('Thiệp cưới', 'short', [
+                'brief' => [
+                    'required_fields' => ['offer'],
+                    'required_details' => ['Malibu Print'],
+                ],
+            ]);
+            $this->fail('Kỳ vọng ValidationException khi thiếu field trong required_fields.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('missing_fields', $e->errors());
+            $this->assertSame(['offer'], $e->errors()['missing_fields']);
+        }
     }
 
     /**
@@ -416,6 +420,53 @@ class WritingPromptPackTest extends TestCase
         $this->assertSame(mb_substr($plan['missing_fields'][0], 0, 500), $validated['missing_fields'][0]);
         $this->assertSame(mb_substr($plan['evidence_requests'][0], 0, 500), $validated['evidence_requests'][0]);
         $this->assertSame(mb_substr($plan['warnings'][0], 0, 500), $validated['warnings'][0]);
+    }
+
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Kiểm chứng fingerprint bỏ qua tăng version do metadata nhưng vẫn chặn khi style đổi (Bug #2)
+     * =====================================================================
+     */
+    public function test_outline_fingerprint_ignores_profile_version_bump_and_detects_style_changes(): void
+    {
+        $ai = $this->mock(CoreAiGatewayContract::class);
+        $ai->shouldReceive('lastRun')->andReturn(null);
+        $ai->shouldReceive('executeStructured')->once()->withArgs(
+            fn (AiStructuredRequest $r): bool => $r->operation === 'sandbox_step_topic_outline_v3',
+        )->andReturn(new AiStructuredResponse(text: '', data: $this->plan()));
+        $ai->shouldReceive('executeStructured')->once()->withArgs(
+            fn (AiStructuredRequest $r): bool => $r->operation === 'sandbox_step_article_writer_v3',
+        )->andReturn(new AiStructuredResponse(text: 'Dâu rể ơi, nhà em có mẫu thiệp mới. Inbox để xem mẫu.'));
+
+        $profile = new WritingProfile([
+            'name' => 'Hồ sơ gốc',
+            'description' => 'Mô tả ban đầu',
+            'rules_json' => ['pronouns' => 'Xưng nhà em'],
+            'style_instructions' => 'Ngắn gọn và thân thiện',
+        ]);
+        $profile->id = 42;
+        $profile->version = 1;
+
+        $runner = app(SandboxPipelineRunner::class);
+        $overrides = ['brief' => $this->brief(), 'temperature' => 0];
+
+        $outlineResult = $runner->runStep($profile, 'long', 'topic_outline', 'Thiệp cưới', overrides: $overrides);
+        $outline = $outlineResult['artifact'];
+
+        // Sửa metadata (tên/mô tả) làm tăng profile version nhưng không đổi style -> fingerprint vẫn hợp lệ.
+        $profile->name = 'Hồ sơ đã đổi tên';
+        $profile->description = 'Mô tả đã cập nhật';
+        $profile->version = 2;
+
+        $overrides['outline_approved'] = true;
+        $written = $runner->runStep($profile, 'long', 'article_writer', 'Thiệp cưới', ['topic_outline' => $outline], $overrides);
+        $this->assertStringContainsString('nhà em', $written['artifact']['text']);
+
+        // Ngược lại, khi đổi style_instructions -> fingerprint đổi và chặn viết tiếp bằng dàn ý cũ.
+        $profile->style_instructions = 'Châm biếm và dùng nhiều từ tiếng Anh';
+        $this->expectException(InvalidPipelineException::class);
+        $this->expectExceptionMessage('Dàn ý đã cũ');
+        $runner->runStep($profile, 'long', 'article_writer', 'Thiệp cưới', ['topic_outline' => $outline], $overrides);
     }
 
     /**

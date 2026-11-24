@@ -160,6 +160,22 @@ class WritingProfile extends Model
     /** Cột nguồn slug = 'name' (trait mặc định 'title' — không có cột đó). */
     protected string $slugSource = 'name';
 
+    /**
+     * =====================================================================
+     * CHỨC NĂNG: Chỉ tự sinh slug khi hồ sơ chưa có slug chính
+     * =====================================================================
+     * Đổi tên hồ sơ ở màn Edit không tự động thay đổi slug hiện có;
+     * chỉ khi người dùng gửi slug mới mới gọi syncSlugNow() cập nhật.
+     *
+     * INPUT: không. OUTPUT: bool.
+     * SIDE EFFECT: 1 SELECT kiểm tra tồn tại slug primary.
+     * =====================================================================
+     */
+    protected function shouldSyncSlug(): bool
+    {
+        return $this->slugs()->where('is_primary', true)->doesntExist();
+    }
+
     protected $fillable = [
         'name',
         'description',

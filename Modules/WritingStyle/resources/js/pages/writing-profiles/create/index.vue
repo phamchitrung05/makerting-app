@@ -384,6 +384,30 @@ const profileForm = reactive({
 
 const slugAvailable = ref(null)
 const slugTakenBy = ref(null)
+const slugTouched = ref(false)
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Ghi nhận người dùng tự sửa slug để tránh bị blur ô Tên ghi đè
+ * =====================================================================
+ *
+ * INPUT:
+ * - value (string)
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Cập nhật profileForm.slug và bật cờ slugTouched.
+ *
+ * EXCEPTION:
+ * - Không gọi API.
+ * =====================================================================
+ */
+function onSlugInput(value) {
+  profileForm.slug = value
+  slugTouched.value = true
+}
 
 /**
  * =====================================================================
@@ -397,14 +421,14 @@ const slugTakenBy = ref(null)
  * - Promise<void>
  *
  * SIDE EFFECT:
- * - Gọi suggestSlug, cập nhật slug/available/takenBy nếu có response.
+ * - Gọi suggestSlug; chỉ tự điền profileForm.slug khi người dùng chưa sửa tay (!slugTouched), luôn cập nhật available/takenBy.
  *
  * EXCEPTION:
  * - Bắt lỗi và đặt trạng thái kiểm tra về null.
  * =====================================================================
  */
-async function runSlugSuggest(source) {
-  const src = source.trim()
+async function runSlugSuggest(source, { applySlug = true } = {}) {
+  const src = String(source ?? '').trim()
   if (!src) return
 
   try {
@@ -416,7 +440,7 @@ async function runSlugSuggest(source) {
 
     if (!res) return
 
-    if (res?.slug) profileForm.slug = res.slug
+    if (applySlug && res?.slug) profileForm.slug = res.slug
     slugAvailable.value = res?.available ?? null
     slugTakenBy.value = res?.taken_by ?? null
   } catch {
@@ -437,19 +461,27 @@ async function runSlugSuggest(source) {
  * - void
  *
  * SIDE EFFECT:
- * - Gọi bất đồng bộ runSlugSuggest để cập nhật trạng thái slug.
+ * - Nếu chưa sửa slug tay (!slugTouched) thì gợi ý từ name; nếu đã sửa slug tay thì giữ nguyên slug và kiểm tra khả dụng.
  *
  * EXCEPTION:
  * - Lỗi API do runSlugSuggest xử lý.
  * =====================================================================
  */
 function onNameBlur() {
-  runSlugSuggest(profileForm.name)
+  if (slugTouched.value) {
+    if (profileForm.slug?.trim()) {
+      runSlugSuggest(profileForm.slug, { applySlug: false })
+    }
+
+    return
+  }
+
+  runSlugSuggest(profileForm.name, { applySlug: true })
 }
 
 /**
  * =====================================================================
- * CHỨC NĂNG: Kiểm tra và gợi ý slug từ ô slug khi mất focus
+ * CHỨC NĂNG: Chuẩn hóa và kiểm tra slug khi người dùng rời ô slug
  * =====================================================================
  *
  * INPUT:
@@ -459,14 +491,14 @@ function onNameBlur() {
  * - void
  *
  * SIDE EFFECT:
- * - Gọi bất đồng bộ runSlugSuggest.
+ * - Gọi bất đồng bộ runSlugSuggest để chuẩn hóa dấu/khoảng trắng và kiểm tra trùng.
  *
  * EXCEPTION:
  * - Lỗi API do runSlugSuggest xử lý.
  * =====================================================================
  */
 function onSlugBlur() {
-  runSlugSuggest(profileForm.slug)
+  runSlugSuggest(profileForm.slug, { applySlug: true })
 }
 
 /**
@@ -909,6 +941,33 @@ function triggerFileInput() {
 
 /**
  * =====================================================================
+ * CHỨC NĂNG: Xóa trắng metadata file đang chọn và reset input file
+ * =====================================================================
+ *
+ * INPUT:
+ * - Không có tham số.
+ *
+ * OUTPUT:
+ * - void
+ *
+ * SIDE EFFECT:
+ * - Reset reactive selectedFile và value của thẻ input file.
+ *
+ * EXCEPTION:
+ * - Không có.
+ * =====================================================================
+ */
+function clearSelectedFileMeta() {
+  selectedFile.name = ''
+  selectedFile.sizeLabel = ''
+  selectedFile.typeLabel = ''
+  selectedFile.words = ''
+  selectedFile.status = ''
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+/**
+ * =====================================================================
  * CHỨC NĂNG: Đọc tệp nguồn dưới dạng text và nạp vào editor
  * =====================================================================
  *
@@ -916,38 +975,77 @@ function triggerFileInput() {
  * - event
  *
  * OUTPUT:
- * - void; FileReader hoàn tất qua callback onload
+ * - void; FileReader hoàn tất qua onload hoặc báo lỗi qua onerror
  *
  * SIDE EFFECT:
- * - Đọc file cục bộ, cập nhật nhãn file, nội dung HTML đã escape và snackbar; không upload.
+ * - Kiểm tra đuôi (.txt/.md/.html), dung lượng (<=5MB) và nội dung rỗng; cập nhật selectedFile, articleContent và snackbar.
  *
  * EXCEPTION:
- * - Bỏ qua khi chưa chọn file; chưa có handler onerror cho FileReader.
+ * - Từ chối file không phải text thuần, file rỗng hoặc lỗi FileReader bằng snackbar warning/error.
  * =====================================================================
  */
 function handleFileChange(event) {
   const file = event.target?.files?.[0]
   if (!file) return
 
-  const sizeKb = Math.max(1, Math.round((file.size / 1024) * 10) / 10)
+  const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
+  const allowedExts = ['txt', 'md', 'html']
+  if (!allowedExts.includes(ext)) {
+    clearSelectedFileMeta()
+    snack.text = 'Chỉ hỗ trợ tệp văn bản .txt, .md, .html — với file Word hãy copy dán vào tab Văn bản.'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  const maxBytes = 5 * 1024 * 1024
+  if (file.size > maxBytes) {
+    clearSelectedFileMeta()
+    snack.text = 'Tệp vượt quá giới hạn 5MB'
+    snack.color = 'warning'
+    snack.show = true
+
+    return
+  }
+
+  const sizeKb = file.size > 0 ? Math.max(1, Math.round((file.size / 1024) * 10) / 10) : 0
 
   selectedFile.name = file.name
   selectedFile.sizeLabel = `${sizeKb} KB`
   selectedFile.typeLabel = file.type || 'Tài liệu văn bản'
-  selectedFile.status = 'Đã tải lên từ máy tính'
+  selectedFile.words = 'Đang đọc...'
+  selectedFile.status = 'Đang đọc tệp...'
 
   const reader = new FileReader()
 
   reader.onload = () => {
     const rawText = String(reader.result || '').trim()
-    if (rawText) {
-      articleContent.value = textToHtml(rawText)
-      selectedFile.words = `${wordCount.value} từ`
+    if (!rawText) {
+      selectedFile.words = '0 từ'
+      selectedFile.status = 'File rỗng hoặc không đọc được nội dung'
+      snack.text = `File "${file.name}" rỗng hoặc không có nội dung văn bản`
+      snack.color = 'warning'
+      snack.show = true
+
+      return
     }
+
+    articleContent.value = textToHtml(rawText)
+    selectedFile.words = `${wordCount.value} từ`
+    selectedFile.status = 'Đã tải lên từ máy tính'
     snack.text = `Đã nạp nội dung từ file "${file.name}"`
     snack.color = 'success'
     snack.show = true
   }
+
+  reader.onerror = () => {
+    clearSelectedFileMeta()
+    snack.text = `Không thể đọc tệp "${file.name}" — vui lòng kiểm tra lại tệp trên máy`
+    snack.color = 'error'
+    snack.show = true
+  }
+
   reader.readAsText(file)
 }
 
@@ -970,12 +1068,7 @@ function handleFileChange(event) {
  * =====================================================================
  */
 function removeSelectedFile() {
-  selectedFile.name = ''
-  selectedFile.sizeLabel = ''
-  selectedFile.typeLabel = ''
-  selectedFile.words = ''
-  selectedFile.status = ''
-  if (fileInputRef.value) fileInputRef.value.value = ''
+  clearSelectedFileMeta()
   snack.text = 'Đã gỡ tệp nguồn'
   snack.color = 'info'
   snack.show = true
@@ -1015,6 +1108,11 @@ async function saveWritingProfile(openEditor = false) {
     snack.show = true
 
     return
+  }
+
+  const rawSlug = String(profileForm.slug ?? '').trim()
+  if (rawSlug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rawSlug)) {
+    await runSlugSuggest(rawSlug, { applySlug: true })
   }
 
   const payload = {
@@ -1251,13 +1349,14 @@ onBeforeUnmount(() => {
                   v-model="profileForm.slug"
                   label="Slug định danh *"
                   placeholder="giong-chuyen-gia-ky-thuat-php-laravel"
-                  hint="Blur ô tên hoặc ô slug — hệ thống gợi ý slug khả dụng và cập nhật lại ô."
+                  hint="Blur ô tên hoặc ô slug — hệ thống kiểm tra và gợi ý slug khả dụng."
                   persistent-hint
                   :suggesting="store.slugSuggesting"
                   :available="slugAvailable"
                   :taken-by="slugTakenBy"
                   sluggable-type="writing_profile"
                   prefix="localhost:8000/"
+                  @update:model-value="onSlugInput"
                   @request-suggest="onSlugBlur"
                 />
               </VCol>
@@ -1483,7 +1582,7 @@ onBeforeUnmount(() => {
                 <input
                   ref="fileInputRef"
                   type="file"
-                  accept=".txt,.md,.html,.doc,.docx"
+                  accept=".txt,.md,.html"
                   class="d-none"
                   @change="handleFileChange"
                 >
@@ -1509,7 +1608,7 @@ onBeforeUnmount(() => {
                     Bấm để chọn tệp bài viết từ máy tính
                   </div>
                   <div class="text-caption text-medium-emphasis">
-                    Hỗ trợ định dạng .txt, .md, .html, .docx (Tối đa 5MB)
+                    Hỗ trợ định dạng .txt, .md, .html (Tối đa 5MB)
                   </div>
                 </div>
 

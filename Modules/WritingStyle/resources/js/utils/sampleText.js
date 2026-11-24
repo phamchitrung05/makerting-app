@@ -7,6 +7,7 @@
   - htmlToText(): Chuyển HTML editor thành văn bản, giữ đoạn và dấu bullet để phân tích.
   - textToHtml(): Escape văn bản trước khi dựng HTML cho Tiptap.
   - mergeRuleEdits(): Ghép các ô đã thay đổi vào DNA, giữ nguyên khóa người dùng chưa sửa.
+  - inspectCustomLength(): Kiểm tra và chuẩn hóa khoảng độ dài tùy chỉnh của brief V3.
   - Computed: Không có.
   - Watcher/lifecycle: Không có.
 
@@ -107,4 +108,66 @@ export function mergeRuleEdits(original, initial, current) {
   }
 
   return rules
+}
+
+/**
+ * =====================================================================
+ * CHỨC NĂNG: Kiểm tra và chuẩn hóa khoảng độ dài tùy chỉnh của brief
+ * =====================================================================
+ *
+ * INPUT:
+ * - form ({ lengthUnit, lengthMin, lengthMax })
+ *
+ * OUTPUT:
+ * - { length: {unit,min,max}|null, error: string, hasAnyBound: boolean, maxLimit: number }
+ *
+ * SIDE EFFECT:
+ * - Không đổi state; dùng chung giữa form SandboxWritingBrief và submit brief.
+ *
+ * EXCEPTION:
+ * - Không ném lỗi; trả chuỗi mô tả trong error để UI hiển thị cảnh báo.
+ * =====================================================================
+ */
+export function inspectCustomLength(form) {
+  const unit = form?.lengthUnit || ''
+  if (!unit) return { length: null, error: '', hasAnyBound: false, maxLimit: 2000 }
+
+  const maxLimit = unit === 'sentences' ? 200 : 2000
+  const rawMin = form?.lengthMin
+  const rawMax = form?.lengthMax
+  const hasMin = rawMin !== '' && rawMin !== null && rawMin !== undefined
+  const hasMax = rawMax !== '' && rawMax !== null && rawMax !== undefined
+  const hasAnyBound = hasMin || hasMax
+
+  if (!hasAnyBound) return { length: null, error: '', hasAnyBound: false, maxLimit }
+
+  const min = Number(rawMin)
+  const max = Number(rawMax)
+
+  if (!hasMin || !hasMax || !Number.isInteger(min) || min < 1 || !Number.isInteger(max) || max < 1) {
+    return {
+      length: null,
+      error: 'Cần nhập đủ số nguyên >= 1 cho cả Tối thiểu và Tối đa (hoặc xóa cả 2 ô để dùng mặc định theo cấp độ).',
+      hasAnyBound,
+      maxLimit,
+    }
+  }
+  if (min > maxLimit || max > maxLimit) {
+    return {
+      length: null,
+      error: `Giới hạn độ dài tối đa cho phép là ${maxLimit} ${unit === 'sentences' ? 'câu' : 'từ'}.`,
+      hasAnyBound,
+      maxLimit,
+    }
+  }
+  if (max < min) {
+    return {
+      length: null,
+      error: 'Giá trị Tối đa phải lớn hơn hoặc bằng Tối thiểu.',
+      hasAnyBound,
+      maxLimit,
+    }
+  }
+
+  return { length: { unit, min, max }, error: '', hasAnyBound, maxLimit }
 }

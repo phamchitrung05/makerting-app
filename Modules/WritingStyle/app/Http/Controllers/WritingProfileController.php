@@ -4,6 +4,8 @@ namespace Modules\WritingStyle\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Modules\Core\Http\Responses\BaseResponse;
 use Modules\WritingStyle\DTOs\WritingBrief;
 use Modules\WritingStyle\Services\PromptPack;
@@ -167,70 +169,87 @@ class WritingProfileController extends Controller
      * - Ghi profile, slug, taxonomy và draft_profile_id của analysis. Yêu cầu writing.profile.create.
      *
      * EXCEPTION/TRANSACTION:
-     * - Lỗi DB/slug/taxonomy có thể truyền lên. Không bao transaction cho toàn bộ các lần ghi, không giữ khóa.
+     * - Bọc DB::transaction cho toàn bộ create profile, sync slug, gắn analysis và taxonomy.
+     * - Lỗi validation (vd analysis đã gắn cho hồ sơ khác) trả 422 và rollback toàn bộ transaction.
      * =====================================================================
      */
     public function store(StoreWritingProfileRequest $request)
     {
         $data = $request->validated();
 
-        $analysis = null;
-        if (! empty($data['analysis_id'])) {
-            $analysis = WritingProfileAnalysis::find($data['analysis_id']);
-        }
-        $linkedAnalysis = ($analysis !== null && $analysis->status === WritingProfileAnalysis::STATUS_SUCCEEDED)
-            ? $analysis
-            : null;
+        $profile = DB::transaction(function () use ($data, $request) {
+            $analysis = null;
+            if (! empty($data['analysis_id'])) {
+                $analysis = WritingProfileAnalysis::query()
+                    ->whereKey($data['analysis_id'])
+                    ->lockForUpdate()
+                    ->first();
+            }
 
-        $analysisResult = $linkedAnalysis?->result_json ?? [];
+            $linkedAnalysis = ($analysis !== null && $analysis->status === WritingProfileAnalysis::STATUS_SUCCEEDED)
+                ? $analysis
+                : null;
 
-        $profile = WritingProfile::create([
-            'name'                       => $data['name'],
-            'description'                => $data['description'] ?? null,
-            'dominant_tier'              => $data['dominant_tier'] ?? WritingProfile::TIER_MEDIUM,
-            'temperature'                => $data['temperature'] ?? 0.70,
-            'rules_json'                 => $data['rules_json'] ?? ($analysisResult['rules_json'] ?? []),
-            'style_analysis_json'        => $analysisResult['style_analysis_json'] ?? null,
-            'slider_preferences_json'    => $data['slider_preferences_json'] ?? null,
-            'evidence_json'              => $data['evidence_json'] ?? ($analysisResult['evidence_json'] ?? []),
-            'style_instructions'         => $data['style_instructions'] ?? ($analysisResult['style_instructions'] ?? ''),
-            'voice_texture_instructions' => $data['voice_texture_instructions']
-                ?? ($analysisResult['voice_texture_instructions'] ?? ''),
-            'voice_texture_sliders_json' => $data['voice_texture_sliders_json']
-                ?? ($analysisResult['voice_texture_sliders_json'] ?? null),
-            'tone_sliders_json'          => $data['tone_sliders_json']
-                ?? ($analysisResult['tone_sliders_json'] ?? null),
-            // Ô 3 - Chỉ dẫn Sắc thái & Phối âm cảm xúc: do NGƯỜI DÙNG soạn
-            // tay theo mục đích viết bài (không do AI giải mã) — POST nhận
-            // trực tiếp giống PUT để hai verb đối xứng.
-            'tone_instructions'          => $data['tone_instructions'] ?? '',
-            'origin'                     => $linkedAnalysis !== null
-                ? WritingProfile::ORIGIN_REFERENCE
-                : WritingProfile::ORIGIN_MANUAL,
-            'status'                     => $data['status'] ?? WritingProfile::STATUS_DRAFT,
-            'is_enabled'                 => $data['is_enabled'] ?? true,
-            'created_by'                 => $request->user()?->id,
-        ]);
+            // Chỉ chặn re-link khi analysis đã gắn hồ sơ khác (kể cả bấm đúp tạo trùng);
+            // không khóa theo created_by vì các thành viên trong team dùng chung hồ sơ.
+            if ($linkedAnalysis !== null && $linkedAnalysis->draft_profile_id !== null) {
+                throw ValidationException::withMessages([
+                    'analysis_id' => ["Phiên phân tích đã được gắn cho hồ sơ #{$linkedAnalysis->draft_profile_id}."],
+                ]);
+            }
 
-        if (! empty($data['slug'])) {
-            $profile->syncSlugNow($data['slug']);
-        }
+            $analysisResult = $linkedAnalysis?->result_json ?? [];
 
-        if ($linkedAnalysis !== null) {
-            $profile->source_hash = $linkedAnalysis->source_hash;
-            $profile->analysis_metadata_json = $linkedAnalysis->result_json['metadata'] ?? null;
-            $profile->save();
+            $profile = WritingProfile::create([
+                'name'                       => $data['name'],
+                'description'                => $data['description'] ?? null,
+                'dominant_tier'              => $data['dominant_tier'] ?? WritingProfile::TIER_MEDIUM,
+                'temperature'                => $data['temperature'] ?? 0.70,
+                'rules_json'                 => $data['rules_json'] ?? ($analysisResult['rules_json'] ?? []),
+                'style_analysis_json'        => $analysisResult['style_analysis_json'] ?? null,
+                'slider_preferences_json'    => $data['slider_preferences_json'] ?? null,
+                'evidence_json'              => $data['evidence_json'] ?? ($analysisResult['evidence_json'] ?? []),
+                'style_instructions'         => $data['style_instructions'] ?? ($analysisResult['style_instructions'] ?? ''),
+                'voice_texture_instructions' => $data['voice_texture_instructions']
+                    ?? ($analysisResult['voice_texture_instructions'] ?? ''),
+                'voice_texture_sliders_json' => $data['voice_texture_sliders_json']
+                    ?? ($analysisResult['voice_texture_sliders_json'] ?? null),
+                'tone_sliders_json'          => $data['tone_sliders_json']
+                    ?? ($analysisResult['tone_sliders_json'] ?? null),
+                // Ô 3 - Chỉ dẫn Sắc thái & Phối âm cảm xúc: do NGƯỜI DÙNG soạn
+                // tay theo mục đích viết bài (không do AI giải mã) — POST nhận
+                // trực tiếp giống PUT để hai verb đối xứng.
+                'tone_instructions'          => $data['tone_instructions'] ?? '',
+                'origin'                     => $linkedAnalysis !== null
+                    ? WritingProfile::ORIGIN_REFERENCE
+                    : WritingProfile::ORIGIN_MANUAL,
+                'status'                     => $data['status'] ?? WritingProfile::STATUS_DRAFT,
+                'is_enabled'                 => $data['is_enabled'] ?? true,
+                'created_by'                 => $request->user()?->id,
+            ]);
 
-            $linkedAnalysis->draft_profile_id = $profile->id;
-            $linkedAnalysis->save();
-        }
+            if (! empty($data['slug'])) {
+                $profile->syncSlugNow($data['slug']);
+            }
 
-        $taxonomyKeys = ['categories', 'new_categories', 'tags', 'new_tags'];
-        if ($request->hasAny($taxonomyKeys)) {
-            $profile->syncTaxonomyWithNew($request->only($taxonomyKeys));
-        }
+            if ($linkedAnalysis !== null) {
+                $profile->source_hash = $linkedAnalysis->source_hash;
+                $profile->analysis_metadata_json = $linkedAnalysis->result_json['metadata'] ?? null;
+                $profile->save();
 
-        return BaseResponse::created(new WritingProfileResource($profile->load(['categories', 'tags'])), 'Tạo văn phong thành công');
+                $linkedAnalysis->draft_profile_id = $profile->id;
+                $linkedAnalysis->save();
+            }
+
+            $taxonomyKeys = ['categories', 'new_categories', 'tags', 'new_tags'];
+            if ($request->hasAny($taxonomyKeys)) {
+                $profile->syncTaxonomyWithNew($request->only($taxonomyKeys));
+            }
+
+            return $profile->load(['categories', 'tags']);
+        });
+
+        return BaseResponse::created(new WritingProfileResource($profile), 'Tạo văn phong thành công');
     }
 
     /**
@@ -297,6 +316,9 @@ class WritingProfileController extends Controller
         ];
         foreach ($updatable as $f) {
             if (array_key_exists($f, $data)) {
+                if (in_array($f, ['status', 'is_enabled'], true) && $data[$f] === null) {
+                    continue;
+                }
                 $writingProfile->{$f} = $data[$f];
             }
         }
